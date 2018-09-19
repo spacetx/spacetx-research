@@ -6,7 +6,7 @@ This repository contains prototypes and explorations of comp-VAE and its applica
 
 ### Description of Files
 
-**synth_dapi_stain_generator.ipynb**: This notebook generates synthetic images of DAPI stains. The images could be used to training a variational auto-encoder (VAE) for testing purposes (e.g. to generate not-too-ugly images while testing and implementing comp-VAE).
+**synth_dapi_stain_generator.ipynb**: This notebook generates synthetic images of DAPI stains. The images could be used to train a variational auto-encoder (VAE) for testing purposes (e.g. to generate not-too-ugly images while testing and implementing comp-VAE).
 
 **synth_dapi_stain_vae.ipynb**: This notebook trains a VAE on a dataset of DAPI stains. The decoder can be plugged in the comp-VAE model for testing purposes.
 
