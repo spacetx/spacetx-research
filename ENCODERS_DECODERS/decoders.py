@@ -13,7 +13,8 @@ class Multi_Channel_Img_Decoder(torch.nn.Module):
         self.multi_channels_dec = torch.nn.ModuleList()
         for i in self.ch_in_description:
             if(i == 'DAPI'):
-                self.multi_channels_dec.append(Decoder_MLP(params,is_zwhat=True))
+                #self.multi_channels_dec.append(Decoder_MLP(params,is_zwhat=True))
+                self.multi_channels_dec.append(Decoder_CONV(params,is_zwhat=True))                 
             elif(i == 'DISK'):
                 self.multi_channels_dec.append(Decoder_Disk(params))
             elif(i == 'SQUARE'):
@@ -31,6 +32,41 @@ class Multi_Channel_Img_Decoder(torch.nn.Module):
             return torch.cat(output,dim = -3) #glue along the channel dimension
         elif(len(self.multi_channels_dec)==1):
             return output[0]
+        
+class Decoder_CONV(torch.nn.Module):
+    """ Decode z -> x 
+        INPUT:  z of shape: batch x dim_z 
+        OUTPUT: image of shape: batch x 1 x width x height (where width = height)
+    """
+    def __init__(self, params, is_zwhat=True):
+        super().__init__()
+        self.width     = params['SD.width']
+        
+        assert self.width == 28
+        
+        if(is_zwhat):
+            self.dim_z = params['ZWHAT.dim']
+            self.ch    = len(params["IMG.ch_in_description"])
+        else:
+            self.dim_z = params['ZMASK.dim']
+            self.ch    = 1
+            
+            
+        self.upsample = torch.nn.Linear(self.dim_z, 64 * 7 * 7)
+        self.decoder = torch.nn.Sequential(
+            torch.nn.ConvTranspose2d(64, 32, 4, 2, 1), # B,  64,  14,  14
+            torch.nn.ReLU(True),
+            torch.nn.ConvTranspose2d(32, 32, 4, 2, 1, 1), # B,  32, 28, 28
+            torch.nn.ReLU(True),
+            torch.nn.ConvTranspose2d(32, self.ch, 4, 1, 2)   # B, 1, 28, 28
+        )
+
+    def forward(self,z):
+        assert len(z.shape) == 2 
+        batch_size = z.shape[0]
+        x1 = self.upsample(z).view(batch_size,64,7,7)
+        x = torch.sigmoid(self.decoder(x1)) # use sigmoid so pixel intensity is in (0,1). 
+        return x
         
 class Decoder_MLP(torch.nn.Module):
     """This is a MLP which deencodes a latent representation into a single general object

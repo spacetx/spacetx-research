@@ -1,117 +1,20 @@
-import os
-import pickle
-import math
+#import os
 import torch
-import torchvision
+import pickle
 from torchvision import utils
-import torch.nn.functional as F 
-
-
-from matplotlib.pyplot import imshow
 import matplotlib.pyplot as plt
 
-import csv
-import PIL.Image
-import numpy as np
 import torchvision.transforms as tvt
 from torch.utils.data.dataset import Dataset
+import pyro
 
+#import math
+#import torchvision
+#import torch.nn.functional as F 
+#import csv
+#import PIL.Image
+#import numpy as np
 
-
-
-def save_obj(obj,root_dir,name):
-    with open(root_dir + name + '.pkl', 'wb') as f:
-        pickle.dump(obj, f, pickle.HIGHEST_PROTOCOL)
-
-def load_obj(root_dir,name):
-    with open(root_dir + name + '.pkl', 'rb') as f:
-        return pickle.load(f)
-    
-def save_model(model, root_dir, name):
-    full_file_path= root_dir + name + '.pkl'
-    torch.save(model.state_dict(),full_file_path)
-
-def load_model(model, root_dir, name):
-    state_dict = get_model_dictionary(root_dir, name)
-    model.load_state_dict(state_dict)
-
-def get_model_dictionary(root_dir, name):
-    full_file_path= root_dir + name + '.pkl'
-    state_dict = torch.load(full_file_path)
-    return state_dict
-
-LN_1_M_EXP_THRESHOLD = -np.log(2.)
-def get_log_prob_compl(log_prob):
-    """ Compute log(1-p) from log(p) """
-    return torch.where(
-        log_prob >= LN_1_M_EXP_THRESHOLD,
-        torch.log(-torch.expm1(log_prob)),
-        torch.log1p(-torch.exp(log_prob)))
-
-
-def Log_Add_Exp(log_pa,log_pb,log_w,log_1mw,verbose=False):
-    """ Compute log(w*pa+(1-w)*pb) in a numerically stable way 
-                
-        Test usage:
-
-        log_pa  = torch.tensor([-20.0])
-        log_pb  = torch.tensor([-50.0])
-        log_w   = torch.arange(-100,1,5.0).float()
-        log_1mw = get_log_prob_compl(log_w)
-
-        logp_v1 = Log_Add_Exp(log_pa,log_pb,log_w,log_1mw)
-        logp_v2 = Log_Add_Exp(log_pb,log_pa,log_1mw,log_w)
-
-        plt.plot(log_w.numpy(),logp_v1.numpy(),'.')
-        plt.plot(log_w.numpy(),logp_v2.numpy(),'-')
-    """
-    assert log_pa.shape == log_pb.shape 
-    log_pa_and_log_pb = torch.stack((log_pa,log_pb),dim=len(log_pa.shape))
-    
-    assert log_w.shape == log_1mw.shape 
-    log_w_and_log_1mw = torch.stack((log_w,log_1mw),dim=len(log_w.shape))
-    
-    if(verbose):
-        print("log_w_and_log_1mw.shape",log_w_and_log_1mw.shape)
-        print("log_pa_and_log_pb.shape",log_pa_and_log_pb.shape)
-    
-    return torch.logsumexp(log_pa_and_log_pb+log_w_and_log_1mw,dim=-1)
-
-
-def Normal(x,mu,sigma):
-    """ Return the value of N(mu,sigma) at the locations x 
-        
-        Typical usage:
-        x = np.arange(0.0,1.0,0.01)
-        y1 = Normal(x,0.1,0.1)
-        plt.plot(x,y1,'-')
-    """
-    tmp=-0.5*((x-mu)/sigma)**2
-    c = 1.0/(np.sqrt(2*np.pi)*sigma)
-    return np.exp(tmp)*c
-
-def Cauchy(x,loc,scale):
-    """ Return the value of Cauchy(mu,sigma) at the locations x 
-        
-        Typical usage:
-        x = np.arange(0.0,1.0,0.01)
-        y1 = Cauchy(x,0.1,0.1)
-        plt.plot(x,y1,'-')
-    """
-    tmp  = ((x-loc)/scale)**2
-    tmp2 = np.pi*scale*(1.0+tmp)
-    return 1.0/tmp2
-
-def Exp_shift_scale(x,loc,scale):
-    """ Return the value of (0.5/scale)*Exp(-||x-mu||/scale) at the locations x 
-        
-        Typical usage:
-        x = np.arange(0.0,1.0,0.01)
-        y1 = Exp_shift_scale(x,0.1,0.1)
-        plt.plot(x,y1,'-')
-    """
-    tmp = np.abs(x-loc)/scale
-    return 0.5*np.exp(-tmp)/scale
 
 def show_batch(images,nrow=4,npadding=10,title=None):
     """Visualize a torch tensor of shape: (batch x ch x width x height) """
@@ -119,7 +22,7 @@ def show_batch(images,nrow=4,npadding=10,title=None):
     if(images.device != "cpu"):
         images=images.cpu()
     grid = utils.make_grid(images,nrow, npadding, normalize=True, range=None, scale_each=True, pad_value=1)       
-    fig = imshow(grid.detach().numpy().transpose((1, 2, 0))) 
+    fig = plt.imshow(grid.detach().numpy().transpose((1, 2, 0))) 
     if(isinstance(title, str)):
         plt.title(title)
     return fig
@@ -213,9 +116,108 @@ def check_datasets(dataset):
     print("imgs.device",imgs.device)
     print("torch.max(imgs)",torch.max(imgs))
     print("torch.min(imgs)",torch.min(imgs))
-    
-    
 
+def save_all_pyro_params_in_store(root_dir,name):
+    filename = root_dir + name + ".pt"
+    pyro.get_param_store().save(filename)
+        
+def load_all_pyro_params_in_store(root_dir,name):
+    filename = root_dir + name + ".pt"
+    pyro.get_param_store().load(filename)  
+
+def save_obj(obj,root_dir,name):
+    with open(root_dir + name + '.pkl', 'wb') as f:
+        pickle.dump(obj, f, pickle.HIGHEST_PROTOCOL)
+
+def load_obj(root_dir,name):
+    with open(root_dir + name + '.pkl', 'rb') as f:
+        return pickle.load(f)
+    
+def reset_parameters(parent_module):
+    for m in parent_module.modules():
+        try:
+            m.reset_parameters()
+            print("reset -> ",m)
+        except:
+            pass
+        
+
+LN_1_M_EXP_THRESHOLD = -np.log(2.)
+def get_log_prob_compl(log_prob):
+    """ Compute log(1-p) from log(p) """
+    return torch.where(
+        log_prob >= LN_1_M_EXP_THRESHOLD,
+        torch.log(-torch.expm1(log_prob)),
+        torch.log1p(-torch.exp(log_prob)))
+
+
+def Log_Add_Exp(log_pa,log_pb,log_w,log_1mw,verbose=False):
+    """ Compute log(w*pa+(1-w)*pb) in a numerically stable way 
+                
+        Test usage:
+
+        log_pa  = torch.tensor([-20.0])
+        log_pb  = torch.tensor([-50.0])
+        log_w   = torch.arange(-100,1,5.0).float()
+        log_1mw = get_log_prob_compl(log_w)
+
+        logp_v1 = Log_Add_Exp(log_pa,log_pb,log_w,log_1mw)
+        logp_v2 = Log_Add_Exp(log_pb,log_pa,log_1mw,log_w)
+
+        plt.plot(log_w.numpy(),logp_v1.numpy(),'.')
+        plt.plot(log_w.numpy(),logp_v2.numpy(),'-')
+    """
+    assert log_pa.shape == log_pb.shape 
+    log_pa_and_log_pb = torch.stack((log_pa,log_pb),dim=len(log_pa.shape))
+    
+    assert log_w.shape == log_1mw.shape 
+    log_w_and_log_1mw = torch.stack((log_w,log_1mw),dim=len(log_w.shape))
+    
+    if(verbose):
+        print("log_w_and_log_1mw.shape",log_w_and_log_1mw.shape)
+        print("log_pa_and_log_pb.shape",log_pa_and_log_pb.shape)
+    
+    return torch.logsumexp(log_pa_and_log_pb+log_w_and_log_1mw,dim=-1)
+
+
+###def Normal(x,mu,sigma):
+###    """ Return the value of N(mu,sigma) at the locations x 
+###        
+###        Typical usage:
+###        x = np.arange(0.0,1.0,0.01)
+###        y1 = Normal(x,0.1,0.1)
+###        plt.plot(x,y1,'-')
+###    """
+###    tmp=-0.5*((x-mu)/sigma)**2
+###    c = 1.0/(np.sqrt(2*np.pi)*sigma)
+###    return np.exp(tmp)*c
+###
+###def Cauchy(x,loc,scale):
+###    """ Return the value of Cauchy(mu,sigma) at the locations x 
+###        
+###        Typical usage:
+###        x = np.arange(0.0,1.0,0.01)
+###        y1 = Cauchy(x,0.1,0.1)
+###        plt.plot(x,y1,'-')
+###    """
+###    tmp  = ((x-loc)/scale)**2
+###    tmp2 = np.pi*scale*(1.0+tmp)
+###    return 1.0/tmp2
+###
+###def Exp_shift_scale(x,loc,scale):
+###    """ Return the value of (0.5/scale)*Exp(-||x-mu||/scale) at the locations x 
+###        
+###        Typical usage:
+###        x = np.arange(0.0,1.0,0.01)
+###        y1 = Exp_shift_scale(x,0.1,0.1)
+###        plt.plot(x,y1,'-')
+###    """
+###    tmp = np.abs(x-loc)/scale
+###    return 0.5*np.exp(-tmp)/scale
+###
+###
+###    
+###
 ###def corners_from_bxby_bwbh_cos_sin(bxby,bwbh,cos_sin):
 ###
 ###    cos_bw_half = 0.5*cos_sin[...,0]*bwbh[...,0]
