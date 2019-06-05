@@ -1,6 +1,7 @@
 #import os
 import torch
 import pickle
+import numpy as np
 from torchvision import utils
 import matplotlib.pyplot as plt
 
@@ -13,8 +14,34 @@ import pyro
 #import torch.nn.functional as F 
 #import csv
 #import PIL.Image
-#import numpy as np
 
+def train_one_epoch(svi, dataset, epoch=None, batch_size=64, verbose=False):
+    
+    epoch_loss = 0.
+    batch_iterator = dataset.generate_batch_iterator(batch_size)
+    for i, indeces in enumerate(batch_iterator): #get the indeces
+
+        # get the data from the indeces. Note that everything is already loaded into memory
+        loss = svi.step(imgs=dataset[indeces][0], epoch=epoch)
+        if(verbose):
+            print("i= %3d train_loss=%.5f" %(i,loss))
+        epoch_loss += loss
+
+    return epoch_loss / ((i+1)*batch_size)
+
+def evaluate_one_epoch(svi, dataset, epoch=None, batch_size=64, verbose=False):
+    
+    epoch_loss = 0.
+    batch_iterator = dataset.generate_batch_iterator(batch_size)
+    for i, indeces in enumerate(batch_iterator): #get the indeces
+
+        # get the data from the indeces. Note that everything is already loaded into memory
+        loss = svi.evaluate_loss(imgs=dataset[indeces][0],epoch=epoch)
+        if(verbose):
+            print("i= %3d test_loss=%.5f" %(i,loss))
+        epoch_loss += loss
+
+    return epoch_loss / ((i+1)*batch_size)
 
 def show_batch(images,nrow=4,npadding=10,title=None):
     """Visualize a torch tensor of shape: (batch x ch x width x height) """

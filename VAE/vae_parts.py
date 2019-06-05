@@ -32,10 +32,9 @@ def compute_average_intensity_in_box(imgs,z_where):
         av_intensity = batch x n_box
     """
     
-        # sum the channels, do cumulative sum in width and height
+    # sum the channels, do cumulative sum in width and height
     cum = torch.cumsum(torch.cumsum(imgs,dim=-2),dim=-1)[:,0,:,:]
     assert len(cum.shape)==3
-    #print("cum.shape",cum.shape)
     batch_size, w, h = cum.shape 
     
     # compute the x1,y1,x3,y3
@@ -50,15 +49,15 @@ def compute_average_intensity_in_box(imgs,z_where):
     area = (z_where.bw_dimfull*z_where.bh_dimfull).squeeze(-1) 
 
     # Make some checks
-    assert x1.shape == x3.shape == y1.shape == y3.shape == area.shape
-    assert len(area.shape)==2
-    assert area.shape[0] == cum.shape[0]
+    #assert x1.shape == x3.shape == y1.shape == y3.shape == area.shape
+    #assert len(area.shape)==2
+    #assert area.shape[0] == cum.shape[0]
     batch_size, n_boxes = area.shape
     
     # compute the total intensity in each box
     batch_index = torch.arange(0,batch_size).view(-1,1).expand(-1,n_boxes).to(x1.device)
     tot_intensity = cum[batch_index,x3,y3]-cum[batch_index,x1,y3]-cum[batch_index,x3,y1]+cum[batch_index,x1,y1]
-    assert (batch_size, n_boxes) == tot_intensity.shape
+    #assert (batch_size, n_boxes) == tot_intensity.shape
    
     # return the average intensity
     return tot_intensity/area 

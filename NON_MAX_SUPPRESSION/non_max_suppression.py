@@ -80,12 +80,12 @@ class Non_Max_Suppression(torch.nn.Module):
         # Preparation
         batch_size, n_boxes = p_raw.shape
         possible  = (p_raw > self.p_threshold).float() # chosen objects must have p > p_threshold
-        #possible  = (p_raw > max(self.p_threshold,1E-10)).float() # chosen objects must have p > p_threshold
         nms_mask = torch.zeros_like(p_raw)
         idx = torch.arange(n_boxes).unsqueeze(0).expand(batch_size,-1).to(p_raw.device)
         
         # Loop
-        for l in range(self.n_max_object): # I never need more that this since downstream I select the top few box by probability
+        for l in range(self.n_max_object): 
+            # We never need more that this since downstream we select the top few box by probability
             p_mask = ((p_raw*possible).view(batch_size,1,n_boxes))*(cluster_mask)
             index = torch.max(p_mask,dim=-1)[1]            
             nms_mask += possible*(idx == index).float()
@@ -95,8 +95,8 @@ class Non_Max_Suppression(torch.nn.Module):
             #print("l, nms_mask",l,torch.min(tmp_cazzo),torch.max(tmp_cazzo))
             #if(l>=10):
             #    print("nms",l)
-            if( (possible == 0.0).all() ):
-                break
+            #if( (possible == 0.0).all() ): #this does not work nicely with Jit Compiler
+            #    break
                 
         return nms_mask.int()
     
@@ -120,8 +120,8 @@ class Non_Max_Suppression(torch.nn.Module):
             batch_indeces = torch.arange(batch_size).unsqueeze(-1).expand(-1,k).to(top_k_indeces.device)
             
             # Next two lines are just to check that I did not mess up the indeces resampling algebra
-            p_top_k_v3 = p_masked[batch_indeces,top_k_indeces]
-            assert((p_top_k == p_top_k_v3).all()) 
+            #p_top_k_v3 = p_masked[batch_indeces,top_k_indeces]
+            #assert((p_top_k == p_top_k_v3).all()) 
             
         # package the output
         return collections.namedtuple('z_where', 'prob bx_dimfull by_dimfull bw_dimfull bh_dimfull')._make(
