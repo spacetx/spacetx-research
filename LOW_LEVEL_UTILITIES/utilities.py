@@ -144,14 +144,6 @@ def check_datasets(dataset):
     print("torch.max(imgs)",torch.max(imgs))
     print("torch.min(imgs)",torch.min(imgs))
 
-def save_all_pyro_params_in_store(root_dir,name):
-    filename = root_dir + name + ".pt"
-    pyro.get_param_store().save(filename)
-        
-def load_all_pyro_params_in_store(root_dir,name):
-    filename = root_dir + name + ".pt"
-    pyro.get_param_store().load(filename)  
-
 def save_obj(obj,root_dir,name):
     with open(root_dir + name + '.pkl', 'wb') as f:
         pickle.dump(obj, f, pickle.HIGHEST_PROTOCOL)
