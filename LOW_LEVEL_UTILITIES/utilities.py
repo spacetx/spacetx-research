@@ -9,11 +9,9 @@ import torchvision.transforms as tvt
 from torch.utils.data.dataset import Dataset
 import pyro
 
-#import math
-#import torchvision
-#import torch.nn.functional as F 
-#import csv
-#import PIL.Image
+def test_model(model, guide, loss):
+    pyro.clear_param_store()
+    loss.loss(model, guide)
 
 def train_one_epoch(svi, dataset, epoch=None, batch_size=64, verbose=False):
     
