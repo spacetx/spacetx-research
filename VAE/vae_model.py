@@ -328,11 +328,10 @@ class Compositional_VAE(torch.nn.Module):
         # register the parameters of the distribution used to score the results
         bg_mu        = pyro.param("bg_mu", 0.1*one, constraint=constraints.unit_interval)
         fg_mu        = pyro.param("fg_mu", 0.9*one, constraint=constraints.unit_interval)
-        bg_sigma     = pyro.param("bg_sigma", 0.2*one, constraint=constraints.greater_than(0.01))
-        fg_sigma     = pyro.param("fg_sigma", 0.2*one, constraint=constraints.greater_than(0.01))
-        normal_sigma = pyro.param("normal_sigma", 0.2*one, constraint=constraints.greater_than(0.01))
+        bg_sigma     = pyro.param("bg_sigma", 0.2*one, constraint=constraint=constraints.interval(0.01,0.25))
+        fg_sigma     = pyro.param("fg_sigma", 0.2*one, constraint=constraint=constraints.interval(0.01,0.25))
+        normal_sigma = pyro.param("normal_sigma", 0.2*one, constraint=constraint=constraints.interval(0.01,0.25))
 
-                
         with pyro.plate("batch", batch_size, dim=-2):
             
             with pyro.plate("n_objects", self.n_max_objects, dim =-1):
