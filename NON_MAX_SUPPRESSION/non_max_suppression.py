@@ -86,10 +86,15 @@ class Non_Max_Suppression(torch.nn.Module):
         # Loop
         for l in range(self.n_max_object): 
             # We never need more that this since downstream we select the top few box by probability
-            p_mask = ((p_raw*possible).view(batch_size,1,n_boxes))*(cluster_mask)
+            p_mask = cluster_mask*(p_raw*possible).view(batch_size,1,n_boxes)
             index = torch.max(p_mask,dim=-1)[1]            
             nms_mask += possible*(idx == index).float()
-            impossible = torch.matmul(cluster_mask,nms_mask.unsqueeze(-1)).squeeze(-1)
+            
+            #nms_mask.unsqueeze(-1) has shape: batch x n_box x 1 and has stuff which has already been selected
+            #cluster_mask has shape: batch x n_box x n_box and has 1 if two boxes overlap above threshold
+            #torch.matmul multiplies the last two dimension, the other dimensions are considered batch dim
+            #impossible = torch.matmul(cluster_mask,nms_mask.unsqueeze(-1)).squeeze(-1)
+            impossible = torch.sum(cluster_mask*nms_mask.unsqueeze(1),dim=-1) #new and equivalent
             possible = 1.0 - torch.clamp(impossible,max=1)
             #tmp_cazzo = torch.sum(nms_mask,dim=-1)
             #print("l, nms_mask",l,torch.min(tmp_cazzo),torch.max(tmp_cazzo))
