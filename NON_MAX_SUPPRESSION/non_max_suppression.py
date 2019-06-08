@@ -74,13 +74,13 @@ class Non_Max_Suppression(torch.nn.Module):
         # computes the overlap measure, this is O(N^2) algorithm
         # Note that cluster_mask is of size: (batch x n_boxes x n_boxes) ans has entry 0.0 or 1.0
         overlap_measure = self.compute_intersection_over_min_area(x1,x3,y1,y3,area) # shape: batch x n_box x n_box
-        cluster_mask = (overlap_measure > self.overlap_threshold).float()      # shape: batch x n_box x n_box
+        cluster_mask = (overlap_measure > self.overlap_threshold).float()           # shape: batch x n_box x n_box
             
         # This is the NON-MAX-SUPPRESSION algorithm:
         # Preparation
         batch_size, n_boxes = p_raw.shape
-        p_raw = p_raw.unsqueeze(1)
-        possible  = (p_raw > self.p_threshold).float() # chosen objects must have p > p_threshold
+        p_raw = p_raw.unsqueeze(1) # shape: batch x 1 x n_box
+        possible  = (p_raw > self.p_threshold).float() # # shape: batch x 1 x n_box, chosen objects must have p > p_threshold
         idx = torch.arange(n_boxes).view(1,n_boxes,1).to(p_raw.device)
         chosen = torch.zeros(batch_size,n_boxes,1).to(p_raw.device)
     
@@ -89,11 +89,11 @@ class Non_Max_Suppression(torch.nn.Module):
         #while (possible != 0.0).any():
             #l=l+1
             #print("v3",l)
-            p_mask = cluster_mask*(p_raw*possible)
-            index = torch.max(p_mask,keepdim=True,dim=-1)[1]  
-            chosen += possible.permute(0,2,1)*(idx == index).float()
-            blocks = torch.sum(cluster_mask*chosen,keepdim=True,dim=-2)
-            possible *= (blocks==0).float()
+            p_mask = cluster_mask*(p_raw*possible)                      # shape: batch x n_box x n_box
+            index = torch.max(p_mask,keepdim=True,dim=-1)[1]            # shape: batch x n_box x 1
+            chosen += possible.permute(0,2,1)*(idx == index).float()    # shape: batch x n_box x 1
+            blocks = torch.sum(cluster_mask*chosen,keepdim=True,dim=-2) # shape: batch x 1 x n_box 
+            possible *= (blocks==0).float()                             # shape: batch x 1 x n_box
         return chosen.squeeze(-1).int()    
         
     def forward(self,z_where):
