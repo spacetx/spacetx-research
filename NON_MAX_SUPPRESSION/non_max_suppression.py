@@ -79,33 +79,22 @@ class Non_Max_Suppression(torch.nn.Module):
         # This is the NON-MAX-SUPPRESSION algorithm:
         # Preparation
         batch_size, n_boxes = p_raw.shape
+        p_raw = p_raw.unsqueeze(1)
         possible  = (p_raw > self.p_threshold).float() # chosen objects must have p > p_threshold
-        nms_mask = torch.zeros_like(p_raw)
-        idx = torch.arange(n_boxes).unsqueeze(0).expand(batch_size,-1).to(p_raw.device)
-        
-        # Loop
-        for l in range(self.n_max_object): 
-            # We never need more that this since downstream we select the top few box by probability
-            p_mask = cluster_mask*(p_raw*possible).view(batch_size,1,n_boxes)
-            index = torch.max(p_mask,dim=-1)[1]            
-            nms_mask += possible*(idx == index).float()
-            
-            #nms_mask.unsqueeze(-1) has shape: batch x n_box x 1 and has stuff which has already been selected
-            #cluster_mask has shape: batch x n_box x n_box and has 1 if two boxes overlap above threshold
-            #torch.matmul multiplies the last two dimension, the other dimensions are considered batch dim
-            #impossible = torch.matmul(cluster_mask,nms_mask.unsqueeze(-1)).squeeze(-1)
-            impossible = torch.sum(cluster_mask*nms_mask.unsqueeze(1),dim=-1) #new and equivalent
-            possible = 1.0 - torch.clamp(impossible,max=1)
-            #tmp_cazzo = torch.sum(nms_mask,dim=-1)
-            #print("l, nms_mask",l,torch.min(tmp_cazzo),torch.max(tmp_cazzo))
-            #if(l>=10):
-            #    print("nms",l)
-            #if( (possible == 0.0).all() ): #this does not work nicely with Jit Compiler
-            #    break
-                
-        return nms_mask.int()
+        idx = torch.arange(n_boxes).view(1,n_boxes,1).to(p_raw.device)
+        chosen = torch.zeros(batch_size,n_boxes,1).to(p_raw.device)
     
-
+        # Loop
+        for l in range(self.n_max_object):     
+        #while (possible != 0.0).any():
+            #l=l+1
+            #print("v3",l)
+            p_mask = cluster_mask*(p_raw*possible)
+            index = torch.max(p_mask,keepdim=True,dim=-1)[1]  
+            chosen += possible.permute(0,2,1)*(idx == index).float()
+            blocks = torch.sum(cluster_mask*chosen,keepdim=True,dim=-2)
+            possible *= (blocks==0).float()
+        return chosen.squeeze(-1).int()    
         
     def forward(self,z_where):
                 
