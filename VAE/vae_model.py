@@ -124,7 +124,7 @@ class Compositional_VAE(torch.nn.Module):
             else:
                 raise Exception('invalid label is neither argmin nor argmax. Label = {}'.format(label))
                 
-            fake_indeces = torch.arange(start=0, end=k, step=1).view(1,-1,1,1,1).to(real_indeces.device)
+            fake_indeces = torch.arange(start=0, end=k, step=1, dtype=real_indeces.dtype, device=real_indeces.device).view(1,-1,1,1,1)
             mask = (real_indeces == fake_indeces).float()
             return mask
         

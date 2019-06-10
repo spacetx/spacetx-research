@@ -55,7 +55,8 @@ def compute_average_intensity_in_box(imgs,z_where):
     batch_size, n_boxes = area.shape
     
     # compute the total intensity in each box
-    batch_index = torch.arange(0,batch_size).view(-1,1).expand(-1,n_boxes).to(x1.device)
+    start=0, end, step=1
+    batch_index = torch.arange(start=0,end=batch_size,step=1,device=x1.device,dtype=x1.dtype).view(-1,1).expand(-1,n_boxes)
     tot_intensity = cum[batch_index,x3,y3]-cum[batch_index,x1,y3]-cum[batch_index,x3,y1]+cum[batch_index,x1,y1]
     #assert (batch_size, n_boxes) == tot_intensity.shape
    
