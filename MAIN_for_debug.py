@@ -103,7 +103,7 @@ vae.LOSS_ZWHAT = 1.0
 
 #with torch.autograd.profiler.profile(enabled=True, use_cuda=True) as prof:
 # training loop
-for epoch in range(0,1):
+for epoch in range(0,6):
     vae.train()            
     loss = train_one_epoch(svi, train_dataset, epoch, batch_size, verbose=(epoch==0))
     print("[epoch %03d] train loss: %.4f" % (epoch, loss))

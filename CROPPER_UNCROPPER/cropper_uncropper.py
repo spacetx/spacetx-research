@@ -54,16 +54,21 @@ class Cropper(torch.nn.Module):
         sx = (z_where.bw_dimfull/width_raw).view(-1,1)
         sy = (z_where.bh_dimfull/height_raw).view(-1,1)
         zero = torch.zeros_like(kx)
-        affine = torch.cat((zero,sy,sx,ky,kx), dim=-1)
-        indeces_resampling = torch.LongTensor([1, 0, 3, 0, 2, 4]).to(affine.device) # indeces to sample: sx,0,kx,0,sy,ky
-        return torch.index_select(affine, 1, indeces_resampling).view(-1,2,3) 
+        
+        # old version (slow)
+        #affine = torch.cat((zero,sy,sx,ky,kx), dim=-1)
+        #indeces_resampling = torch.LongTensor([1, 0, 3, 0, 2, 4]).to(affine.device) # indeces to sample: sx,0,kx,0,sy,ky
+        #old = torch.index_select(affine, 1, indeces_resampling).view(-1,2,3) 
+    
+        # newer version is equivalent and faster
+        return torch.cat((sy,zero,ky,zero,sx,kx),dim=-1).view(-1,2,3)
 
     
 class Uncropper(torch.nn.Module):
     """ Use STN to uncrop the original images according to z_where. """
     
     def __init__(self, params: dict):
-        super().__init__()
+        super().__init__()      
 
     def forward(self,z_where,cropped_imgs,width_raw,height_raw):
         batch_size,ch,cropped_width,cropped_height = cropped_imgs.shape
@@ -106,7 +111,12 @@ class Uncropper(torch.nn.Module):
         ky = ((height_raw-2*z_where.by_dimfull)/z_where.bh_dimfull).view(-1,1)
         sx = (width_raw/z_where.bw_dimfull).view(-1,1)
         sy = (height_raw/z_where.bh_dimfull).view(-1,1)
-        zero = torch.zeros_like(kx)
-        affine = torch.cat((zero,sy,sx,ky,kx), dim=-1)
-        indeces_resampling = torch.LongTensor([1, 0, 3, 0, 2, 4]).to(affine.device) # indeces to sample: sx,0,kx,0,sy,ky
-        return torch.index_select(affine, 1, indeces_resampling).view(-1,2,3) 
+        zero = torch.zeros_like(kx)    
+        
+        #old version (slow)
+        #affine = torch.cat((zero,sy,sx,ky,kx), dim=-1)
+        #indeces_resampling = torch.LongTensor([1, 0, 3, 0, 2, 4]).to(affine.device) # indeces to sample: sx,0,kx,0,sy,ky
+        #old = torch.index_select(affine, 1, indeces_resampling).view(-1,2,3) 
+
+        # newer version is equivalent and faster
+        return torch.cat((sy,zero,ky,zero,sx,kx),dim=-1).view(-1,2,3)

@@ -204,7 +204,8 @@ class Compositional_VAE(torch.nn.Module):
         values, indeces = torch.topk(putative_masks, k=2, dim=1, largest=True) # shape: batch x 2 x 1 x width x height
         prod = torch.prod(values,dim=1,keepdim=True) # shape batch x 1 x 1 x width x height
         with torch.no_grad():
-            fake_indeces = torch.arange(self.n_max_objects).view(1,-1,1,1,1).to(indeces.device)
+            fake_indeces = torch.arange(start=0,end=self.n_max_objects,step=1,
+                                        dtype=indeces.dtype,device=indeces.device).view(1,-1,1,1,1)
             assignment_mask = (indeces[:,-1:,:,:,:] == fake_indeces).float()
         reg_overlap_mask = torch.sum(prod*assignment_mask,dim=(-1,-2,-3))**2
             

@@ -63,13 +63,13 @@ class Non_Max_Suppression(torch.nn.Module):
     def compute_nms_mask(self,z_where):
         """ Compute NMS mask """
         
-        # # compute x1,x3,y1,y3 and p_raw
-        p_raw = z_where.prob.squeeze(-1)
+        # # compute x1,x3,y1,y3
         x1    = (z_where.bx_dimfull - 0.5*z_where.bw_dimfull).squeeze(-1)
         x3    = (z_where.bx_dimfull + 0.5*z_where.bw_dimfull).squeeze(-1)
         y1    = (z_where.by_dimfull - 0.5*z_where.bh_dimfull).squeeze(-1)
         y3    = (z_where.by_dimfull + 0.5*z_where.bh_dimfull).squeeze(-1)
         area  = (z_where.bw_dimfull * z_where.bh_dimfull).squeeze(-1)
+        batch_size, n_boxes = x1.shape
         
         # computes the overlap measure, this is O(N^2) algorithm
         # Note that cluster_mask is of size: (batch x n_boxes x n_boxes) ans has entry 0.0 or 1.0
@@ -78,11 +78,10 @@ class Non_Max_Suppression(torch.nn.Module):
             
         # This is the NON-MAX-SUPPRESSION algorithm:
         # Preparation
-        batch_size, n_boxes = p_raw.shape
-        p_raw = p_raw.unsqueeze(1) # shape: batch x 1 x n_box
+        p_raw = z_where.prob.view(batch_size, 1, n_boxes)
         possible  = (p_raw > self.p_threshold).float() # # shape: batch x 1 x n_box, chosen objects must have p > p_threshold
-        idx = torch.arange(n_boxes).view(1,n_boxes,1).to(p_raw.device)
-        chosen = torch.zeros(batch_size,n_boxes,1).to(p_raw.device)
+        idx = torch.arange(start=0,end=n_boxes,step=1,device=p_raw.device).view(1,n_boxes,1).long()
+        chosen = torch.zeros((batch_size,n_boxes,1),device=p_raw.device).float()
     
         # Loop
         for l in range(self.n_max_object):     
@@ -94,7 +93,7 @@ class Non_Max_Suppression(torch.nn.Module):
             chosen += possible.permute(0,2,1)*(idx == index).float()    # shape: batch x n_box x 1
             blocks = torch.sum(cluster_mask*chosen,keepdim=True,dim=-2) # shape: batch x 1 x n_box 
             possible *= (blocks==0).float()                             # shape: batch x 1 x n_box
-        return chosen.squeeze(-1).int()    
+        return chosen    
         
     def forward(self,z_where):
                 
@@ -103,23 +102,23 @@ class Non_Max_Suppression(torch.nn.Module):
             nms_mask = self.compute_nms_mask(z_where) 
             
         # mask the probability according to the NMS
-        p_masked = (z_where.prob.squeeze(-1))*(nms_mask.float()) 
+        p_masked = z_where.prob*nms_mask #shape batch_size x n_boxes x 1 
         
         
         with torch.no_grad():
             # select the top_k boxes by probability
-            batch_size,n_boxes = p_masked.shape
-            p_top_k, top_k_indeces = torch.topk(p_masked, k=min(self.n_max_object,n_boxes), dim=-1, largest=True, sorted=True)
+            batch_size,n_boxes = p_masked.shape[:2]
+            p_top_k, top_k_indeces = torch.topk(p_masked.squeeze(-1), k=min(self.n_max_object,n_boxes), dim=-1, largest=True, sorted=True)
             batch_size, k = top_k_indeces.shape 
-            batch_indeces = torch.arange(batch_size).unsqueeze(-1).expand(-1,k).to(top_k_indeces.device)
-            
+            batch_indeces = torch.arange(start=0,end=batch_size,step=1,
+                                         dtype=top_k_indeces.dtype,device=top_k_indeces.device).view(-1,1).expand(-1,k)
             # Next two lines are just to check that I did not mess up the indeces resampling algebra
             #p_top_k_v3 = p_masked[batch_indeces,top_k_indeces]
             #assert((p_top_k == p_top_k_v3).all()) 
             
         # package the output
         return collections.namedtuple('z_where', 'prob bx_dimfull by_dimfull bw_dimfull bh_dimfull')._make(
-                [p_masked.unsqueeze(-1)[batch_indeces,top_k_indeces],
+                [p_masked[batch_indeces,top_k_indeces],
                  z_where.bx_dimfull[batch_indeces,top_k_indeces],
                  z_where.by_dimfull[batch_indeces,top_k_indeces],
                  z_where.bw_dimfull[batch_indeces,top_k_indeces],
