@@ -55,7 +55,6 @@ def compute_average_intensity_in_box(imgs,z_where):
     batch_size, n_boxes = area.shape
     
     # compute the total intensity in each box
-    start=0, end, step=1
     batch_index = torch.arange(start=0,end=batch_size,step=1,device=x1.device,dtype=x1.dtype).view(-1,1).expand(-1,n_boxes)
     tot_intensity = cum[batch_index,x3,y3]-cum[batch_index,x1,y3]-cum[batch_index,x3,y1]+cum[batch_index,x1,y1]
     #assert (batch_size, n_boxes) == tot_intensity.shape
@@ -70,7 +69,8 @@ def select_top_boxes_by_prob(z_where_all,n_max_object):
     batch_size,n_boxes = p.shape 
     p_top_k, top_k_indeces = torch.topk(p, k=min(n_max_object,n_boxes), dim=-1, largest=True, sorted=True)
     batch_size, k = top_k_indeces.shape 
-    batch_indeces = torch.arange(batch_size).unsqueeze(-1).expand(-1,k).to(top_k_indeces.device)
+    batch_indeces = torch.arange(start=0,end=batch_size,step=1,
+                                 device=top_k_indeces.device,dtype=top_k_indeces.dtype).view(-1,1).expand(-1,k)
                
     # package the output
     return collections.namedtuple('z_where', 'prob bx_dimfull by_dimfull bw_dimfull bh_dimfull')._make(
