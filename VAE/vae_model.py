@@ -253,10 +253,10 @@ class Compositional_VAE(torch.nn.Module):
         pyro.module("inference",self.inference)
         
         #register the oparameters
-        std_bx_dimfull = pyro.param("std_bx_dimfull", one, constraint=constraints.positive)
-        std_by_dimfull = pyro.param("std_by_dimfull", one, constraint=constraints.positive)
-        std_bw_dimfull = pyro.param("std_bw_dimfull", one, constraint=constraints.positive)
-        std_bh_dimfull = pyro.param("std_bh_dimfull", one, constraint=constraints.positive)
+        std_bx_dimfull = pyro.param("std_bx_dimfull", one, constraint=constraints.greater_than(0.1))
+        std_by_dimfull = pyro.param("std_by_dimfull", one, constraint=constraints.greater_than(0.1))
+        std_bw_dimfull = pyro.param("std_bw_dimfull", one, constraint=constraints.greater_than(0.1))
+        std_bh_dimfull = pyro.param("std_bh_dimfull", one, constraint=constraints.greater_than(0.1))
 
         with pyro.plate("batch", batch_size, dim =-2 ):
             

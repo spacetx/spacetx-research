@@ -9,6 +9,13 @@ import torchvision.transforms as tvt
 from torch.utils.data.dataset import Dataset
 import pyro
 
+
+def linear_decay_p_factor(epoch,decay_lenght_scale):
+    f = 1.0/decay_lenght_scale
+    tmp = 0.5*(1.0-epoch*f)
+    #make sure the correction factor is larger than zero
+    return np.clip(tmp,np.zeros_like(tmp),tmp) 
+
 def test_model(model, guide, loss):
     pyro.clear_param_store()
     loss.loss(model, guide)
@@ -97,7 +104,7 @@ class dataset_in_memory(Dataset):
         return self.data[index,...],self.labels[index]
     
     def load(self,batch_size=8):
-        indeces = torch.randint(low=0,high=self.n,size=(batch_size,))
+        indeces = torch.randint(low=0,high=self.n,size=(batch_size,)).long()
         return self.__getitem__(indeces)
     
     def generate_batch_iterator(self,batch_size):

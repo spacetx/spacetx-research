@@ -20,11 +20,11 @@ class SimulationDictionary(dict):
         # Parameters regularizations
         self['REGULARIZATION.p_corr_factor']=0.0
         self['REGULARIZATION.lambda_small_box_size']=0.0
-        self['REGULARIZATION.lambda_big_mask_volume']=0.1
+        self['REGULARIZATION.lambda_big_mask_volume']=1.0
         self['REGULARIZATION.lambda_tot_var_mask']=0.0
         self['REGULARIZATION.lambda_overlap']=0.0
-        self['REGULARIZATION.LOSS_ZMASK']=0.1
-        self['REGULARIZATION.LOSS_ZWHAT']=1.0
+        self['REGULARIZATION.LOSS_ZMASK']=1.0
+        self['REGULARIZATION.LOSS_ZWHAT']=10.0
         
         # Parameters for the PRIOR in the VAE model
         self['PRIOR.n_max_objects'] = 6
