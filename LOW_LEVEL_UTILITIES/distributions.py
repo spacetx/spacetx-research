@@ -24,11 +24,19 @@ class NullScoreDistribution(TorchDistribution):
     
     
 class NullScoreDistribution_Bernoulli(NullScoreDistribution):
+    arg_constraints = {}
+    support = constraints.integer_interval(0,1)
+    has_rsample = True
+    
     def rsample(self, sample_shape=torch.Size()):
         shape = self._extended_shape(sample_shape)
         return (torch.rand(shape)>0.5).float()
     
 class NullScoreDistribution_Unit(NullScoreDistribution):
+    arg_constraints = {}
+    support = constraints.unit_interval
+    has_rsample = True
+    
     def rsample(self, sample_shape=torch.Size()):
         shape = self._extended_shape(sample_shape)
         return torch.rand(shape)
@@ -61,7 +69,7 @@ class CustomLogProbTerm(TorchDistribution):
     def log_prob(self, value):
         return self.custom_log_prob.to(value.device)
     
-    
+
     
 class Indicator(TorchDistribution):
     """ This is a bogus distribution which only has the log_prob method.
@@ -77,41 +85,43 @@ class Indicator(TorchDistribution):
         Typical usage:
         pyro.sample("extra_loss",Indicator(log_probs=log_probs), obs=c)
     """
-
     arg_constraints = {'log_probs': constraints.real}
-    support = constraints.integer_interval
-    has_enumerate_support = True
+    has_enumerate_support = False
 
-
-    def __init__(self, log_probs=None, validate_args=None):
-        
+    def __init__(self, log_probs, validate_args=None):
         if (log_probs is None):
-            raise ValueError("log_probs must be specified")
-            
-        self.log_probs     = log_probs
-        self.num_events = self.log_probs.size()[-1]
+            raise ValueError("Either `log_probs` must be specified")
+        if log_probs is not None:
+            if log_probs.dim() < 1:
+                raise ValueError("`log_probs` parameter must be at least one-dimensional.")
+            self.log_probs = log_probs
+        
+        self._num_events = self.log_probs.size()[-1]
         batch_shape = self.log_probs.size()[:-1] if self.log_probs.ndimension() > 1 else torch.Size()
         super(Indicator, self).__init__(batch_shape, validate_args=validate_args)
-            
+
     def expand(self, batch_shape, _instance=None):
         new = self._get_checked_instance(Indicator, _instance)
         batch_shape = torch.Size(batch_shape)
-        param_shape = batch_shape + torch.Size((self.num_events,))
-
+        param_shape = batch_shape + torch.Size((self._num_events,))
         new.log_probs = self.log_probs.expand(param_shape)
-        new.num_events = new.log_probs.size()[-1]
+        new._num_events = self._num_events
         super(Indicator, new).__init__(batch_shape, validate_args=False)
         new._validate_args = self._validate_args
         return new
 
-    def log_prob(self, value):
-        #if value = 0 return self.log_probs[0]
-        #if value = 1 return self.log_probs[1]
-        #if value = 2 return self.log_probs[2]
 
+    @constraints.dependent_property
+    def support(self):
+        return constraints.integer_interval(0, self._num_events - 1)
+
+    @property
+    def param_shape(self):
+        return self.log_probs.size()
+
+    def log_prob(self, value):
         if self._validate_args:
             self._validate_sample(value)
-           
         value = value.long().unsqueeze(-1)
         value, log_pmf = torch.broadcast_tensors(value, self.log_probs)
         value = value[..., :1]

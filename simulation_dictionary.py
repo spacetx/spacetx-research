@@ -17,13 +17,15 @@ class SimulationDictionary(dict):
         self['ZWHAT.dim'] = 50
         self['ZMASK.dim'] = 50 
         
-        # Parameters for annealing
-        self['ANNEALING.protocol'] = "Linear_Decay" #Flat, Linear_Decay, Exponential_Decay
-        self['ANNEALING.prob_initial'] = 1.0
-        self['ANNEALING.prob_final'] = 1E-5
-        self['ANNEALING.begin']    = 100  # number of epochs after which to start the decay
-        self['ANNEALING.duration'] = 200 # how many epochs does it take to reach the final value?
-                
+        # Parameters regularizations
+        self['REGULARIZATION.p_corr_factor']=0.0
+        self['REGULARIZATION.lambda_small_box_size']=0.0
+        self['REGULARIZATION.lambda_big_mask_volume']=0.1
+        self['REGULARIZATION.lambda_tot_var_mask']=0.0
+        self['REGULARIZATION.lambda_overlap']=0.0
+        self['REGULARIZATION.LOSS_ZMASK']=0.1
+        self['REGULARIZATION.LOSS_ZWHAT']=1.0
+        
         # Parameters for the PRIOR in the VAE model
         self['PRIOR.n_max_objects'] = 6
         self['PRIOR.min_object_size'] = 15 #in pixels
@@ -45,11 +47,7 @@ class SimulationDictionary(dict):
         self['NMS.overlap_threshold']=0.2
 
         # Enviromental variable
-        if torch.cuda.is_available():
-            use_cuda     = True
-        else: 
-            use_cuda     = False
-        self["use_cuda"]    =use_cuda
+        self["use_cuda"] = torch.cuda.is_available() 
     
     def check_consistency(self):
         
@@ -58,18 +56,8 @@ class SimulationDictionary(dict):
         assert( self['ZWHAT.dim'] > 0)
         assert( self['ZMASK.dim'] > 0)
         
-        assert(self['PRIOR.max_object_size'] >  self['PRIOR.expected_object_size'] )
-        assert(self['PRIOR.expected_object_size'] >  self['PRIOR.min_object_size'] )
-        assert(self['PRIOR.min_object_size'] >  0.0 )
-        
-        assert(0.0 <= self['ANNEALING.prob_initial'] <= 1.0)
-        assert(0.0 <= self['ANNEALING.prob_final'] <= 1.0)
-        assert(self['ANNEALING.begin'] >= 0)
-        assert(self['ANNEALING.duration'] >= 0)
-        assert( self['ANNEALING.protocol'] in ["Flat","Linear_Decay","Exponential_Decay"]) 
-        if(self['ANNEALING.protocol'] == "Flat"):
-            assert(self['ANNEALING.prob_initial']==self['ANNEALING.prob_final'])
-        
+        assert(self['PRIOR.max_object_size'] >  self['PRIOR.expected_object_size'] > self['PRIOR.min_object_size'] >  0.0)
+
         assert( isinstance(self['UNET.N_max_pool'],int) )
         assert( isinstance(self['UNET.N_up_conv'],int) )
         assert( isinstance(self['UNET.N_prediction_maps'],int) )

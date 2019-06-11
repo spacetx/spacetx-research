@@ -15,6 +15,13 @@ import pyro.poutine as poutine
 
 class Compositional_VAE(torch.nn.Module):
     
+    # a class method to create a Compositional_VAE from file 
+    @classmethod
+    def load(cls,params,root_dir,name):
+        vae = cls(params)
+        vae.load_everything(root_dir,name)
+        return vae 
+    
     def reset(self):
         reset_parameters(self.inference)
         reset_parameters(self.generator_imgs)
@@ -59,6 +66,8 @@ class Compositional_VAE(torch.nn.Module):
                 current_state[k]=v
         # reload the updated modules
         self.load_state_dict(current_state)
+       
+    
     
     def __init__(self, params):
         super().__init__()
@@ -80,15 +89,14 @@ class Compositional_VAE(torch.nn.Module):
         #--------------------------------#
         #--- Pramatres Regolurization ---#
         #--------------------------------#
-        self.p_corr_factor = getattr(params,'REGULARIZATION.p_corr_factor',0.0)
-        self.lambda_box_size = getattr(params,'REGULARIZATION.lambda_box_size',0.0)
-        self.lambda_tot_var  = getattr(params,'REGULARIZATION.lambda_tot_var',0.0)
-        self.lambda_overlap  = getattr(params,'REGULARIZATION.lambda_overlap',0.0)
-        self.LOSS_ZWHERE = getattr(params,'REGULARIZATION.LOSS_ZWHERE',0.0) 
-        self.LOSS_ZMASK = getattr(params,'REGULARIZATION.LOSS_ZMASK',0.1)
-        self.LOSS_ZWHAT = getattr(params,'REGULARIZATION.LOSS_ZWHAT',1.0)
+        self.p_corr_factor          = params['REGULARIZATION.p_corr_factor']
+        self.lambda_small_box_size  = params['REGULARIZATION.lambda_small_box_size']
+        self.lambda_big_mask_volume = params['REGULARIZATION.lambda_big_mask_volume']
+        self.lambda_tot_var_mask    = params['REGULARIZATION.lambda_tot_var_mask']
+        self.lambda_overlap         = params['REGULARIZATION.lambda_overlap']  
+        self.LOSS_ZMASK             = params['REGULARIZATION.LOSS_ZMASK']
+        self.LOSS_ZWHAT             = params['REGULARIZATION.LOSS_ZWHAT']
         
-               
         #------------------------------------#
         #----------- PRIORS -----------------#
         #------------------------------------#
@@ -382,10 +390,10 @@ class Compositional_VAE(torch.nn.Module):
                     logp,reg = self.score_observations(box_dimfull,putative_imgs,putative_masks,
                                                        mask_pixel_assignment,definitely_bg_mask,imgs)
                     
-                    total_reg = getattr(self,'lambda_small_box_size',0.0)*reg.small_box_size + \
-                                getattr(self,'lambda_big_mask_volume',0.0)*reg.big_mask_volume + \
-                                getattr(self,'lambda_tot_var_mask',0.0)*reg.tot_var_mask + \
-                                getattr(self,'lambda_overlap',0.0)*reg.overlap_mask      
+                    total_reg = self.lambda_small_box_size*reg.small_box_size + \
+                                self.lambda_big_mask_volume*reg.big_mask_volume + \
+                                self.lambda_tot_var_mask*reg.tot_var_mask + \
+                                self.lambda_overlap*reg.overlap_mask      
                             
                     log_prob_ZMASK = getattr(self,'LOSS_ZMASK',0.0)*torch.stack((logp.logp_off,logp.logp_on_cauchy-total_reg),dim=-1) 
                     log_prob_ZWHAT = getattr(self,'LOSS_ZWHAT',0.0)*torch.stack((logp.logp_off,logp.logp_on_normal-total_reg),dim=-1) 
