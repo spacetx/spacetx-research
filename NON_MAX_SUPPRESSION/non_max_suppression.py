@@ -78,10 +78,11 @@ class Non_Max_Suppression(torch.nn.Module):
             
         # This is the NON-MAX-SUPPRESSION algorithm:
         # Preparation
-        p_raw = z_where.prob.view(batch_size, 1, n_boxes)
+        p_raw = z_where.prob.permute(0,2,1)
+        assert (batch_size, 1, n_boxes) == p_raw.shape
         possible  = (p_raw > self.p_threshold).float() # # shape: batch x 1 x n_box, chosen objects must have p > p_threshold
         idx = torch.arange(start=0,end=n_boxes,step=1,device=p_raw.device).view(1,n_boxes,1).long()
-        chosen = torch.zeros((batch_size,n_boxes,1),device=p_raw.device).float()
+        chosen = torch.zeros((batch_size,n_boxes,1),device=p_raw.device).float() # shape: batch x n_box x 1
     
         # Loop
         for l in range(self.n_max_object):     
@@ -93,7 +94,7 @@ class Non_Max_Suppression(torch.nn.Module):
             chosen += possible.permute(0,2,1)*(idx == index).float()    # shape: batch x n_box x 1
             blocks = torch.sum(cluster_mask*chosen,keepdim=True,dim=-2) # shape: batch x 1 x n_box 
             possible *= (blocks==0).float()                             # shape: batch x 1 x n_box
-        return chosen    
+        return chosen # shape: batch x n_box x 1
         
     def forward(self,z_where):
                 
