@@ -19,10 +19,10 @@ class SimulationDictionary(dict):
         
         # Parameters regularizations
         self['REGULARIZATION.p_corr_factor']=0.0
-        self['REGULARIZATION.lambda_small_box_size']=1.0  # bounding box should be as small as possible
-        self['REGULARIZATION.lambda_big_mask_volume']=1.0 # mask should occupy at least 10% of the box otherwise degeneracy emerges
-        self['REGULARIZATION.lambda_tot_var_mask']=0.0    # mask should have small tot_variation
-        self['REGULARIZATION.lambda_overlap']=1.0         # mask should not overlap
+        self['REGULARIZATION.lambda_small_box_size']=0.0
+        self['REGULARIZATION.lambda_big_mask_volume']=1.0
+        self['REGULARIZATION.lambda_tot_var_mask']=0.0
+        self['REGULARIZATION.lambda_overlap']=0.0
         self['REGULARIZATION.LOSS_ZMASK']=1.0
         self['REGULARIZATION.LOSS_ZWHAT']=10.0
         
