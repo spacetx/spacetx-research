@@ -11,7 +11,7 @@ class Non_Max_Suppression(torch.nn.Module):
         1. Discard all voxels with p<p_threshold
         2. While there are any remaining voxels:
             - Pick the voxel with largest p and output it as a prediction
-            - Discard any voxels which has a IoU> IoU_threshold with the box just exported.
+            - Discard any voxels which has a IoU> IoU_threshold with the box just chosen.
     """
 
     def __init__(self,params: dict):
