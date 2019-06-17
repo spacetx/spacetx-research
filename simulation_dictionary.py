@@ -18,20 +18,20 @@ class SimulationDictionary(dict):
         self['ZMASK.dim'] = 50 
         
         # Parameters regularizations
-        self['REGULARIZATION.min_volume_mask']=0.0
-        self['REGULARIZATION.max_volume_mask']=0.0
+        self['REGULARIZATION.min_volume_mask']=300.0
+        self['REGULARIZATION.max_volume_mask']=600.0
         self['REGULARIZATION.p_corr_factor']=0.0
         self['REGULARIZATION.lambda_small_box_size']=0.0  # bounding box should be as small as possible
         self['REGULARIZATION.lambda_mask_volume_fraction']=1.0 # mask should occupy at least 10% of the box 
         self['REGULARIZATION.lambda_mask_volume_absolute']=0.0 # mask volume should be between min and max volume        
-        self['REGULARIZATION.lambda_tot_var_mask']=1.0    # mask should have small tot_variation
+        self['REGULARIZATION.lambda_tot_var_mask']=0.0    # mask should have small tot_variation
         self['REGULARIZATION.lambda_overlap']=0.0         # mask should not overlap
         self['REGULARIZATION.LOSS_ZMASK']=1.0
         self['REGULARIZATION.LOSS_ZWHAT']=0.0
                         
         
         # Parameters for the PRIOR in the VAE model
-        self['PRIOR.n_max_objects'] = 40
+        self['PRIOR.n_max_objects'] = 30
         self['PRIOR.min_object_size'] = 10 #in pixels
         self['PRIOR.max_object_size'] = 40 #in pixels
         self['PRIOR.expected_object_size'] = 20 #in pixels

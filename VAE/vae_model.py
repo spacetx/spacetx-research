@@ -204,8 +204,8 @@ class Compositional_VAE(torch.nn.Module):
         
         
         #- reg 3: mask volume should be between min and max 
-        reg_mask_volume_absolute = torch.clamp(50*(volume_mask - self.min_volume_mask),min=0) + \
-                                   torch.clamp(50*(self.max_volume_mask - volume_mask),min=0)
+        reg_mask_volume_absolute = torch.clamp(50*(1.0-volume_mask/self.min_volume_mask),min=0) + \
+                                   torch.clamp(50*(volume_mask/self.max_volume_mask-1.0),min=0)
          
        
         #- reg 4: mask should have small total variations -#
