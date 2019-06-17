@@ -89,13 +89,16 @@ class Compositional_VAE(torch.nn.Module):
         #--------------------------------#
         #--- Pramatres Regolurization ---#
         #--------------------------------#
-        self.p_corr_factor          = params['REGULARIZATION.p_corr_factor']
-        self.lambda_small_box_size  = params['REGULARIZATION.lambda_small_box_size']
-        self.lambda_big_mask_volume = params['REGULARIZATION.lambda_big_mask_volume']
-        self.lambda_tot_var_mask    = params['REGULARIZATION.lambda_tot_var_mask']
-        self.lambda_overlap         = params['REGULARIZATION.lambda_overlap']  
-        self.LOSS_ZMASK             = params['REGULARIZATION.LOSS_ZMASK']
-        self.LOSS_ZWHAT             = params['REGULARIZATION.LOSS_ZWHAT']
+        self.min_volume_mask             = params['REGULARIZATION.min_volume_mask']
+        self.max_volume_mask             = params['REGULARIZATION.max_volume_mask']
+        self.p_corr_factor               = params['REGULARIZATION.p_corr_factor']
+        self.lambda_small_box_size       = params['REGULARIZATION.lambda_small_box_size']
+        self.lambda_mask_volume_fraction = params['REGULARIZATION.lambda_mask_volume_fraction']
+        self.lambda_mask_volume_absolute = params['REGULARIZATION.lambda_mask_volume_absolute']
+        self.lambda_tot_var_mask         = params['REGULARIZATION.lambda_tot_var_mask']
+        self.lambda_overlap              = params['REGULARIZATION.lambda_overlap']  
+        self.LOSS_ZMASK                  = params['REGULARIZATION.LOSS_ZMASK']
+        self.LOSS_ZWHAT                  = params['REGULARIZATION.LOSS_ZWHAT']
         
         #------------------------------------#
         #----------- PRIORS -----------------#
@@ -196,9 +199,16 @@ class Compositional_VAE(torch.nn.Module):
         #- a. if of>0.1 cost = 0
         #- b. is of<0.1 cost is exponential increasing 
         of = volume_mask/volume_box.detach() # occupaid fraction
-        reg_big_mask_volume = torch.exp(50*(0.1-of))
+        #reg_mask_volume_fraction = torch.exp(50*(0.1-of))
+        reg_mask_volume_fraction = torch.clamp(50*(0.1-of),min=0)
         
-        #- reg 3: mask should have small total variations -#
+        
+        #- reg 3: mask volume should be between min and max 
+        reg_mask_volume_absolute = torch.clamp(50*(volume_mask - self.min_volume_mask),min=0) + \
+                                   torch.clamp(50*(self.max_volume_mask - volume_mask),min=0)
+         
+       
+        #- reg 4: mask should have small total variations -#
         #- TotVar = integral of the absolute gradient -----#
         #- This is L1 b/c we want discountinuity ----------#
         pixel_weights = putative_masks*mask_pixel_assignment
@@ -207,7 +217,7 @@ class Compositional_VAE(torch.nn.Module):
         reg_tot_var_mask = (grad_x+grad_y)
   
             
-        #- reg 4: mask should have small or no overlap ---------------#
+        #- reg 5: mask should have small or no overlap ---------------#
         #- Question: Assign the cost to the second most likely mask? -#
         values, indeces = torch.topk(putative_masks, k=2, dim=1, largest=True) # shape: batch x 2 x 1 x width x height
         prod = torch.prod(values,dim=1,keepdim=True) # shape batch x 1 x 1 x width x height
@@ -217,8 +227,8 @@ class Compositional_VAE(torch.nn.Module):
             assignment_mask = (indeces[:,-1:,:,:,:] == fake_indeces).float()
         reg_overlap_mask = torch.sum(prod*assignment_mask,dim=(-1,-2,-3))**2
             
-        regularizations = collections.namedtuple('reg', "small_box_size big_mask_volume tot_var_mask overlap_mask")._make(
-            [reg_small_box_size, reg_big_mask_volume, reg_tot_var_mask, reg_overlap_mask])
+        regularizations = collections.namedtuple('reg', "small_box_size mask_volume_fraction mask_volume_absolute tot_var_mask overlap_mask")._make(
+            [reg_small_box_size, reg_mask_volume_fraction, reg_mask_volume_absolute, reg_tot_var_mask, reg_overlap_mask])
 
         return log_probs,regularizations
     
@@ -391,12 +401,13 @@ class Compositional_VAE(torch.nn.Module):
                                                        mask_pixel_assignment,definitely_bg_mask,imgs)
                     
                     total_reg = self.lambda_small_box_size*reg.small_box_size + \
-                                self.lambda_big_mask_volume*reg.big_mask_volume + \
+                                self.lambda_mask_volume_fraction*reg.mask_volume_fraction + \
+                                self.lambda_mask_volume_absolute*reg.mask_volume_absolute + \
                                 self.lambda_tot_var_mask*reg.tot_var_mask + \
                                 self.lambda_overlap*reg.overlap_mask      
-                            
-                    log_prob_ZMASK = getattr(self,'LOSS_ZMASK',0.0)*torch.stack((logp.logp_off,logp.logp_on_cauchy-total_reg),dim=-1) 
-                    log_prob_ZWHAT = getattr(self,'LOSS_ZWHAT',0.0)*torch.stack((logp.logp_off,logp.logp_on_normal-total_reg),dim=-1) 
+                                                                         
+                    log_prob_ZMASK = self.LOSS_ZMASK*torch.stack((logp.logp_off,logp.logp_on_cauchy-total_reg),dim=-1) 
+                    log_prob_ZWHAT = self.LOSS_ZWHAT*torch.stack((logp.logp_off,logp.logp_on_normal-total_reg),dim=-1) 
 
                     pyro.sample("LOSS", Indicator(log_probs=log_prob_ZMASK+log_prob_ZWHAT), obs = c)
                     
