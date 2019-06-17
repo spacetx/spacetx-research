@@ -15,21 +15,21 @@ class SimulationDictionary(dict):
         
         # Parameters for ZWHAT, ZMASK
         self['ZWHAT.dim'] = 50
-        self['ZMASK.dim'] = 50 
+        self['ZMASK.dim'] = 5 
         
         # Parameters regularizations
         self['REGULARIZATION.p_corr_factor']=0.0
-        self['REGULARIZATION.lambda_small_box_size']=0.0
-        self['REGULARIZATION.lambda_big_mask_volume']=1.0
-        self['REGULARIZATION.lambda_tot_var_mask']=0.0
-        self['REGULARIZATION.lambda_overlap']=0.0
+        self['REGULARIZATION.lambda_small_box_size']=0.0  # bounding box should be as small as possible
+        self['REGULARIZATION.lambda_big_mask_volume']=1.0 # mask should occupy at least 10% of the box otherwise degeneracy emerges
+        self['REGULARIZATION.lambda_tot_var_mask']=1.0    # mask should have small tot_variation
+        self['REGULARIZATION.lambda_overlap']=0.0         # mask should not overlap
         self['REGULARIZATION.LOSS_ZMASK']=1.0
-        self['REGULARIZATION.LOSS_ZWHAT']=10.0
+        self['REGULARIZATION.LOSS_ZWHAT']=0.0
         
         # Parameters for the PRIOR in the VAE model
-        self['PRIOR.n_max_objects'] = 6
-        self['PRIOR.min_object_size'] = 15 #in pixels
-        self['PRIOR.max_object_size'] = 35 #in pixels
+        self['PRIOR.n_max_objects'] = 40
+        self['PRIOR.min_object_size'] = 10 #in pixels
+        self['PRIOR.max_object_size'] = 40 #in pixels
         self['PRIOR.expected_object_size'] = 20 #in pixels
         
         # Parameters for the description of the raw image
