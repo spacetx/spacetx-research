@@ -142,11 +142,11 @@ class Compositional_VAE(torch.nn.Module):
             return mask
         
         
-    def score_observations(self,box_dimfull,putative_imgs,putative_masks,
+    def score_observations(self,box_dimfull,sigma_imgs,putative_imgs,putative_masks,
                            mask_pixel_assignment,definitely_bg_mask,imgs):   
         
         # get the parameters 
-        normal_sigma = pyro.param("normal_sigma")
+        #normal_sigma = pyro.param("normal_sigma")
         bg_mu = pyro.param("bg_mu")
         fg_mu = pyro.param("fg_mu")
         bg_sigma = pyro.param("bg_sigma")
@@ -159,7 +159,7 @@ class Compositional_VAE(torch.nn.Module):
         obs_imgs = obs_imgs.expand(-1,self.n_max_objects,-1,-1,-1) # expand for dimension over n_boxes
         log_p_given_bg_cauchy = UnitCauchy(bg_mu,bg_sigma).expand(obs_imgs.shape).mask(mask_pixel_assignment).log_prob(obs_imgs)
         log_p_given_fg_cauchy = UnitCauchy(fg_mu,fg_sigma).expand(obs_imgs.shape).mask(mask_pixel_assignment).log_prob(obs_imgs)
-        log_p_given_fg_normal = dist.Normal(putative_imgs,normal_sigma).mask(mask_pixel_assignment).log_prob(obs_imgs)   
+        log_p_given_fg_normal = dist.Normal(putative_imgs,sigma_imgs).mask(mask_pixel_assignment).log_prob(obs_imgs)   
                     
         # technically incorrect but it speeds up training and lead to binarized masks
         # The probability of each pixel value is:
@@ -348,7 +348,7 @@ class Compositional_VAE(torch.nn.Module):
         fg_mu        = pyro.param("fg_mu", 0.9*one, constraint=constraints.unit_interval)
         bg_sigma     = pyro.param("bg_sigma", 0.2*one, constraint=constraints.interval(0.01,0.25))
         fg_sigma     = pyro.param("fg_sigma", 0.2*one, constraint=constraints.interval(0.01,0.25))
-        normal_sigma = pyro.param("normal_sigma", 0.2*one, constraint=constraints.interval(0.01,0.25))
+        #normal_sigma = pyro.param("normal_sigma", 0.2*one, constraint=constraints.interval(0.01,0.25))
 
         with pyro.plate("batch", batch_size, dim=-2):
             
@@ -381,9 +381,9 @@ class Compositional_VAE(torch.nn.Module):
                 #------------------------------#
                 box_dimfull = collections.namedtuple('box_dimfull', 'bx_dimfull by_dimfull bw_dimfull bh_dimfull')._make(
                                                     [bx_dimfull,by_dimfull,bw_dimfull,bh_dimfull])
-                
-                putative_imgs  = self.generator_imgs.forward(box_dimfull,z_what,width,height) 
-                putative_masks = self.generator_masks.forward(box_dimfull,z_mask,width,height)
+
+                putative_masks           = self.generator_masks.forward(box_dimfull,z_mask,width,height)
+                putative_imgs,sigma_imgs = self.generator_imgs.forward(box_dimfull,z_what,width,height) 
                 
                 # Resolve the conflict. Each pixel belongs to only one FG object
                 # If a pixel does not belong to any object it belongs to the background
@@ -396,7 +396,7 @@ class Compositional_VAE(torch.nn.Module):
 
                     
                 if(observed):
-                    logp,reg = self.score_observations(box_dimfull,putative_imgs,putative_masks,
+                    logp,reg = self.score_observations(box_dimfull,sigma_imgs,putative_imgs,putative_masks,
                                                        mask_pixel_assignment,definitely_bg_mask,imgs)
                     
                     total_reg = self.lambda_small_box_size*reg.small_box_size + \

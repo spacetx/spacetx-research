@@ -49,62 +49,62 @@ class Encoder_CONV(torch.nn.Module):
         return collections.namedtuple(self.name, "z_mu z_std")._make([z_mu,z_std])
  
 
-class Encoder_MLP(torch.nn.Module):
-    """ Encode cropped stuff into z_mu, z_std 
-        INPUT  SHAPE: batch x n_boxes x ch x width x height 
-        OUTPUT SHAPE: batch x n_boxes x latent_dim
-    """
-    
-    def __init__(self,params,is_zwhat):
-        
-        super().__init__()    
-        ch_raw_image = len(params["IMG.ch_in_description"])
-        width  = params["SD.width"]
-        self.dim_in = width*width*ch_raw_image
-        self.dim_h1 = params["SD.dim_h1"] 
-        self.dim_h2 = params["SD.dim_h2"]
-        
-        if(is_zwhat):
-            self.dim_z = params['ZWHAT.dim']
-            self.name    = "z_what"
-        else:
-            self.dim_z = params['ZMASK.dim']
-            self.name    = "z_mask"
-
-        if(self.dim_h1>0 and self.dim_h2>0):
-            self.compute_z = torch.nn.Sequential(
-                torch.nn.Linear(self.dim_in, self.dim_h1),
-                torch.nn.ReLU(),
-                torch.nn.Linear(self.dim_h1, self.dim_h2),
-                torch.nn.ReLU(),
-                torch.nn.Linear(self.dim_h2, 2*self.dim_z)
-            )
-        elif(self.dim_h1 > 0 and self.dim_h2 <= 0):    
-            self.compute_z = torch.nn.Sequential(
-                torch.nn.Linear(self.dim_in, self.dim_h1),
-                torch.nn.ReLU(),
-                torch.nn.Linear(self.dim_h1, 2*self.dim_z)
-            )
-        elif(self.dim_h1 <= 0 and self.dim_h2 > 0):    
-            self.compute_z = torch.nn.Sequential(
-                torch.nn.Linear(self.dim_in, self.dim_h2),
-                torch.nn.ReLU(),
-                torch.nn.Linear(self.dim_h2, 2*self.dim_z)
-            )
-        elif(self.dim_h1 <= 0 and self.dim_h2 <= 0):    
-            self.compute_z = torch.nn.Sequential(
-                torch.nn.Linear(self.dim_in, 2*self.dim_z)
-            ) 
-            
-    def forward(self,x):
-        
-        # input shape: batch x boxes x ch x width x height  
-        assert len(x.shape) == 5
-        batch,nboxes = x.shape[:2]
-        
-        # actual encoding
-        z = self.compute_z(x.view(batch,nboxes,-1)) 
-        z_mu  = z[...,:self.dim_z]
-        z_std = F.softplus(z[...,self.dim_z:])
-        return collections.namedtuple(self.name, "z_mu z_std")._make([z_mu,z_std])
-    
+###class Encoder_MLP(torch.nn.Module):
+###    """ Encode cropped stuff into z_mu, z_std 
+###        INPUT  SHAPE: batch x n_boxes x ch x width x height 
+###        OUTPUT SHAPE: batch x n_boxes x latent_dim
+###    """
+###    
+###    def __init__(self,params,is_zwhat):
+###        
+###        super().__init__()    
+###        ch_raw_image = len(params["IMG.ch_in_description"])
+###        width  = params["SD.width"]
+###        self.dim_in = width*width*ch_raw_image
+###        self.dim_h1 = params["SD.dim_h1"] 
+###        self.dim_h2 = params["SD.dim_h2"]
+###        
+###        if(is_zwhat):
+###            self.dim_z = params['ZWHAT.dim']
+###            self.name    = "z_what"
+###        else:
+###            self.dim_z = params['ZMASK.dim']
+###            self.name    = "z_mask"
+###
+###        if(self.dim_h1>0 and self.dim_h2>0):
+###            self.compute_z = torch.nn.Sequential(
+###                torch.nn.Linear(self.dim_in, self.dim_h1),
+###                torch.nn.ReLU(),
+###                torch.nn.Linear(self.dim_h1, self.dim_h2),
+###                torch.nn.ReLU(),
+###                torch.nn.Linear(self.dim_h2, 2*self.dim_z)
+###            )
+###        elif(self.dim_h1 > 0 and self.dim_h2 <= 0):    
+###            self.compute_z = torch.nn.Sequential(
+###                torch.nn.Linear(self.dim_in, self.dim_h1),
+###                torch.nn.ReLU(),
+###                torch.nn.Linear(self.dim_h1, 2*self.dim_z)
+###            )
+###        elif(self.dim_h1 <= 0 and self.dim_h2 > 0):    
+###            self.compute_z = torch.nn.Sequential(
+###                torch.nn.Linear(self.dim_in, self.dim_h2),
+###                torch.nn.ReLU(),
+###                torch.nn.Linear(self.dim_h2, 2*self.dim_z)
+###            )
+###        elif(self.dim_h1 <= 0 and self.dim_h2 <= 0):    
+###            self.compute_z = torch.nn.Sequential(
+###                torch.nn.Linear(self.dim_in, 2*self.dim_z)
+###            ) 
+###            
+###    def forward(self,x):
+###        
+###        # input shape: batch x boxes x ch x width x height  
+###        assert len(x.shape) == 5
+###        batch,nboxes = x.shape[:2]
+###        
+###        # actual encoding
+###        z = self.compute_z(x.view(batch,nboxes,-1)) 
+###        z_mu  = z[...,:self.dim_z]
+###        z_std = F.softplus(z[...,self.dim_z:])
+###        return collections.namedtuple(self.name, "z_mu z_std")._make([z_mu,z_std])
+###    

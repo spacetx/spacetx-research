@@ -3,8 +3,8 @@ import torch
 import collections
 from UNET.unet_model import UNet
 from NON_MAX_SUPPRESSION.non_max_suppression import Non_Max_Suppression 
-from ENCODERS_DECODERS.encoders import Encoder_MLP, Encoder_CONV
-from ENCODERS_DECODERS.decoders import Multi_Channel_Img_Decoder, Decoder_MLP, Decoder_CONV
+from ENCODERS_DECODERS.encoders import Encoder_CONV #,Encoder_MLP 
+from ENCODERS_DECODERS.decoders import Multi_Channel_Img_Decoder, Decoder_CONV #,Decoder_MLP 
 from CROPPER_UNCROPPER.cropper_uncropper import Uncropper, Cropper
 
         
@@ -145,9 +145,13 @@ class Imgs_Generator(torch.nn.Module):
     
         # DECODER
         batch_size,n_boxes,dim_z_what = z_what.shape
-        cropped_imgs    = self.imgs_decoder.forward(z_what.view(-1,dim_z_what))
-        uncropped_imgs  = self.uncropper(z_where,cropped_imgs,width_raw,height_raw)             
-        return uncropped_imgs
+        cropped_imgs,sigma  = self.imgs_decoder.forward(z_what.view(-1,dim_z_what))
+        uncropped_imgs      = self.uncropper(z_where,cropped_imgs,width_raw,height_raw)      
+        
+        # make sure that sigme has shape compatible with uncropped_imgs
+        assert len(uncropped_imgs.shape) == 5 #batch, boxes, ch, width, height
+        n1,n2 = uncropped_imgs.shape[:2]
+        return uncropped_imgs,sigma.view(n1,n2,1,1,1)
 
 class Masks_Generator(torch.nn.Module):
     def __init__(self,params):
@@ -160,8 +164,8 @@ class Masks_Generator(torch.nn.Module):
     
         # DECODER
         batch_size,n_boxes,dim_z_mask = z_mask.shape
-        cropped_masks    = self.mask_decoder.forward(z_mask.view(-1,dim_z_mask))
-        uncropped_masks  = self.uncropper(z_where,cropped_masks,width_raw,height_raw)             
+        cropped_masks   = self.mask_decoder.forward(z_mask.view(-1,dim_z_mask))
+        uncropped_masks = self.uncropper(z_where,cropped_masks,width_raw,height_raw)             
         return uncropped_masks
     
    
