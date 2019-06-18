@@ -103,6 +103,8 @@ class Compositional_VAE(torch.nn.Module):
         #------------------------------------#
         #----------- PRIORS -----------------#
         #------------------------------------#
+        self.width_zmask   = params['PRIOR.width_zmask']
+        self.width_zwhat   = params['PRIOR.width_zwhat']
         self.n_max_objects = params['PRIOR.n_max_objects'] 
         self.min_size      = params['PRIOR.min_object_size'] 
         self.max_size      = params['PRIOR.max_object_size'] 
@@ -195,17 +197,14 @@ class Compositional_VAE(torch.nn.Module):
         #- Note that the box volume is detached from computation graph, 
         #- therefore this regolarization can only make mask_volume larger not the 
         #- box_volume smaller.
-        #- This is the continuous version of:
-        #- a. if of>0.1 cost = 0
-        #- b. is of<0.1 cost is exponential increasing 
-        of = volume_mask/volume_box.detach() # occupaid fraction
-        #reg_mask_volume_fraction = torch.exp(50*(0.1-of))
-        reg_mask_volume_fraction = torch.clamp(50*(0.1-of),min=0)
-        
+        of     = volume_mask/volume_box.detach() # occupaid fraction
+        tmp_of = torch.clamp(50*(0.1-of),min=0)
+        reg_mask_volume_fraction = torch.expm1(tmp_of)
         
         #- reg 3: mask volume should be between min and max 
-        reg_mask_volume_absolute = torch.clamp(50*(1.0-volume_mask/self.min_volume_mask),min=0) + \
-                                   torch.clamp(50*(volume_mask/self.max_volume_mask-1.0),min=0)
+        tmp_volume_absolute = torch.clamp(50*(1.0-volume_mask/self.min_volume_mask),min=0) + \
+                              torch.clamp(50*(volume_mask/self.max_volume_mask-1.0),min=0)
+        reg_mask_volume_absolute = tmp_volume_absolute.pow(2)
          
        
         #- reg 4: mask should have small total variations -#
@@ -366,8 +365,8 @@ class Compositional_VAE(torch.nn.Module):
                 with poutine.mask(mask=c_mask):
                 
                     #- Z_WHAT, Z_WHERE 
-                    z_what = pyro.sample("z_what",dist.Normal(zero,one).expand([self.Zwhat_dim]).to_event(1))    
-                    z_mask = pyro.sample("z_mask",dist.Normal(zero,one).expand([self.Zmask_dim]).to_event(1)) 
+                    z_what = pyro.sample("z_what",dist.Normal(zero,self.width_zwhat).expand([self.Zwhat_dim]).to_event(1)) 
+                    z_mask = pyro.sample("z_mask",dist.Normal(zero,self.width_zmask).expand([self.Zmask_dim]).to_event(1)) 
                                    
                     #= Location of bounding box
                     bx_dimfull = pyro.sample("bx_dimfull",UniformWithTails(zero,width,self.tails_dist_center).expand([1]).to_event(1))

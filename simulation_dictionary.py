@@ -24,13 +24,14 @@ class SimulationDictionary(dict):
         self['REGULARIZATION.lambda_small_box_size']=0.0  # bounding box should be as small as possible
         self['REGULARIZATION.lambda_mask_volume_fraction']=1.0 # mask should occupy at least 10% of the box 
         self['REGULARIZATION.lambda_mask_volume_absolute']=1.0 # mask volume should be between min and max volume        
-        self['REGULARIZATION.lambda_tot_var_mask']=0.0    # mask should have small tot_variation
+        self['REGULARIZATION.lambda_tot_var_mask']=1.0    # mask should have small tot_variation
         self['REGULARIZATION.lambda_overlap']=0.0         # mask should not overlap
         self['REGULARIZATION.LOSS_ZMASK']=1.0
         self['REGULARIZATION.LOSS_ZWHAT']=1.0
-                        
         
         # Parameters for the PRIOR in the VAE model
+        self['PRIOR.width_zmask'] = 0.005 #the width of the prior is inversely proportional to its strength
+        self['PRIOR.width_zwhat'] = 0.005 #the width of the prior is inversely proportional to its strength
         self['PRIOR.n_max_objects'] = 30
         self['PRIOR.min_object_size'] = 10 #in pixels
         self['PRIOR.max_object_size'] = 40 #in pixels
