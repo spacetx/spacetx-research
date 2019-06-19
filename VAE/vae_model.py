@@ -90,6 +90,7 @@ class Compositional_VAE(torch.nn.Module):
         #--- Pramatres Regolurization ---#
         #--------------------------------#
         self.min_volume_mask             = params['REGULARIZATION.min_volume_mask']
+        self.expected_volume_mask        = params['REGULARIZATION.expected_volume_mask']
         self.max_volume_mask             = params['REGULARIZATION.max_volume_mask']
         self.p_corr_factor               = params['REGULARIZATION.p_corr_factor']
         self.lambda_small_box_size       = params['REGULARIZATION.lambda_small_box_size']
@@ -202,9 +203,9 @@ class Compositional_VAE(torch.nn.Module):
         reg_mask_volume_fraction = torch.expm1(tmp_of)
         
         #- reg 3: mask volume should be between min and max 
-        tmp_volume_absolute = torch.clamp(50*(1.0-volume_mask/self.min_volume_mask),min=0) + \
-                              torch.clamp(50*(volume_mask/self.max_volume_mask-1.0),min=0)
-        reg_mask_volume_absolute = tmp_volume_absolute.pow(2)
+        tmp_volume_absolute = torch.clamp((self.min_volume_mask-volume_mask)/self.expected_volume_mask,min=0) + \
+                              torch.clamp((volume_mask-self.max_volume_mask)/self.expected_volume_mask,min=0)
+        reg_mask_volume_absolute = (50*tmp_volume_absolute).pow(2)
          
        
         #- reg 4: mask should have small total variations -#
@@ -432,15 +433,15 @@ class Compositional_VAE(torch.nn.Module):
             #--------------------------------#
             #--- 2. Run the model forward ---#
             #--------------------------------#
-            putative_imgs  = self.generator_imgs.forward(z_nms.z_where,z_nms.z_what.z_mu,width,height) 
             putative_masks = self.generator_masks.forward(z_nms.z_where,z_nms.z_mask.z_mu,width,height)                
+            putative_imgs,sigma_imgs  = self.generator_imgs.forward(z_nms.z_where,z_nms.z_what.z_mu,width,height) 
             mask_pixel_assignment = self.mask_argmin_argmax(putative_masks,"argmax")   
             definitely_bg_mask = (torch.sum(mask_pixel_assignment,dim=-4,keepdim=True) == 0.0) 
             
             #---------------------------------#
             #--- 3. Score the model ----------#
             #---------------------------------#
-            logp,reg = self.score_observations(z_nms.z_where,putative_imgs,putative_masks,
+            logp,reg = self.score_observations(z_nms.z_where,sigma_imgs,putative_imgs,putative_masks,
                                                mask_pixel_assignment,definitely_bg_mask,original_image)
            
             #---------------------------------#

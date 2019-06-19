@@ -18,16 +18,17 @@ class SimulationDictionary(dict):
         self['ZMASK.dim'] = 50 
         
         # Parameters regularizations
-        self['REGULARIZATION.min_volume_mask']=200.0 #min mask volume in pixels
-        self['REGULARIZATION.max_volume_mask']=600.0 #max mask volume in pixels
+        self['REGULARIZATION.min_volume_mask']=0.0        #min mask volume in pixels
+        self['REGULARIZATION.expected_volume_mask']=300.0 #expected mask volume in pixels
+        self['REGULARIZATION.max_volume_mask']=500.0      #max mask volume in pixels
         self['REGULARIZATION.p_corr_factor']=0.0
         self['REGULARIZATION.lambda_small_box_size']=0.0  # bounding box should be as small as possible
         self['REGULARIZATION.lambda_mask_volume_fraction']=1.0 # mask should occupy at least 10% of the box 
         self['REGULARIZATION.lambda_mask_volume_absolute']=1.0 # mask volume should be between min and max volume        
         self['REGULARIZATION.lambda_tot_var_mask']=1.0    # mask should have small tot_variation
         self['REGULARIZATION.lambda_overlap']=0.0         # mask should not overlap
-        self['REGULARIZATION.LOSS_ZMASK']=1.0
-        self['REGULARIZATION.LOSS_ZWHAT']=1.0
+        self['REGULARIZATION.LOSS_ZMASK']=10.0
+        self['REGULARIZATION.LOSS_ZWHAT']=10.0
         
         # Parameters for the PRIOR in the VAE model
         self['PRIOR.width_zmask'] = 0.005 #the width of the prior is inversely proportional to its strength
@@ -62,7 +63,8 @@ class SimulationDictionary(dict):
         assert( self['ZMASK.dim'] > 0)
         
         assert(self['PRIOR.max_object_size'] >  self['PRIOR.expected_object_size'] > self['PRIOR.min_object_size'] >  0.0)
-
+        assert(self['REGULARIZATION.max_volume_mask'] > self['REGULARIZATION.expected_volume_mask'] > self['REGULARIZATION.min_volume_mask'] >= 0.0)
+        
         assert( isinstance(self['UNET.N_max_pool'],int) )
         assert( isinstance(self['UNET.N_up_conv'],int) )
         assert( isinstance(self['UNET.N_prediction_maps'],int) )
