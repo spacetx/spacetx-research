@@ -83,8 +83,8 @@ class Non_Max_Suppression(torch.nn.Module):
             score = torch.rand_like(score)
         assert (batch_size, 1, n_boxes) == score.shape
         possible  = (score > self.p_threshold).float() # shape: batch x 1 x n_box, objects must have score > p_threshold
-        idx = torch.arange(start=0,end=n_boxes,step=1,device=p_raw.device).view(1,n_boxes,1).long()
-        chosen = torch.zeros((batch_size,n_boxes,1),device=p_raw.device).float() # shape: batch x n_box x 1
+        idx = torch.arange(start=0,end=n_boxes,step=1,device=score.device).view(1,n_boxes,1).long()
+        chosen = torch.zeros((batch_size,n_boxes,1),device=score.device).float() # shape: batch x n_box x 1
     
         # Loop
         for l in range(self.n_max_objects):     

@@ -275,7 +275,7 @@ class Compositional_VAE(torch.nn.Module):
             #-- 1. run the inference --#
             #--------------------------#          
             z_nms = self.inference.forward(imgs,
-                                           p_corr_factor=self.p_corr_factor
+                                           p_corr_factor=self.p_corr_factor,
                                            randomize_score_nms = self.randomize_score_nms)
 
             with pyro.plate("n_objects", self.n_max_objects, dim =-1 ):
@@ -431,7 +431,7 @@ class Compositional_VAE(torch.nn.Module):
             #-- 1. run the inference --#
             #--------------------------#        
             z_nms = self.inference.forward(original_image,
-                                           p_corr_factor=self.p_corr_factor
+                                           p_corr_factor=self.p_corr_factor,
                                            randomize_score_nms = self.randomize_score_nms)
                 
             p     = z_nms.z_where.prob         
