@@ -93,6 +93,7 @@ class Compositional_VAE(torch.nn.Module):
         self.expected_volume_mask        = params['REGULARIZATION.expected_volume_mask']
         self.max_volume_mask             = params['REGULARIZATION.max_volume_mask']
         self.p_corr_factor               = params['REGULARIZATION.p_corr_factor']
+        self.randomize_score_nms         = params['REGULARIZATION.randomize_score_nms']
         self.lambda_small_box_size       = params['REGULARIZATION.lambda_small_box_size']
         self.lambda_mask_volume_fraction = params['REGULARIZATION.lambda_mask_volume_fraction']
         self.lambda_mask_volume_absolute = params['REGULARIZATION.lambda_mask_volume_absolute']
@@ -273,7 +274,9 @@ class Compositional_VAE(torch.nn.Module):
             #--------------------------#
             #-- 1. run the inference --#
             #--------------------------#          
-            z_nms = self.inference.forward(imgs,p_corr_factor=self.p_corr_factor)
+            z_nms = self.inference.forward(imgs,
+                                           p_corr_factor=self.p_corr_factor
+                                           randomize_score_nms = self.randomize_score_nms)
 
             with pyro.plate("n_objects", self.n_max_objects, dim =-1 ):
                      
@@ -421,13 +424,17 @@ class Compositional_VAE(torch.nn.Module):
         batch_size,ch,width,height = original_image.shape
         assert(width==height)
         self.eval() # set the model into evaluation mode
+        self.randomize_score_nms = False
         with torch.no_grad(): # do not keep track of the gradients
             
             #--------------------------#
             #-- 1. run the inference --#
             #--------------------------#        
-            z_nms = self.inference.forward(original_image,p_corr_factor=self.p_corr_factor)
-            p       = z_nms.z_where.prob         
+            z_nms = self.inference.forward(original_image,
+                                           p_corr_factor=self.p_corr_factor
+                                           randomize_score_nms = self.randomize_score_nms)
+                
+            p     = z_nms.z_where.prob         
             assert p.shape == (batch_size,self.n_max_objects,1)
 
             #--------------------------------#

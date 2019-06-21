@@ -44,20 +44,14 @@ def compute_average_intensity_in_box(imgs,z_where):
     y3 = torch.clamp((z_where.by_dimfull+0.5*z_where.bh_dimfull).long(),min=0,max=h-1).squeeze(-1) 
     
     # compute the area
-    # Note that this way penalizes boxes that go out-of-bound
-    # This is in contrast to area = (x3-x1)*(y3-y1) which does NOT penalize boxes out of bound
-    area = (z_where.bw_dimfull*z_where.bh_dimfull).squeeze(-1) 
-
-    # Make some checks
-    #assert x1.shape == x3.shape == y1.shape == y3.shape == area.shape
-    #assert len(area.shape)==2
-    #assert area.shape[0] == cum.shape[0]
+    area = (z_where.bw_dimfull*z_where.bh_dimfull).squeeze(-1) #this area is big for boxes out of bounds
+    #area = ((x3-x1)*(y3-y1)).float()                            #this area is small for boxes out of bounds
     batch_size, n_boxes = area.shape
     
     # compute the total intensity in each box
     batch_index = torch.arange(start=0,end=batch_size,step=1,device=x1.device,dtype=x1.dtype).view(-1,1).expand(-1,n_boxes)
     tot_intensity = cum[batch_index,x3,y3]-cum[batch_index,x1,y3]-cum[batch_index,x3,y1]+cum[batch_index,x1,y1]
-    #assert (batch_size, n_boxes) == tot_intensity.shape
+    assert (batch_size, n_boxes) == tot_intensity.shape
    
     # return the average intensity
     return tot_intensity/area 
@@ -99,11 +93,11 @@ class Inference(torch.nn.Module):
         self.encoder_zwhat = Encoder_CONV(params,is_zwhat=True)
         self.encoder_zmask = Encoder_CONV(params,is_zwhat=False)        
     
-    def forward(self,imgs_in,p_corr_factor=0.0):
+    def forward(self,imgs_in,p_corr_factor=0.0,randomize_score_nms=False):
         raw_width,raw_height = imgs_in.shape[-2:]
         
         # UNET
-        z_where_all = self.unet.forward(imgs_in)
+        z_where_all = self.unet.forward(imgs_in,verbose=False)
        
         # ANNEAL THE PROBABILITIES IF NECESSARY
         if(p_corr_factor>0):
@@ -120,7 +114,7 @@ class Inference(torch.nn.Module):
             z_where_all = z_where_all._replace(prob=new_p)
         
         # NMS   
-        z_where = self.nms.forward(z_where_all)
+        z_where = self.nms.forward(z_where_all,randomize_score_nms)
         #z_where = select_top_boxes_by_prob(z_where_all,self.n_max_objects)
         #print("z_where.prob[0]",z_where.prob[0])
         

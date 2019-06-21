@@ -21,6 +21,7 @@ class SimulationDictionary(dict):
         self['REGULARIZATION.min_volume_mask']=0.0        #min mask volume in pixels
         self['REGULARIZATION.expected_volume_mask']=300.0 #expected mask volume in pixels
         self['REGULARIZATION.max_volume_mask']=500.0      #max mask volume in pixels
+        self['REGULARIZATION.randomize_score_nms']=False
         self['REGULARIZATION.p_corr_factor']=0.0
         self['REGULARIZATION.lambda_small_box_size']=0.0  # bounding box should be as small as possible
         self['REGULARIZATION.lambda_mask_volume_fraction']=1.0 # mask should occupy at least 10% of the box 
@@ -31,8 +32,8 @@ class SimulationDictionary(dict):
         self['REGULARIZATION.LOSS_ZWHAT']=10.0
         
         # Parameters for the PRIOR in the VAE model
-        self['PRIOR.width_zmask'] = 0.005 #the width of the prior is inversely proportional to its strength
-        self['PRIOR.width_zwhat'] = 0.005 #the width of the prior is inversely proportional to its strength
+        self['PRIOR.width_zmask'] = 0.001 #the width of the prior is inversely proportional to its strength
+        self['PRIOR.width_zwhat'] = 0.001 #the width of the prior is inversely proportional to its strength
         self['PRIOR.n_max_objects'] = 30
         self['PRIOR.min_object_size'] = 10 #in pixels
         self['PRIOR.max_object_size'] = 40 #in pixels

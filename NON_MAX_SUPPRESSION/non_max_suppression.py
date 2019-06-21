@@ -18,7 +18,7 @@ class Non_Max_Suppression(torch.nn.Module):
         super().__init__()
         self.p_threshold       = params['NMS.p_threshold']
         self.overlap_threshold = params['NMS.overlap_threshold']
-        self.n_max_object      = params['PRIOR.n_max_objects'] 
+        self.n_max_objects     = params['PRIOR.n_max_objects'] 
         
     def unroll_and_compare(self,x,label):
         """ Given a vector of size: batch x n_boxes 
@@ -60,7 +60,7 @@ class Non_Max_Suppression(torch.nn.Module):
     
     
     
-    def compute_nms_mask(self,z_where):
+    def compute_nms_mask(self,z_where,randomize_score_nms):
         """ Compute NMS mask """
         
         # # compute x1,x3,y1,y3
@@ -78,29 +78,31 @@ class Non_Max_Suppression(torch.nn.Module):
             
         # This is the NON-MAX-SUPPRESSION algorithm:
         # Preparation
-        p_raw = z_where.prob.permute(0,2,1)
-        assert (batch_size, 1, n_boxes) == p_raw.shape
-        possible  = (p_raw > self.p_threshold).float() # # shape: batch x 1 x n_box, chosen objects must have p > p_threshold
+        score = z_where.prob.permute(0,2,1) #shape batch x 1 x n_box
+        if(randomize_score_nms):
+            score = torch.rand_like(score)
+        assert (batch_size, 1, n_boxes) == score.shape
+        possible  = (score > self.p_threshold).float() # shape: batch x 1 x n_box, objects must have score > p_threshold
         idx = torch.arange(start=0,end=n_boxes,step=1,device=p_raw.device).view(1,n_boxes,1).long()
         chosen = torch.zeros((batch_size,n_boxes,1),device=p_raw.device).float() # shape: batch x n_box x 1
     
         # Loop
-        for l in range(self.n_max_object):     
+        for l in range(self.n_max_objects):     
         #while (possible != 0.0).any():
             #l=l+1
             #print("v3",l)
-            p_mask = cluster_mask*(p_raw*possible)                      # shape: batch x n_box x n_box
-            index = torch.max(p_mask,keepdim=True,dim=-1)[1]            # shape: batch x n_box x 1
+            score_mask = cluster_mask*(score*possible)                      # shape: batch x n_box x n_box
+            index = torch.max(score_mask,keepdim=True,dim=-1)[1]            # shape: batch x n_box x 1
             chosen += possible.permute(0,2,1)*(idx == index).float()    # shape: batch x n_box x 1
             blocks = torch.sum(cluster_mask*chosen,keepdim=True,dim=-2) # shape: batch x 1 x n_box 
             possible *= (blocks==0).float()                             # shape: batch x 1 x n_box
         return chosen # shape: batch x n_box x 1
         
-    def forward(self,z_where):
+    def forward(self,z_where,randomize_score_nms):
                 
         with torch.no_grad():
             # compute yolo mask
-            nms_mask = self.compute_nms_mask(z_where) 
+            nms_mask = self.compute_nms_mask(z_where,randomize_score_nms) 
             
         # mask the probability according to the NMS
         p_masked = z_where.prob*nms_mask #shape batch_size x n_boxes x 1 
@@ -109,7 +111,7 @@ class Non_Max_Suppression(torch.nn.Module):
         with torch.no_grad():
             # select the top_k boxes by probability
             batch_size,n_boxes = p_masked.shape[:2]
-            p_top_k, top_k_indeces = torch.topk(p_masked.squeeze(-1), k=min(self.n_max_object,n_boxes), dim=-1, largest=True, sorted=True)
+            p_top_k, top_k_indeces = torch.topk(p_masked.squeeze(-1), k=min(self.n_max_objects,n_boxes), dim=-1, largest=True, sorted=True)
             batch_size, k = top_k_indeces.shape 
             batch_indeces = torch.arange(start=0,end=batch_size,step=1,
                                          dtype=top_k_indeces.dtype,device=top_k_indeces.device).view(-1,1).expand(-1,k)
