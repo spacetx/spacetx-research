@@ -81,7 +81,7 @@ class Non_Max_Suppression(torch.nn.Module):
         # Preparation
         score = z_where.prob.permute(0,2,1) #shape batch x 1 x n_box
         if(randomize_score_nms):
-            score = self.randomize_nms_factor*score + (1.0-self.randomize_nms_factor)*torch.rand_like(score)
+            score = score + self.randomize_nms_factor*torch.randn_like(score)
         assert (batch_size, 1, n_boxes) == score.shape
         possible  = (score > self.p_threshold).float() # shape: batch x 1 x n_box, objects must have score > p_threshold
         idx = torch.arange(start=0,end=n_boxes,step=1,device=score.device).view(1,n_boxes,1).long()
