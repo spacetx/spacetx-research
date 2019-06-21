@@ -192,10 +192,10 @@ def Log_Add_Exp(log_pa,log_pb,log_w,log_1mw,verbose=False):
         plt.plot(log_w.numpy(),logp_v2.numpy(),'-')
     """
     assert log_pa.shape == log_pb.shape 
-    log_pa_and_log_pb = torch.stack((log_pa,log_pb),dim=len(log_pa.shape))
+    log_pa_and_log_pb = torch.stack((log_pa,log_pb),dim=-1)
     
     assert log_w.shape == log_1mw.shape 
-    log_w_and_log_1mw = torch.stack((log_w,log_1mw),dim=len(log_w.shape))
+    log_w_and_log_1mw = torch.stack((log_w,log_1mw),dim=-1)
     
     if(verbose):
         print("log_w_and_log_1mw.shape",log_w_and_log_1mw.shape)

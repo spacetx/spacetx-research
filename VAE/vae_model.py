@@ -166,8 +166,12 @@ class Compositional_VAE(torch.nn.Module):
         # technically incorrect but it speeds up training and lead to binarized masks
         # The probability of each pixel value is:
         # P(x) = w * P(x|FG) + (1-w) * P(x|BG)
-        log_partial_pixel_cauchy = putative_masks*log_p_given_fg_cauchy+(1.0-putative_masks)*log_p_given_bg_cauchy 
-        log_partial_pixel_normal = putative_masks*log_p_given_fg_normal+(1.0-putative_masks)*log_p_given_bg_cauchy 
+        log_w   = torch.log(putative_masks)
+        log_1mw = get_log_prob_compl(log_w)
+        log_partial_pixel_cauchy = Log_Add_Exp(log_p_given_fg_cauchy,log_p_given_bg_cauchy,log_w,log_1mw)
+        log_partial_pixel_normal = Log_Add_Exp(log_p_given_fg_normal,log_p_given_bg_cauchy,log_w,log_1mw)
+        #log_partial_pixel_cauchy = putative_masks*log_p_given_fg_cauchy+(1.0-putative_masks)*log_p_given_bg_cauchy 
+        #log_partial_pixel_normal = putative_masks*log_p_given_fg_normal+(1.0-putative_masks)*log_p_given_bg_cauchy 
                         
         # compute logp
         logp_definitely_bg = torch.sum(log_p_definitely_bg_cauchy,dim=(-1,-2,-3)) 
