@@ -22,6 +22,7 @@ class SimulationDictionary(dict):
         self['REGULARIZATION.expected_volume_mask']=300.0 #expected mask volume in pixels
         self['REGULARIZATION.max_volume_mask']=500.0      #max mask volume in pixels
         self['REGULARIZATION.randomize_score_nms']=False
+        self['REGULARIZATION.randomize_nms_factor']=0.5   # means no randomization, 1 full randomization 
         self['REGULARIZATION.p_corr_factor']=0.0
         self['REGULARIZATION.lambda_small_box_size']=0.0  # bounding box should be as small as possible
         self['REGULARIZATION.lambda_mask_volume_fraction']=1.0 # mask should occupy at least 10% of the box 
