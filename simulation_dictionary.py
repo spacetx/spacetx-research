@@ -18,16 +18,17 @@ class SimulationDictionary(dict):
         self['ZMASK.dim'] = 50 
         
         # Parameters regularizations
-        self['REGULARIZATION.min_volume_mask']=0.0        #min mask volume in pixels
-        self['REGULARIZATION.expected_volume_mask']=300.0 #expected mask volume in pixels
-        self['REGULARIZATION.max_volume_mask']=500.0      #max mask volume in pixels
-        self['REGULARIZATION.randomize_score_nms']=False
-        self['REGULARIZATION.randomize_nms_factor']=0.5   # means no randomization, 1 full randomization 
+        self['REGULARIZATION.volume_mask_min']=0.0        #min mask volume in pixels
+        self['REGULARIZATION.volume_mask_max']=500.0      #max mask volume in pixels
+        self['REGULARIZATION.volume_mask_expected']=300.0 #expected mask volume in pixels
+        
+        self['REGULARIZATION.randomize_nms_factor']=0.2   #strenght of Gaussian noise 
         self['REGULARIZATION.p_corr_factor']=0.0
+        
         self['REGULARIZATION.lambda_small_box_size']=0.0  # bounding box should be as small as possible
         self['REGULARIZATION.lambda_mask_volume_fraction']=1.0 # mask should occupy at least 10% of the box 
-        self['REGULARIZATION.lambda_mask_volume_absolute']=1.0 # mask volume should be between min and max volume        
-        self['REGULARIZATION.lambda_tot_var_mask']=1.0    # mask should have small tot_variation
+        self['REGULARIZATION.lambda_mask_volume_absolute']=0.0 # mask volume should be between min and max volume        
+        self['REGULARIZATION.lambda_tot_var_mask']=0.0    # mask should have small tot_variation
         self['REGULARIZATION.lambda_overlap']=0.0         # mask should not overlap
         self['REGULARIZATION.LOSS_ZMASK']=10.0
         self['REGULARIZATION.LOSS_ZWHAT']=10.0
@@ -35,10 +36,12 @@ class SimulationDictionary(dict):
         # Parameters for the PRIOR in the VAE model
         self['PRIOR.width_zmask'] = 0.001 #the width of the prior is inversely proportional to its strength
         self['PRIOR.width_zwhat'] = 0.001 #the width of the prior is inversely proportional to its strength
-        self['PRIOR.n_max_objects'] = 30
-        self['PRIOR.min_object_size'] = 10 #in pixels
-        self['PRIOR.max_object_size'] = 40 #in pixels
-        self['PRIOR.expected_object_size'] = 20 #in pixels
+        self['PRIOR.n_objects_max'] = 30
+        self['PRIOR.n_objects_expected'] = 10
+        
+        self['PRIOR.size_object_min'] = 10 #in pixels
+        self['PRIOR.size_object_max'] = 40 #in pixels
+        self['PRIOR.size_object_expected'] = 20 #in pixels
         
         # Parameters for the description of the raw image
         self['IMG.size_raw_image'] = 80 # for now it only take square images as input
@@ -64,8 +67,10 @@ class SimulationDictionary(dict):
         assert( self['ZWHAT.dim'] > 0)
         assert( self['ZMASK.dim'] > 0)
         
-        assert(self['PRIOR.max_object_size'] >  self['PRIOR.expected_object_size'] > self['PRIOR.min_object_size'] >  0.0)
-        assert(self['REGULARIZATION.max_volume_mask'] > self['REGULARIZATION.expected_volume_mask'] > self['REGULARIZATION.min_volume_mask'] >= 0.0)
+        assert(self['PRIOR.n_objects_max'] >  self['PRIOR.n_objects_expected'] >= 0.0)
+        assert(self['PRIOR.size_object_max'] >  self['PRIOR.size_object_expected'] > self['PRIOR.size_object_min'] >  0.0)
+
+        assert(self['REGULARIZATION.volume_mask_max'] > self['REGULARIZATION.volume_mask_expected'] > self['REGULARIZATION.volume_mask_min'] >= 0.0)
         
         assert( isinstance(self['UNET.N_max_pool'],int) )
         assert( isinstance(self['UNET.N_up_conv'],int) )
