@@ -57,11 +57,11 @@ def compute_average_intensity_in_box(imgs,z_where):
     return tot_intensity/area 
 
 
-def select_top_boxes_by_prob(z_where_all,n_max_object):
+def select_top_boxes_by_prob(z_where_all,n_objects_max):
     
     p=z_where_all.prob.squeeze(-1)
     batch_size,n_boxes = p.shape 
-    p_top_k, top_k_indeces = torch.topk(p, k=min(n_max_object,n_boxes), dim=-1, largest=True, sorted=True)
+    p_top_k, top_k_indeces = torch.topk(p, k=min(n_objects_max,n_boxes), dim=-1, largest=True, sorted=True)
     batch_size, k = top_k_indeces.shape 
     batch_indeces = torch.arange(start=0,end=batch_size,step=1,
                                  device=top_k_indeces.device,dtype=top_k_indeces.dtype).view(-1,1).expand(-1,k)
@@ -85,7 +85,7 @@ class Inference(torch.nn.Module):
         self.cropper = Cropper(params)
         
         # stuff for the select_top_boxes_by_prob
-        self.n_max_objects = params["PRIOR.n_max_objects"]
+        self.n_objects_max = params["PRIOR.n_objects_max"]
 
         # encoders z_what,z_mask
         #self.encoder_zwhat = Encoder_MLP(params,is_zwhat=True)
@@ -93,7 +93,7 @@ class Inference(torch.nn.Module):
         self.encoder_zwhat = Encoder_CONV(params,is_zwhat=True)
         self.encoder_zmask = Encoder_CONV(params,is_zwhat=False)        
     
-    def forward(self,imgs_in,p_corr_factor=0.0,randomize_score_nms=False):
+    def forward(self,imgs_in,p_corr_factor=0.0,randomize_nms_factor=0.0):
         raw_width,raw_height = imgs_in.shape[-2:]
         
         # UNET
@@ -114,8 +114,8 @@ class Inference(torch.nn.Module):
             z_where_all = z_where_all._replace(prob=new_p)
         
         # NMS   
-        z_where = self.nms.forward(z_where_all,randomize_score_nms)
-        #z_where = select_top_boxes_by_prob(z_where_all,self.n_max_objects)
+        z_where = self.nms.forward(z_where_all,randomize_nms_factor)
+        #z_where = select_top_boxes_by_prob(z_where_all,self.n_objects_max)
         #print("z_where.prob[0]",z_where.prob[0])
         
         # CROP

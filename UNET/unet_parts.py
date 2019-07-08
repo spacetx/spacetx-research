@@ -79,13 +79,14 @@ class prediction_Zwhere(torch.nn.Module):
     def __init__(self, channel_in,params: dict):
         super().__init__()
         self.ch_in = channel_in
-        self.comp_p   = torch.nn.Conv2d(self.ch_in,1,kernel_size=1, stride=1, padding=0, bias=True)
-        self.comp_tx  = torch.nn.Conv2d(self.ch_in,1,kernel_size=1, stride=1, padding=0, bias=True)
-        self.comp_ty  = torch.nn.Conv2d(self.ch_in,1,kernel_size=1, stride=1, padding=0, bias=True)
-        self.comp_tw  = torch.nn.Conv2d(self.ch_in,1,kernel_size=1, stride=1, padding=0, bias=True)
-        self.comp_th  = torch.nn.Conv2d(self.ch_in,1,kernel_size=1, stride=1, padding=0, bias=True)
-        self.max_size = params['PRIOR.max_object_size']
-        self.min_size = params['PRIOR.min_object_size']
+        self.comp_p     = torch.nn.Conv2d(self.ch_in,1,kernel_size=1, stride=1, padding=0, bias=True)
+        self.comp_tx    = torch.nn.Conv2d(self.ch_in,1,kernel_size=1, stride=1, padding=0, bias=True)
+        self.comp_ty    = torch.nn.Conv2d(self.ch_in,1,kernel_size=1, stride=1, padding=0, bias=True)
+        self.comp_tw    = torch.nn.Conv2d(self.ch_in,1,kernel_size=1, stride=1, padding=0, bias=True)
+        self.comp_th    = torch.nn.Conv2d(self.ch_in,1,kernel_size=1, stride=1, padding=0, bias=True)
+        self.size_min   = params['PRIOR.size_object_min']
+        self.size_max   = params['PRIOR.size_object_max']
+        self.size_delta = self.size_max - self.size_min
     
         # Here I am initializing the bias with large value so that p also has large value
         # This in turns helps the model not to get stuck in the empty configuration which is a local minimum
@@ -112,8 +113,8 @@ class prediction_Zwhere(torch.nn.Module):
         # size of the bounding box
         bw_dimless = torch.sigmoid(self.comp_tw(x)) # between 0 and 1
         bh_dimless = torch.sigmoid(self.comp_th(x)) # between 0 and 1
-        bw_dimfull = self.min_size + (self.max_size-self.min_size)*bw_dimless # in (min_size,max_size)
-        bh_dimfull = self.min_size + (self.max_size-self.min_size)*bh_dimless # in (min_size,max_size)
+        bw_dimfull = self.size_min + self.size_delta*bw_dimless # in (min_size,max_size)
+        bh_dimfull = self.size_min + self.size_delta*bh_dimless # in (min_size,max_size)
         
         return collections.namedtuple('z_where', 'prob bx_dimfull by_dimfull bw_dimfull bh_dimfull')._make(
             [convert_to_box_list(logit_p), 

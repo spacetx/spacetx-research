@@ -89,11 +89,12 @@ class Compositional_VAE(torch.nn.Module):
         #--------------------------------#
         #--- Pramatres Regolurization ---#
         #--------------------------------#
-        self.min_volume_mask             = params['REGULARIZATION.min_volume_mask']
-        self.expected_volume_mask        = params['REGULARIZATION.expected_volume_mask']
-        self.max_volume_mask             = params['REGULARIZATION.max_volume_mask']
+        self.volume_mask_min             = params['REGULARIZATION.volume_mask_min']
+        self.volume_mask_expected        = params['REGULARIZATION.volume_mask_expected']
+        self.volume_mask_max             = params['REGULARIZATION.volume_mask_max']
+
         self.p_corr_factor               = params['REGULARIZATION.p_corr_factor']
-        self.randomize_score_nms         = params['REGULARIZATION.randomize_score_nms']
+        self.randomize_nms_factor        = params['REGULARIZATION.randomize_nms_factor']
         self.lambda_small_box_size       = params['REGULARIZATION.lambda_small_box_size']
         self.lambda_mask_volume_fraction = params['REGULARIZATION.lambda_mask_volume_fraction']
         self.lambda_mask_volume_absolute = params['REGULARIZATION.lambda_mask_volume_absolute']
@@ -105,20 +106,16 @@ class Compositional_VAE(torch.nn.Module):
         #------------------------------------#
         #----------- PRIORS -----------------#
         #------------------------------------#
-        self.width_zmask   = params['PRIOR.width_zmask']
-        self.width_zwhat   = params['PRIOR.width_zwhat']
-        self.n_max_objects = params['PRIOR.n_max_objects'] 
-        self.min_size      = params['PRIOR.min_object_size'] 
-        self.max_size      = params['PRIOR.max_object_size'] 
-        self.expected_size = params['PRIOR.expected_object_size'] 
+        self.width_zmask        = params['PRIOR.width_zmask']
+        self.width_zwhat        = params['PRIOR.width_zwhat']
+        self.n_objects_max      = params['PRIOR.n_objects_max'] 
+        self.n_objects_expected = params['PRIOR.n_objects_expected'] 
+
+        self.size_min      = params['PRIOR.size_object_min'] 
+        self.size_max      = params['PRIOR.size_object_max'] 
+        self.size_expected = params['PRIOR.size_object_expected'] 
         
-        # Size of a object is uniform with tails between min_object_size and max_object_size  
-        self.tails_dist_size = 0.1*self.expected_size 
-        
-        # Location of the BoundingBox centers is uniform in (-1,1) WITH exponential tails
-        self.tails_dist_center = 0.1*self.expected_size 
-        
-        # Put everything on the cude if necessary
+        # Put everything on the cuda if necessary
         self.use_cuda = params["use_cuda"]
         self.device = 'cuda' if self.use_cuda else 'cpu'
         if self.use_cuda:
@@ -158,7 +155,7 @@ class Compositional_VAE(torch.nn.Module):
         # TO IMPROVE: parameter should be different for each channel
         obs_imgs = imgs.unsqueeze(-4) # also add a singleton for the n_object dimension
         log_p_definitely_bg_cauchy = UnitCauchy(bg_mu,bg_sigma).expand(obs_imgs.shape).mask(definitely_bg_mask).log_prob(obs_imgs)
-        obs_imgs = obs_imgs.expand(-1,self.n_max_objects,-1,-1,-1) # expand for dimension over n_boxes
+        obs_imgs = obs_imgs.expand(-1,self.n_objects_max,-1,-1,-1) # expand for dimension over n_boxes
         log_p_given_bg_cauchy = UnitCauchy(bg_mu,bg_sigma).expand(obs_imgs.shape).mask(mask_pixel_assignment).log_prob(obs_imgs)
         log_p_given_fg_cauchy = UnitCauchy(fg_mu,fg_sigma).expand(obs_imgs.shape).mask(mask_pixel_assignment).log_prob(obs_imgs)
         log_p_given_fg_normal = dist.Normal(putative_imgs,sigma_imgs).mask(mask_pixel_assignment).log_prob(obs_imgs)   
@@ -166,12 +163,12 @@ class Compositional_VAE(torch.nn.Module):
         # technically incorrect but it speeds up training and lead to binarized masks
         # The probability of each pixel value is:
         # P(x) = w * P(x|FG) + (1-w) * P(x|BG)
-        log_w   = torch.log(putative_masks)
-        log_1mw = get_log_prob_compl(log_w)
-        log_partial_pixel_cauchy = Log_Add_Exp(log_p_given_fg_cauchy,log_p_given_bg_cauchy,log_w,log_1mw)
-        log_partial_pixel_normal = Log_Add_Exp(log_p_given_fg_normal,log_p_given_bg_cauchy,log_w,log_1mw)
-        #log_partial_pixel_cauchy = putative_masks*log_p_given_fg_cauchy+(1.0-putative_masks)*log_p_given_bg_cauchy 
-        #log_partial_pixel_normal = putative_masks*log_p_given_fg_normal+(1.0-putative_masks)*log_p_given_bg_cauchy 
+        #log_w   = torch.log(putative_masks)
+        #log_1mw = get_log_prob_compl(log_w)
+        #log_partial_pixel_cauchy = Log_Add_Exp(log_p_given_fg_cauchy,log_p_given_bg_cauchy,log_w,log_1mw)
+        #log_partial_pixel_normal = Log_Add_Exp(log_p_given_fg_normal,log_p_given_bg_cauchy,log_w,log_1mw)
+        log_partial_pixel_cauchy = putative_masks*log_p_given_fg_cauchy+(1.0-putative_masks)*log_p_given_bg_cauchy 
+        log_partial_pixel_normal = putative_masks*log_p_given_fg_normal+(1.0-putative_masks)*log_p_given_bg_cauchy 
                         
         # compute logp
         logp_definitely_bg = torch.sum(log_p_definitely_bg_cauchy,dim=(-1,-2,-3)) 
@@ -180,7 +177,7 @@ class Compositional_VAE(torch.nn.Module):
         logp_box_on_normal = torch.sum(log_partial_pixel_normal,dim=(-1,-2,-3))  
         
         # package the logp
-        common_logp    = logp_definitely_bg/self.n_max_objects
+        common_logp    = logp_definitely_bg/self.n_objects_max
         log_probs = collections.namedtuple('logp', 'logp_off, logp_on_cauchy, logp_on_normal')._make(
                 [common_logp+logp_box_off, common_logp + logp_box_on_cauchy, common_logp + logp_box_on_normal])           
 
@@ -195,7 +192,7 @@ class Compositional_VAE(torch.nn.Module):
         #- therefore this regolarization can only make box_volume smaller 
         #- not make the mask_volume larger.
         with torch.no_grad():
-            volume_box_min = torch.tensor(self.min_size*self.min_size, device=volume_mask.device, dtype=volume_mask.dtype)
+            volume_box_min = torch.tensor(self.size_min*self.size_min, device=volume_mask.device, dtype=volume_mask.dtype)
             volume_min     = torch.max(volume_mask,volume_box_min)
         reg_small_box_size = (volume_box/volume_min - 1.0)**2
         
@@ -208,8 +205,8 @@ class Compositional_VAE(torch.nn.Module):
         reg_mask_volume_fraction = torch.expm1(tmp_of)
         
         #- reg 3: mask volume should be between min and max 
-        tmp_volume_absolute = torch.clamp((self.min_volume_mask-volume_mask)/self.expected_volume_mask,min=0) + \
-                              torch.clamp((volume_mask-self.max_volume_mask)/self.expected_volume_mask,min=0)
+        tmp_volume_absolute = torch.clamp((self.volume_mask_min-volume_mask)/self.volume_mask_expected,min=0) + \
+                              torch.clamp((volume_mask-self.volume_mask_max)/self.volume_mask_expected,min=0)
         reg_mask_volume_absolute = (50*tmp_volume_absolute).pow(2)
          
        
@@ -227,7 +224,7 @@ class Compositional_VAE(torch.nn.Module):
         values, indeces = torch.topk(putative_masks, k=2, dim=1, largest=True) # shape: batch x 2 x 1 x width x height
         prod = torch.prod(values,dim=1,keepdim=True) # shape batch x 1 x 1 x width x height
         with torch.no_grad():
-            fake_indeces = torch.arange(start=0,end=self.n_max_objects,step=1,
+            fake_indeces = torch.arange(start=0,end=self.n_objects_max,step=1,
                                         dtype=indeces.dtype,device=indeces.device).view(1,-1,1,1,1)
             assignment_mask = (indeces[:,-1:,:,:,:] == fake_indeces).float()
         reg_overlap_mask = torch.sum(prod*assignment_mask,dim=(-1,-2,-3))**2
@@ -267,12 +264,6 @@ class Compositional_VAE(torch.nn.Module):
         # register the modules
         pyro.module("inference",self.inference)
         
-        #register the oparameters
-        std_bx_dimfull = pyro.param("std_bx_dimfull", one, constraint=constraints.greater_than(0.1))
-        std_by_dimfull = pyro.param("std_by_dimfull", one, constraint=constraints.greater_than(0.1))
-        std_bw_dimfull = pyro.param("std_bw_dimfull", one, constraint=constraints.greater_than(0.1))
-        std_bh_dimfull = pyro.param("std_bh_dimfull", one, constraint=constraints.greater_than(0.1))
-
         with pyro.plate("batch", batch_size, dim =-2 ):
             
             #--------------------------#
@@ -280,9 +271,9 @@ class Compositional_VAE(torch.nn.Module):
             #--------------------------#          
             z_nms = self.inference.forward(imgs,
                                            p_corr_factor=self.p_corr_factor,
-                                           randomize_score_nms = self.randomize_score_nms)
+                                           randomize_nms_factor = self.randomize_nms_factor)
 
-            with pyro.plate("n_objects", self.n_max_objects, dim =-1 ):
+            with pyro.plate("n_objects", self.n_objects_max, dim =-1 ):
                      
                 #---------------#    
                 #-- 2. Sample --#
@@ -297,12 +288,10 @@ class Compositional_VAE(torch.nn.Module):
                 # Z_WHERE
 
                 # Location of bounding box
-                pyro.sample("bx_dimfull",dist.Normal(z_nms.z_where.bx_dimfull, std_bx_dimfull).to_event(1))
-                pyro.sample("by_dimfull",dist.Normal(z_nms.z_where.by_dimfull, std_by_dimfull).to_event(1))
-                
-                # Size of Bounding Box 
-                pyro.sample("bw_dimfull",dist.Normal(z_nms.z_where.bw_dimfull, std_bw_dimfull).to_event(1)) 
-                pyro.sample("bh_dimfull",dist.Normal(z_nms.z_where.bh_dimfull, std_bh_dimfull).to_event(1))
+                pyro.sample("bx_dimfull",dist.Delta(z_nms.z_where.bx_dimfull).to_event(1))
+                pyro.sample("by_dimfull",dist.Delta(z_nms.z_where.by_dimfull).to_event(1))
+                pyro.sample("bw_dimfull",dist.Delta(z_nms.z_where.bw_dimfull).to_event(1)) 
+                pyro.sample("bh_dimfull",dist.Delta(z_nms.z_where.bh_dimfull).to_event(1))
                 
                 # Prob of an object 
                 p = z_nms.z_where.prob.squeeze(-1)
@@ -360,7 +349,7 @@ class Compositional_VAE(torch.nn.Module):
 
         with pyro.plate("batch", batch_size, dim=-2):
             
-            with pyro.plate("n_objects", self.n_max_objects, dim =-1):
+            with pyro.plate("n_objects", self.n_objects_max, dim =-1):
             
                 #------------------------#
                 # 1. Sample from priors -#
@@ -377,12 +366,12 @@ class Compositional_VAE(torch.nn.Module):
                     z_mask = pyro.sample("z_mask",dist.Normal(zero,self.width_zmask).expand([self.Zmask_dim]).to_event(1)) 
                                    
                     #= Location of bounding box
-                    bx_dimfull = pyro.sample("bx_dimfull",UniformWithTails(zero,width,self.tails_dist_center).expand([1]).to_event(1))
-                    by_dimfull = pyro.sample("by_dimfull",UniformWithTails(zero,width,self.tails_dist_center).expand([1]).to_event(1))
+                    bx_dimfull = pyro.sample("bx_dimfull",dist.Uniform(zero,width).expand([1]).to_event(1))
+                    by_dimfull = pyro.sample("by_dimfull",dist.Uniform(zero,width).expand([1]).to_event(1))
                 
                     #- Size of bounding box
-                    bw_dimfull = pyro.sample("bw_dimfull",UniformWithTails(self.min_size*one,self.max_size,self.tails_dist_size).expand([1]).to_event(1))
-                    bh_dimfull = pyro.sample("bh_dimfull",UniformWithTails(self.min_size*one,self.max_size,self.tails_dist_size).expand([1]).to_event(1))
+                    bw_dimfull = pyro.sample("bw_dimfull",dist.Uniform(self.size_min*one,self.size_max).expand([1]).to_event(1))
+                    bh_dimfull = pyro.sample("bh_dimfull",dist.Uniform(self.size_min*one,self.size_max).expand([1]).to_event(1))
         
                 #------------------------------#
                 # 2. Run the generative model -#
