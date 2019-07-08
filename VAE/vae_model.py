@@ -425,10 +425,10 @@ class Compositional_VAE(torch.nn.Module):
             #--------------------------#        
             z_nms = self.inference.forward(original_image,
                                            p_corr_factor=self.p_corr_factor,
-                                           randomize_score_nms = self.randomize_score_nms)
+                                           randomize_nms_factor = self.randomize_nms_factor)
                 
-            p     = z_nms.z_where.prob         
-            assert p.shape == (batch_size,self.n_max_objects,1)
+            p     = z_nms.z_where.prob 
+            assert p.shape == (batch_size,self.n_objects_max,1)
 
             #--------------------------------#
             #--- 2. Run the model forward ---#
