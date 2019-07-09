@@ -30,12 +30,12 @@ class SimulationDictionary(dict):
         self['REGULARIZATION.lambda_mask_volume_absolute']=0.0 # mask volume should be between min and max volume        
         self['REGULARIZATION.lambda_tot_var_mask']=0.0    # mask should have small tot_variation
         self['REGULARIZATION.lambda_overlap']=0.0         # mask should not overlap
-        self['REGULARIZATION.LOSS_ZMASK']=10.0
+        self['REGULARIZATION.LOSS_ZMASK']=0.0
         self['REGULARIZATION.LOSS_ZWHAT']=10.0
         
         # Parameters for the PRIOR in the VAE model
-        self['PRIOR.width_zmask'] = 0.001 # the width of the prior is inversely proportional to its strength
-        self['PRIOR.width_zwhat'] = 0.001 # the width of the prior is inversely proportional to its strength
+        self['PRIOR.width_zmask'] = 0.01 # the width of the prior is inversely proportional to its strength
+        self['PRIOR.width_zwhat'] = 0.01 # the width of the prior is inversely proportional to its strength
         self['PRIOR.n_objects_max'] = 30
         self['PRIOR.n_objects_expected'] = 10
         
