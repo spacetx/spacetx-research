@@ -257,6 +257,7 @@ class Compositional_VAE(torch.nn.Module):
         batch_size,ch,width,height = imgs.shape    
         assert(width == height) 
         one  = torch.ones(1,dtype=imgs.dtype,device=imgs.device)
+        zero = torch.zeros(1,dtype=imgs.dtype,device=imgs.device)
         #-----------------------#
         #----- Enf of Trick ----#
         #-----------------------#
@@ -278,25 +279,31 @@ class Compositional_VAE(torch.nn.Module):
                 #---------------#    
                 #-- 2. Sample --#
                 #---------------#
-                   
-                # Z_WHAT
-                pyro.sample("z_what",dist.Normal(z_nms.z_what.z_mu, z_nms.z_what.z_std).to_event(1))
-                                
-                # Z_MASK
-                pyro.sample("z_mask",dist.Normal(z_nms.z_mask.z_mu, z_nms.z_mask.z_std).to_event(1)) 
 
-                # Z_WHERE
-
-                # Location of bounding box
+                # bounding box
                 pyro.sample("bx_dimfull",dist.Delta(z_nms.z_where.bx_dimfull).to_event(1))
                 pyro.sample("by_dimfull",dist.Delta(z_nms.z_where.by_dimfull).to_event(1))
                 pyro.sample("bw_dimfull",dist.Delta(z_nms.z_where.bw_dimfull).to_event(1)) 
                 pyro.sample("bh_dimfull",dist.Delta(z_nms.z_where.bh_dimfull).to_event(1))
                 
-                # Prob of an object 
+                # Probability of a box being active
                 p = z_nms.z_where.prob.squeeze(-1)
-                c = pyro.sample("prob_object",dist.Bernoulli(probs = p))                    
+                c = pyro.sample("prob_object",dist.Bernoulli(probs = p))     
+                c_mask = c[...,None] # add a singleton for the event dimension
                 
+                # GATING of Z_WHAT and Z_MASK
+                z_what_mu  = (1-c_mask)*zero             + c_mask*z_nms.z_what.z_mu
+                z_what_std = (1-c_mask)*self.width_zwhat + c_mask*z_nms.z_what.z_std
+                z_mask_mu  = (1-c_mask)*zero             + c_mask*z_nms.z_mask.z_mu
+                z_mask_std = (1-c_mask)*self.width_zmask + c_mask*z_nms.z_mask.z_std
+                
+                #print("p.shape",p.shape)
+                #print("c.shape",c.shape)
+                #print("z_nms.z_what.z_mu.shape",z_nms.z_what.z_mu.shape)
+                #print("z_mask_mu.shape",z_mask_mu.shape)
+                
+                pyro.sample("z_what",dist.Normal(z_what_mu, z_what_std).to_event(1))
+                pyro.sample("z_mask",dist.Normal(z_mask_mu, z_mask_std).to_event(1))
                 
 
     def model(self, imgs=None, epoch=None):
@@ -355,32 +362,37 @@ class Compositional_VAE(torch.nn.Module):
                 # 1. Sample from priors -#
                 #------------------------#
                 
-                # 1. Probability of a box being active
-                c = pyro.sample("prob_object",NullScoreDistribution_Bernoulli()).to(one.device)
-                c_mask = (c != 0)  # convert FloatTensor -> ByteTensor
+                #- Z_WHERE 
+                c          = pyro.sample("prob_object",dist.Bernoulli(probs=0.5*one))
+                bx_dimfull = pyro.sample("bx_dimfull",dist.Uniform(zero,width).expand([1]).to_event(1))
+                by_dimfull = pyro.sample("by_dimfull",dist.Uniform(zero,width).expand([1]).to_event(1))
+                bw_dimfull = pyro.sample("bw_dimfull",dist.Uniform(self.size_min*one,self.size_max).expand([1]).to_event(1))
+                bh_dimfull = pyro.sample("bh_dimfull",dist.Uniform(self.size_min*one,self.size_max).expand([1]).to_event(1))
                 
-                with poutine.mask(mask=c_mask):
-                
-                    #- Z_WHAT, Z_WHERE 
-                    z_what = pyro.sample("z_what",dist.Normal(zero,self.width_zwhat).expand([self.Zwhat_dim]).to_event(1)) 
-                    z_mask = pyro.sample("z_mask",dist.Normal(zero,self.width_zmask).expand([self.Zmask_dim]).to_event(1)) 
-                                   
-                    #= Location of bounding box
-                    bx_dimfull = pyro.sample("bx_dimfull",dist.Uniform(zero,width).expand([1]).to_event(1))
-                    by_dimfull = pyro.sample("by_dimfull",dist.Uniform(zero,width).expand([1]).to_event(1))
-                
-                    #- Size of bounding box
-                    bw_dimfull = pyro.sample("bw_dimfull",dist.Uniform(self.size_min*one,self.size_max).expand([1]).to_event(1))
-                    bh_dimfull = pyro.sample("bh_dimfull",dist.Uniform(self.size_min*one,self.size_max).expand([1]).to_event(1))
-        
+                #- Z_WHAT, Z_WHERE 
+                z_what = pyro.sample("z_what",dist.Normal(zero,self.width_zwhat).expand([self.Zwhat_dim]).to_event(1)) 
+                z_mask = pyro.sample("z_mask",dist.Normal(zero,self.width_zmask).expand([self.Zmask_dim]).to_event(1)) 
+                       
+                    
                 #------------------------------#
                 # 2. Run the generative model -#
                 #------------------------------#
                 box_dimfull = collections.namedtuple('box_dimfull', 'bx_dimfull by_dimfull bw_dimfull bh_dimfull')._make(
                                                     [bx_dimfull,by_dimfull,bw_dimfull,bh_dimfull])
 
-                putative_masks           = self.generator_masks.forward(box_dimfull,z_mask,width,height)
-                putative_imgs,sigma_imgs = self.generator_imgs.forward(box_dimfull,z_what,width,height) 
+                if(len(z_mask.shape) == 4 and z_mask.shape[0] == 2):
+                    # This means that I have an extra enumerate dimension in front to account for box being ON/OFF.
+                    # I need to reconstruct the image only if the box is ON therefore I pass z_mask[1], z_what[1]
+                    putative_masks           = self.generator_masks.forward(box_dimfull,z_mask[1],width,height)
+                    putative_imgs,sigma_imgs = self.generator_imgs.forward(box_dimfull,z_what[1],width,height) 
+                elif(len(z_mask.shape) == 3):
+                    putative_masks           = self.generator_masks.forward(box_dimfull,z_mask,width,height)
+                    putative_imgs,sigma_imgs = self.generator_imgs.forward(box_dimfull,z_what,width,height) 
+                
+                assert putative_masks.shape == (batch_size,self.n_objects_max,1,width,height)
+                assert putative_imgs.shape  == (batch_size,self.n_objects_max,ch,width,height)
+                assert sigma_imgs.shape     == (batch_size,self.n_objects_max,1,1,1)
+                
                 
                 # Resolve the conflict. Each pixel belongs to only one FG object
                 # If a pixel does not belong to any object it belongs to the background
@@ -461,7 +473,7 @@ class Compositional_VAE(torch.nn.Module):
     
     def draw_batch_of_images_with_bb_only(self,z_where,width,height):
        
-        # Exttract the probabilities for each box
+        # Extract the probabilities for each box
         batch_size,n_boxes = z_where.prob.shape[:2]
         p = z_where.prob.view(batch_size,n_boxes,-1)
         

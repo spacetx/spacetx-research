@@ -139,18 +139,17 @@ class Imgs_Generator(torch.nn.Module):
     
         # DECODER
         batch_size,n_boxes,dim_z_what = z_what.shape
-        cropped_imgs,sigma  = self.imgs_decoder.forward(z_what.view(-1,dim_z_what))
-        uncropped_imgs      = self.uncropper(z_where,cropped_imgs,width_raw,height_raw)      
+        cropped_imgs,sigma  = self.imgs_decoder.forward(z_what.view(-1,dim_z_what))     # shape: N,ch,Win,Hin and N,1,1,1
+        uncropped_imgs      = self.uncropper(z_where,cropped_imgs,width_raw,height_raw) # shape: N,ch,Wout,Hout   
         
-        # make sure that sigme has shape compatible with uncropped_imgs
-        assert len(uncropped_imgs.shape) == 5 #batch, boxes, ch, width, height
-        n1,n2 = uncropped_imgs.shape[:2]
-        return uncropped_imgs,sigma.view(n1,n2,1,1,1)
+        # reshape
+        ch,width,height = uncropped_imgs.shape[-3:]
+        return uncropped_imgs.view(batch_size,n_boxes,ch,width,height),sigma.view(batch_size,n_boxes,1,1,1)
+        
 
 class Masks_Generator(torch.nn.Module):
     def __init__(self,params):
         super().__init__()
-        #self.mask_decoder = Decoder_MLP(params,is_zwhat=False)
         self.mask_decoder = Decoder_CONV(params,is_zwhat=False)
         self.uncropper = Uncropper(params)
         
@@ -158,31 +157,37 @@ class Masks_Generator(torch.nn.Module):
     
         # DECODER
         batch_size,n_boxes,dim_z_mask = z_mask.shape
-        cropped_masks   = self.mask_decoder.forward(z_mask.view(-1,dim_z_mask))
-        uncropped_masks = self.uncropper(z_where,cropped_masks,width_raw,height_raw)             
-        return uncropped_masks
+        cropped_masks   = self.mask_decoder.forward(z_mask.view(-1,dim_z_mask))      # shape: N,ch,Win,Hin
+        uncropped_masks = self.uncropper(z_where,cropped_masks,width_raw,height_raw) # shape: N,ch,Wout,Hout 
+
+        # reshape
+        ch,width,height = uncropped_masks.shape[-3:]
+        return uncropped_masks.view(batch_size,n_boxes,ch,width,height)
     
-   
-   
-    
-    
-###class Generator(torch.nn.Module):
-###    def __init__(self,params):
-###        super().__init__()
-###        self.img_decoder  = Multi_Channel_Img_Decoder(params)
-###        self.mask_decoder = Mask_Decoder_MLP(params)
-###        self.uncropper    = Uncropper(params)
-###        
-###    def forward(self,z_what,z_mask,box_dimfull,width_raw,height_raw):
-###    
-###        # IMAGES 
-###        batch_size,n_boxes,dim_z_what = z_what.shape
-###        cropped_imgs    = self.img_decoder.forward(z_what.view(-1,dim_z_what))
-###        uncropped_imgs  = self.uncropper(cropped_imgs,box_dimfull,width_raw,height_raw)             
-###
-###        # MASKS
-###        batch_size,n_boxes,dim_z_mask = z_mask.shape
-###        cropped_masks    = self.mask_decoder.forward(z_mask.view(-1,dim_z_mask))
-###        uncropped_masks  = self.uncropper(cropped_masks,box_dimfull,width_raw,height_raw)             
-###
-###        return collections.namedtuple('generated', "imgs masks")._make([uncropped_imgs,uncropped_masks]) 
+
+## This is just a combination of the previous two    
+#class Generator(torch.nn.Module):
+#    def __init__(self,params):
+#        super().__init__()
+#        self.imgs_decoder = Multi_Channel_Img_Decoder(params)
+#        self.mask_decoder = Decoder_CONV(params,is_zwhat=False)
+#        self.uncropper = Uncropper(params)
+#        
+#        
+#    def forward(self,z_where,z_mask,z_what,width_raw,height_raw):
+#        
+#        assert z_what.shape[:2] == z_mask.shape[:2]
+#        batch_size,n_boxes  = z_what.shape[:2]
+#        cropped_masks       = self.mask_decoder.forward(z_mask.view(batch_size*n_boxes,-1)) # shape: N, 1,Win,Hin 
+#        cropped_imgs,sigma  = self.imgs_decoder.forward(z_what.view(batch_size*n_boxes,-1)) # shape: N,ch,Win,Hin and N,1,1,1
+#        
+#        # do the uncrop 
+#        to_uncrop = torch.cat((cropped_masks,cropped_imgs),dim=1) # cat along the channel dimension. Mask is first
+#        uncropped = self.uncropper(z_where,to_uncrop,width_raw,height_raw)
+#        
+#        # reshape
+#        ch_p1,width,height = uncropped.shape[-3:]
+#        uncropped = uncropped.view(batch_size,n_boxes,ch_p1,width,height)
+#        sigma     = sigma.view(batch_size,n_boxes,1,1,1)
+#        
+#        return uncropped[:,:1],uncropped[:,1:],sigma

@@ -15,18 +15,20 @@ class Cropper(torch.nn.Module):
         batch_size,ch,width_raw,height_raw = uncropped_imgs.shape
        
         # Compute the affine matrix
-        affine_matrix = self.compute_affine_cropper(z_where,width_raw,height_raw) 
-
-        # Add an index for the n_boxes and extend it.
-        with torch.no_grad():
-            N = affine_matrix.shape[0]
-            n_boxes = int(N/batch_size)
-        uncropped_imgs = uncropped_imgs.unsqueeze(1).expand(-1,n_boxes,-1,-1,-1).contiguous().view(N,ch,width_raw,height_raw)
-                
-        # Create grid to sample the input at all the location necessary for the output
+        affine_matrix  = self.compute_affine_cropper(z_where,width_raw,height_raw) # shape: N,2,3 where N=batch*n_boxes
+        
+        N = affine_matrix.shape[0]
+        n_boxes = int(N/batch_size)
+        
         cropped_images = torch.zeros((N,ch,self.cropped_width,self.cropped_height),
                                     dtype=uncropped_imgs.dtype,device=uncropped_imgs.device)  
-        grid = F.affine_grid(affine_matrix, cropped_images.shape) 
+        grid = F.affine_grid(affine_matrix, cropped_images.shape) # shape: N,width,height,2
+        
+        # gid_sample takes:
+        # an input of size: N,C,Hin,Win
+        # a grid of size: N,Hout,Wout,2
+        # produce output of size: N,C,Hout,Wout
+        uncropped_imgs = uncropped_imgs.unsqueeze(1).expand(-1,n_boxes,-1,-1,-1).contiguous().view(N,ch,width_raw,height_raw)
         cropped_images = F.grid_sample(uncropped_imgs, grid, mode='bilinear', padding_mode='reflection')         
         return cropped_images.view(batch_size,n_boxes,ch,self.cropped_width,self.cropped_height)
         
@@ -84,10 +86,7 @@ class Uncropper(torch.nn.Module):
                                     dtype=cropped_imgs.dtype,device=cropped_imgs.device)          
         grid = F.affine_grid(affine_matrix, uncropped_imgs.shape) 
         uncropped_imgs = F.grid_sample(cropped_imgs, grid, mode='bilinear', padding_mode='zeros')  
-        
-        # unbox the first two dimensions and return
-        n1,n2 = z_where.bx_dimfull.shape[:2]
-        return uncropped_imgs.view(n1,n2,ch,width_raw,height_raw) 
+        return uncropped_imgs
   
     def compute_affine_uncropper(self,z_where,width_raw,height_raw):
         """ Source is CROPPED (small) image

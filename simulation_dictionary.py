@@ -34,8 +34,8 @@ class SimulationDictionary(dict):
         self['REGULARIZATION.LOSS_ZWHAT']=10.0
         
         # Parameters for the PRIOR in the VAE model
-        self['PRIOR.width_zmask'] = 0.001 #the width of the prior is inversely proportional to its strength
-        self['PRIOR.width_zwhat'] = 0.001 #the width of the prior is inversely proportional to its strength
+        self['PRIOR.width_zmask'] = 0.001 # the width of the prior is inversely proportional to its strength
+        self['PRIOR.width_zwhat'] = 0.001 # the width of the prior is inversely proportional to its strength
         self['PRIOR.n_objects_max'] = 30
         self['PRIOR.n_objects_expected'] = 10
         

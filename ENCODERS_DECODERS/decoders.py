@@ -70,7 +70,7 @@ class Decoder_CONV(torch.nn.Module):
         x     = torch.sigmoid(self.decoder(x1)) # use sigmoid so pixel intensity is in (0,1). 
         if(self.is_zwhat):
             sigma = F.softplus(self.compute_sigma(z)) 
-            return x,sigma
+            return x,sigma.view(-1,1,1,1) # because sigma is the same for all ch,w,h
         else:
             return x
         
