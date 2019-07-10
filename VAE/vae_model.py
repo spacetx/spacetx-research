@@ -142,7 +142,32 @@ class Compositional_VAE(torch.nn.Module):
         
         
     def score_observations(self,box_dimfull,sigma_imgs,putative_imgs,putative_masks,original_imgs): 
-               
+        
+        batch_size, n_boxes = putative_masks.shape[:2]
+        
+        # Use the stuff which is outside all the mask (which is therefore definitely back-ground) is used to learn the bg parameters
+        print("box_dimfull.probs.shape",box_dimfull.probs.shape)
+        print("putative_masks.shape",putative_masks.shape)
+        #box_is_active = (p>0.5).float()[...,None,None]
+        
+        
+        # Each box is scored independently.
+        bg_mu    = pyro.param("bg_mu_cauchy").detach()
+        bg_sigma = pyro.param("bg_sigma_cauchy").detach()
+        
+
+        
+        
+        
+        
+        
+        obs_imgs = original_imgs.unsqueeze(-4) # also add a singleton for the n_object dimension
+        
+        fg_sigma_cauchy = pyro.param("fg_sigma_cauchy")
+        bg_sigma_cauchy = pyro.param("bg_sigma_cauchy")  
+        
+        
+        
         # Resolve the conflict. Each pixel belongs to only one FG object
         # If a pixel does not belong to any object it belongs to the background
         mask_pixel_assignment = self.mask_argmin_argmax(putative_masks,"argmax") 
@@ -161,8 +186,7 @@ class Compositional_VAE(torch.nn.Module):
         bg_sigma_normal = pyro.param("bg_sigma_normal")
         
         # The foreground/background should be drawn from a Cauchy distribtion with scalar parameters 
-        # TO IMPROVE: parameter should be different for each channel
-        obs_imgs = original_imgs.unsqueeze(-4) # also add a singleton for the n_object dimension
+        
         log_p_definitely_bg_cauchy = UnitCauchy(bg_mu_cauchy,bg_sigma_cauchy).expand(obs_imgs.shape).mask(definitely_bg_mask).log_prob(obs_imgs)
         #log_p_definitely_bg_normal = dist.Normal(bg_mu_normal,bg_sigma_normal).expand(obs_imgs.shape).mask(definitely_bg_mask).log_prob(obs_imgs)
         
@@ -303,6 +327,7 @@ class Compositional_VAE(torch.nn.Module):
                 
                 # Probability of a box being active
                 p = z_nms.z_where.prob.squeeze(-1)
+                pyro.sample("p_inference",dist.Delta(p_inference))
                 c = pyro.sample("prob_object",dist.Bernoulli(probs = p))     
                 c_mask = c[...,None] # add a singleton for the event dimension
                 
@@ -376,9 +401,12 @@ class Compositional_VAE(torch.nn.Module):
                 # 1. Sample from priors -#
                 #------------------------#
                 
-                #- Z_WHERE 
+                #- Trick to get the value of p from the inference 
                 one  = torch.ones(1,dtype=imgs.dtype,device=imgs.device)
-                c          = pyro.sample("prob_object",dist.Bernoulli(probs=0.5*one))
+                p_inference = pyro.sample(NullScoreDistribution_Unit()).to(one.device)
+
+                #- Z_WHERE 
+                c          = pyro.sample("prob_object",dist.Bernoulli(probs=0.5*one))                    
                 bx_dimfull = pyro.sample("bx_dimfull",dist.Uniform(0,width*one).expand([1]).to_event(1))
                 by_dimfull = pyro.sample("by_dimfull",dist.Uniform(0,width*one).expand([1]).to_event(1))
                 bw_dimfull = pyro.sample("bw_dimfull",dist.Uniform(self.size_min*one,self.size_max).expand([1]).to_event(1))
@@ -392,8 +420,8 @@ class Compositional_VAE(torch.nn.Module):
                 #------------------------------#
                 # 2. Run the generative model -#
                 #------------------------------#
-                box_dimfull = collections.namedtuple('box_dimfull', 'bx_dimfull by_dimfull bw_dimfull bh_dimfull')._make(
-                                                    [bx_dimfull,by_dimfull,bw_dimfull,bh_dimfull])
+                box_dimfull = collections.namedtuple('box_dimfull', 'probs bx_dimfull by_dimfull bw_dimfull bh_dimfull')._make(
+                                                    [probs,bx_dimfull,by_dimfull,bw_dimfull,bh_dimfull])
 
                 if(len(z_mask.shape) == 4 and z_mask.shape[0] == 2):
                     # This means that I have an extra enumerate dimension in front to account for box being ON/OFF.
