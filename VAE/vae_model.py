@@ -146,19 +146,29 @@ class Compositional_VAE(torch.nn.Module):
         
         # get the parameters 
         #normal_sigma = pyro.param("normal_sigma")
-        bg_mu = pyro.param("bg_mu")
-        fg_mu = pyro.param("fg_mu")
-        bg_sigma = pyro.param("bg_sigma")
-        fg_sigma = pyro.param("fg_sigma")
+        bg_mu_cauchy    = pyro.param("bg_mu_cauchy")
+        bg_sigma_cauchy = pyro.param("bg_sigma_cauchy")
+        
+        bg_mu_normal    = pyro.param("bg_mu_normal")
+        bg_sigma_normal = pyro.param("bg_sigma_normal")
+        
+        fg_mu_cauchy    = pyro.param("fg_mu_cauchy")
+        fg_sigma_cauchy = pyro.param("fg_sigma_cauchy")
         
         # The foreground/background should be drawn from a Cauchy distribtion with scalar parameters 
         # TO IMPROVE: parameter should be different for each channel
         obs_imgs = imgs.unsqueeze(-4) # also add a singleton for the n_object dimension
-        log_p_definitely_bg_cauchy = UnitCauchy(bg_mu,bg_sigma).expand(obs_imgs.shape).mask(definitely_bg_mask).log_prob(obs_imgs)
+        log_p_definitely_bg_cauchy = UnitCauchy(bg_mu_cauchy,bg_sigma_cauchy).expand(obs_imgs.shape).mask(definitely_bg_mask).log_prob(obs_imgs)
+        log_p_definitely_bg_normal = UnitCauchy(bg_mu_normal,bg_sigma_normal).expand(obs_imgs.shape).mask(definitely_bg_mask).log_prob(obs_imgs)
+        
+        
         obs_imgs = obs_imgs.expand(-1,self.n_objects_max,-1,-1,-1) # expand for dimension over n_boxes
-        log_p_given_bg_cauchy = UnitCauchy(bg_mu,bg_sigma).expand(obs_imgs.shape).mask(mask_pixel_assignment).log_prob(obs_imgs)
-        log_p_given_fg_cauchy = UnitCauchy(fg_mu,fg_sigma).expand(obs_imgs.shape).mask(mask_pixel_assignment).log_prob(obs_imgs)
-        log_p_given_fg_normal = dist.Normal(putative_imgs,sigma_imgs).mask(mask_pixel_assignment).log_prob(obs_imgs)   
+        
+        log_p_given_bg_cauchy = UnitCauchy(bg_mu_cauchy,bg_sigma_cauchy).expand(obs_imgs.shape).mask(mask_pixel_assignment).log_prob(obs_imgs)
+        log_p_given_bg_normal = dist.Normal(bg_mu_normal,bg_sigma_normal).expand(obs_imgs.shape).mask(mask_pixel_assignment).log_prob(obs_imgs)
+        
+        log_p_given_fg_cauchy = UnitCauchy(fg_mu_cauchy,fg_sigma_cauchy).expand(obs_imgs.shape).mask(mask_pixel_assignment).log_prob(obs_imgs)
+        log_p_given_fg_predicted = dist.Normal(putative_imgs,sigma_imgs).mask(mask_pixel_assignment).log_prob(obs_imgs)   
                     
         # technically incorrect but it speeds up training and lead to binarized masks
         # The probability of each pixel value is:
@@ -168,11 +178,14 @@ class Compositional_VAE(torch.nn.Module):
         #log_partial_pixel_cauchy = Log_Add_Exp(log_p_given_fg_cauchy,log_p_given_bg_cauchy,log_w,log_1mw)
         #log_partial_pixel_normal = Log_Add_Exp(log_p_given_fg_normal,log_p_given_bg_cauchy,log_w,log_1mw)
         log_partial_pixel_cauchy = putative_masks*log_p_given_fg_cauchy+(1.0-putative_masks)*log_p_given_bg_cauchy 
-        log_partial_pixel_normal = putative_masks*log_p_given_fg_normal+(1.0-putative_masks)*log_p_given_bg_cauchy 
+        #log_partial_pixel_normal = putative_masks*log_p_given_fg_normal+(1.0-putative_masks)*log_p_given_bg_cauchy 
+        log_partial_pixel_normal = putative_masks*log_p_given_fg_predicted+(1.0-putative_masks)*log_p_given_bg_normal 
                         
         # compute logp
-        logp_definitely_bg = torch.sum(log_p_definitely_bg_cauchy,dim=(-1,-2,-3)) 
-        logp_box_off       = torch.sum(log_p_given_bg_cauchy,dim=(-1,-2,-3))
+        #logp_definitely_bg = torch.sum(log_p_definitely_bg_cauchy,dim=(-1,-2,-3)) 
+        logp_definitely_bg = torch.sum(log_p_definitely_bg_normal,dim=(-1,-2,-3)) 
+        #logp_box_off       = torch.sum(log_p_given_bg_cauchy,dim=(-1,-2,-3))
+        logp_box_off       = torch.sum(log_p_given_bg_normal,dim=(-1,-2,-3))
         logp_box_on_cauchy = torch.sum(log_partial_pixel_cauchy,dim=(-1,-2,-3))
         logp_box_on_normal = torch.sum(log_partial_pixel_normal,dim=(-1,-2,-3))  
         
@@ -180,12 +193,10 @@ class Compositional_VAE(torch.nn.Module):
         common_logp    = logp_definitely_bg/self.n_objects_max
         log_probs = collections.namedtuple('logp', 'logp_off, logp_on_cauchy, logp_on_normal')._make(
                 [common_logp+logp_box_off, common_logp + logp_box_on_cauchy, common_logp + logp_box_on_normal])           
-
         
         # compute the regularizations
         volume_box  = (box_dimfull.bw_dimfull*box_dimfull.bh_dimfull).squeeze(-1)
         volume_mask = torch.sum(mask_pixel_assignment*putative_masks,dim=(-1,-2,-3))
-        
         
         #- reg1: bounding box should be as small as possible --#
         #- Note that volume_mask is detached from computation graph, 
@@ -296,12 +307,6 @@ class Compositional_VAE(torch.nn.Module):
                 z_what_std = (1-c_mask)*self.width_zwhat + c_mask*z_nms.z_what.z_std
                 z_mask_mu  = (1-c_mask)*zero             + c_mask*z_nms.z_mask.z_mu
                 z_mask_std = (1-c_mask)*self.width_zmask + c_mask*z_nms.z_mask.z_std
-                
-                #print("p.shape",p.shape)
-                #print("c.shape",c.shape)
-                #print("z_nms.z_what.z_mu.shape",z_nms.z_what.z_mu.shape)
-                #print("z_mask_mu.shape",z_mask_mu.shape)
-                
                 pyro.sample("z_what",dist.Normal(z_what_mu, z_what_std).to_event(1))
                 pyro.sample("z_mask",dist.Normal(z_mask_mu, z_mask_std).to_event(1))
                 
@@ -348,12 +353,14 @@ class Compositional_VAE(torch.nn.Module):
         pyro.module("generator_masks", self.generator_masks)
 
         # register the parameters of the distribution used to score the results
-        bg_mu        = pyro.param("bg_mu", 0.1*one, constraint=constraints.unit_interval)
-        fg_mu        = pyro.param("fg_mu", 0.9*one, constraint=constraints.unit_interval)
-        bg_sigma     = pyro.param("bg_sigma", 0.2*one, constraint=constraints.interval(0.01,0.25))
-        fg_sigma     = pyro.param("fg_sigma", 0.2*one, constraint=constraints.interval(0.01,0.25))
-        #normal_sigma = pyro.param("normal_sigma", 0.2*one, constraint=constraints.interval(0.01,0.25))
-
+        fg_mu_cauchy = pyro.param("fg_mu_cauchy", 0.9*one, constraint=constraints.unit_interval)
+        bg_mu_cauchy = pyro.param("bg_mu_cauchy", 0.1*one, constraint=constraints.unit_interval)
+        bg_mu_normal = pyro.param("bg_mu_normal", 0.1*one, constraint=constraints.unit_interval)
+        
+        fg_sigma_cauchy = pyro.param("fg_sigma_cauchy", 0.2*one, constraint=constraints.interval(0.01,0.25))
+        bg_sigma_cauchy = pyro.param("bg_sigma_cauchy", 0.2*one, constraint=constraints.interval(0.01,0.25))
+        bg_sigma_normal = pyro.param("bg_sigma_normal", 0.2*one, constraint=constraints.interval(0.01,0.25))
+        
         with pyro.plate("batch", batch_size, dim=-2):
             
             with pyro.plate("n_objects", self.n_objects_max, dim =-1):
@@ -401,7 +408,9 @@ class Compositional_VAE(torch.nn.Module):
                 definitely_bg_mask = (torch.sum(mask_pixel_assignment,dim=-4,keepdim=True) == 0.0) 
                 
                 # sample the background 
-                background_sample = torch.clamp(dist.Cauchy(bg_mu,bg_sigma).expand(imgs.shape).sample(),min=0.0,max=1.0)
+                #background_sample = torch.clamp(dist.Cauchy(bg_mu_cauchy,bg_sigma_cauchy).expand(imgs.shape).sample(),min=0.0,max=1.0)
+                background_sample = torch.clamp(dist.Normal(bg_mu_normal,bg_sigma_normal).expand(imgs.shape).sample(),min=0.0,max=1.0)
+
 
                     
                 if(observed):
