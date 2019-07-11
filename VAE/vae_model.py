@@ -3,7 +3,7 @@ import torch
 import pyro
 import pyro.distributions as dist
 from PIL import Image, ImageDraw
-from LOW_LEVEL_UTILITIES.distributions import UniformWithTails, Indicator, NullScoreDistribution_Bernoulli, UnitCauchy
+from LOW_LEVEL_UTILITIES.distributions import Indicator, NullScoreDistribution_Unit, UnitCauchy
 from LOW_LEVEL_UTILITIES.utilities import reset_parameters,save_obj,load_obj
 from VAE.vae_parts import *
 import matplotlib.pyplot as plt
@@ -98,9 +98,7 @@ class Compositional_VAE(torch.nn.Module):
         self.lambda_small_box_size       = params['REGULARIZATION.lambda_small_box_size']
         self.lambda_mask_volume_fraction = params['REGULARIZATION.lambda_mask_volume_fraction']
         self.lambda_mask_volume_absolute = params['REGULARIZATION.lambda_mask_volume_absolute']
-        self.lambda_tot_var_mask         = params['REGULARIZATION.lambda_tot_var_mask']
         self.lambda_overlap              = params['REGULARIZATION.lambda_overlap']  
-        self.LOSS_ZMASK                  = params['REGULARIZATION.LOSS_ZMASK']
         self.LOSS_ZWHAT                  = params['REGULARIZATION.LOSS_ZWHAT']
         
         #------------------------------------#
@@ -142,135 +140,102 @@ class Compositional_VAE(torch.nn.Module):
         
         
     def score_observations(self,box_dimfull,sigma_imgs,putative_imgs,putative_masks,original_imgs): 
-        
-        batch_size, n_boxes = putative_masks.shape[:2]
-        
-        # Use the stuff which is outside all the mask (which is therefore definitely back-ground) is used to learn the bg parameters
-        print("box_dimfull.probs.shape",box_dimfull.probs.shape)
-        print("putative_masks.shape",putative_masks.shape)
-        #box_is_active = (p>0.5).float()[...,None,None]
-        
-        
-        # Each box is scored independently.
-        bg_mu    = pyro.param("bg_mu_cauchy").detach()
-        bg_sigma = pyro.param("bg_sigma_cauchy").detach()
-        
-
-        
-        
-        
-        
-        
-        obs_imgs = original_imgs.unsqueeze(-4) # also add a singleton for the n_object dimension
-        
-        fg_sigma_cauchy = pyro.param("fg_sigma_cauchy")
-        bg_sigma_cauchy = pyro.param("bg_sigma_cauchy")  
-        
-        
-        
-        # Resolve the conflict. Each pixel belongs to only one FG object
-        # If a pixel does not belong to any object it belongs to the background
-        mask_pixel_assignment = self.mask_argmin_argmax(putative_masks,"argmax") 
-        batch_size, n_boxes = mask_pixel_assignment.shape[:2]
-        #mask_pixel_assignment = self.mask_argmin_argmax(putative_masks*p_inferred[...,None,None,None],"argmax") 
-        definitely_bg_mask = (torch.sum(mask_pixel_assignment,dim=-4,keepdim=True) == 0.0) 
-                
+               
         # get the parameters 
-        #normal_sigma = pyro.param("normal_sigma")
-        fg_mu_cauchy    = pyro.param("fg_mu_cauchy")
-        bg_mu_cauchy    = pyro.param("bg_mu_cauchy")
-        bg_mu_normal    = pyro.param("bg_mu_normal")
+        fg_mu    = pyro.param("fg_mu")
+        bg_mu    = pyro.param("bg_mu")
+        fg_sigma = pyro.param("fg_sigma")
+        bg_sigma = pyro.param("bg_sigma")      
         
-        fg_sigma_cauchy = pyro.param("fg_sigma_cauchy")
-        bg_sigma_cauchy = pyro.param("bg_sigma_cauchy")      
-        bg_sigma_normal = pyro.param("bg_sigma_normal")
+        # Extract the shapes 
+        batch_size, n_boxes, ch, width, height = putative_imgs.shape
         
-        # The foreground/background should be drawn from a Cauchy distribtion with scalar parameters 
+        # Resolve the conflict. Each pixel belongs to only one FG object.
+        # Select the FG object with highest product of probability and mask value
+        p_inferred = box_dimfull.probs[...,None,None,None] #add 3 singletons for ch,width,height 
+        mask_pixel_assignment = self.mask_argmin_argmax(putative_masks*p_inferred,"argmax") 
         
-        log_p_definitely_bg_cauchy = UnitCauchy(bg_mu_cauchy,bg_sigma_cauchy).expand(obs_imgs.shape).mask(definitely_bg_mask).log_prob(obs_imgs)
-        #log_p_definitely_bg_normal = dist.Normal(bg_mu_normal,bg_sigma_normal).expand(obs_imgs.shape).mask(definitely_bg_mask).log_prob(obs_imgs)
+        # If a pixel does not belong to any object it belongs to the background
+        # Use these (probably very few) pixels to learn the background parameters)
+        definitely_bg_mask = (torch.sum(mask_pixel_assignment,dim=-4,keepdim=True) == 0.0) 
+        obs_imgs = original_imgs.unsqueeze(-4) # add a singleton in the n_boxes dimension             
+        logp_definitely_bg = UnitCauchy(bg_mu,bg_sigma).expand(obs_imgs.shape).mask(definitely_bg_mask).log_prob(obs_imgs).sum(dim=(-1,-2,-3))
         
+        # Expand the n_boxes dimension so that each box can be scored indepenently       
         obs_imgs = obs_imgs.expand(-1,n_boxes,-1,-1,-1) # expand for dimension over n_boxes
+        logp_given_bg = UnitCauchy(bg_mu,bg_sigma).expand(obs_imgs.shape).mask(mask_pixel_assignment).log_prob(obs_imgs)
+        logp_given_fg = dist.Normal(putative_imgs,sigma_imgs).mask(mask_pixel_assignment).log_prob(obs_imgs)   
         
-        log_p_given_bg_cauchy = UnitCauchy(bg_mu_cauchy,bg_sigma_cauchy).expand(obs_imgs.shape).mask(mask_pixel_assignment).log_prob(obs_imgs)
-        #log_p_given_bg_normal = dist.Normal(bg_mu_normal,bg_sigma_normal).expand(obs_imgs.shape).mask(mask_pixel_assignment).log_prob(obs_imgs)
-        
-        log_p_given_fg_cauchy = UnitCauchy(fg_mu_cauchy,fg_sigma_cauchy).expand(obs_imgs.shape).mask(mask_pixel_assignment).log_prob(obs_imgs)
-        log_p_given_fg_predicted = dist.Normal(putative_imgs,sigma_imgs).mask(mask_pixel_assignment).log_prob(obs_imgs)   
-                    
-        # technically incorrect but it speeds up training and lead to binarized masks
-        # The probability of each pixel value is:
-        # P(x) = w * P(x|FG) + (1-w) * P(x|BG)
+        # technically for each pixel:
+        # P(x) = w * P(x|FG) + (1-w) * P(x|BG) -> log P = log[ w * P(x|FG) + (1-w) * P(x|BG) ] 
+        #
         #log_w   = torch.log(putative_masks)
         #log_1mw = get_log_prob_compl(log_w)
-        #log_partial_pixel_cauchy = Log_Add_Exp(log_p_given_fg_cauchy,log_p_given_bg_cauchy,log_w,log_1mw)
-        #log_partial_pixel_normal = Log_Add_Exp(log_p_given_fg_normal,log_p_given_bg_cauchy,log_w,log_1mw)
-        log_partial_pixel_cauchy = putative_masks*log_p_given_fg_cauchy+(1.0-putative_masks)*log_p_given_bg_cauchy 
-        log_partial_pixel_normal = putative_masks*log_p_given_fg_predicted+(1.0-putative_masks)*log_p_given_bg_cauchy 
-        #log_partial_pixel_normal = putative_masks*log_p_given_fg_predicted+(1.0-putative_masks)*log_p_given_bg_normal 
-                        
-        # compute logp
-        logp_definitely_bg = torch.sum(log_p_definitely_bg_cauchy,dim=(-1,-2,-3)) 
-        #logp_definitely_bg = torch.sum(log_p_definitely_bg_normal,dim=(-1,-2,-3)) 
-        logp_box_off       = torch.sum(log_p_given_bg_cauchy,dim=(-1,-2,-3))
-        #logp_box_off       = torch.sum(log_p_given_bg_normal,dim=(-1,-2,-3))
-        logp_box_on_cauchy = torch.sum(log_partial_pixel_cauchy,dim=(-1,-2,-3))
-        logp_box_on_normal = torch.sum(log_partial_pixel_normal,dim=(-1,-2,-3))  
+        #logp_box_on  = Log_Add_Exp(log_p_given_fg_cauchy,log_p_given_bg_cauchy,log_w,log_1mw)
+        #logp_box_off  = Log_Add_Exp(log_p_given_fg_normal,log_p_given_bg_cauchy,log_w,log_1mw)
+        #
+        # We do the trick (technically wrong but it speeds up training and lead to binarized masks):
+        # log P = w * log P(x|FG) + (1-w) * log P(x|BG)
+        logp_box_on  = (putative_masks*logp_given_fg+(1.0-putative_masks)*logp_given_bg).sum(dim=(-1,-2,-3))
+        logp_box_off = logp_given_bg.sum(dim=(-1,-2,-3))
         
         # package the logp
-        common_logp    = logp_definitely_bg/n_boxes
-        log_probs = collections.namedtuple('logp', 'logp_off, logp_on_cauchy, logp_on_normal')._make(
-                [common_logp+logp_box_off, common_logp + logp_box_on_cauchy, common_logp + logp_box_on_normal])           
+        log_probs = collections.namedtuple('logp', 'definitely_bg box_on box_off')._make(
+                [logp_definitely_bg, logp_box_on, logp_box_off])           
+
         
         # compute the regularizations
         volume_box  = (box_dimfull.bw_dimfull*box_dimfull.bh_dimfull).squeeze(-1)
-        volume_mask = torch.sum(mask_pixel_assignment*putative_masks,dim=(-1,-2,-3))
+        volume_mask = torch.sum(putative_masks,dim=(-1,-2,-3))
         
-        #- reg1: bounding box should be as small as possible --#
+        #- reg 1: MAKE SURE THAT THE MASK DOES NOT DISAPPEAR 
+        #- Mask should occupy at least 10% of the box 
+        #- Note that the box volume is detached from computation graph, 
+        #- therefore this regolarization can only make mask_volume larger not the 
+        #- box_volume smaller.
+        #- This regularization is very strong. 
+        #- It basically is a HARD constraint on the generation of masks
+        of     = volume_mask/volume_box.detach() # occupied fraction
+        tmp_of = torch.clamp(50*(0.1-of),min=0)
+        reg_mask_volume_fraction = torch.expm1(tmp_of)
+        
+        #- reg2: REDUCE BOX SIZE TO FIT THE MASK
         #- Note that volume_mask is detached from computation graph, 
         #- therefore this regolarization can only make box_volume smaller 
         #- not make the mask_volume larger.
+        # This regularization need to be gentle since I do not want to split an object in multiple small boxes
         with torch.no_grad():
             volume_box_min = torch.tensor(self.size_min*self.size_min, device=volume_mask.device, dtype=volume_mask.dtype)
             volume_min     = torch.max(volume_mask,volume_box_min)
         reg_small_box_size = (volume_box/volume_min - 1.0)**2
         
-        #- reg 2: mask should occupy at least 10% of the box -#
-        #- Note that the box volume is detached from computation graph, 
-        #- therefore this regolarization can only make mask_volume larger not the 
-        #- box_volume smaller.
-        of     = volume_mask/volume_box.detach() # occupaid fraction
-        tmp_of = torch.clamp(50*(0.1-of),min=0)
-        reg_mask_volume_fraction = torch.expm1(tmp_of)
-        
-        #- reg 3: mask volume should be between min and max 
+        #- reg 3: MASK VOLUME SHOULD BE BETWEEN MIN and MAX
         tmp_volume_absolute = torch.clamp((self.volume_mask_min-volume_mask)/self.volume_mask_expected,min=0) + \
                               torch.clamp((volume_mask-self.volume_mask_max)/self.volume_mask_expected,min=0)
         reg_mask_volume_absolute = (50*tmp_volume_absolute).pow(2)
-         
-       
-        #- reg 4: mask should have small total variations -#
-        #- TotVar = integral of the absolute gradient -----#
-        #- This is L1 b/c we want discountinuity ----------#
-        pixel_weights = putative_masks*mask_pixel_assignment
-        grad_x = torch.sum(torch.abs(pixel_weights[:,:,:,:,:-1] - pixel_weights[:,:,:,:,1:]),dim=(-1,-2,-3))
-        grad_y = torch.sum(torch.abs(pixel_weights[:,:,:,:-1,:] - pixel_weights[:,:,:,1:,:]),dim=(-1,-2,-3))
-        reg_tot_var_mask = (grad_x+grad_y)
-  
-            
-        #- reg 5: mask should have small or no overlap ---------------#
-        #- Question: Assign the cost to the second most likely mask? -#
-        values, indeces = torch.topk(putative_masks, k=2, dim=1, largest=True) # shape: batch x 2 x 1 x width x height
-        prod = torch.prod(values,dim=1,keepdim=True) # shape batch x 1 x 1 x width x height
-        with torch.no_grad():
-            fake_indeces = torch.arange(start=0,end=self.n_objects_max,step=1,
-                                        dtype=indeces.dtype,device=indeces.device).view(1,-1,1,1,1)
-            assignment_mask = (indeces[:,-1:,:,:,:] == fake_indeces).float()
-        reg_overlap_mask = torch.sum(prod*assignment_mask,dim=(-1,-2,-3))**2
-            
-        regularizations = collections.namedtuple('reg', "small_box_size mask_volume_fraction mask_volume_absolute tot_var_mask overlap_mask")._make(
-            [reg_small_box_size, reg_mask_volume_fraction, reg_mask_volume_absolute, reg_tot_var_mask, reg_overlap_mask])
+        
+        #- reg 4: MASK SHOULD NOT OVERLAP ---------------#
+        #- This is the only INTERACTION term which will be treated in MEAN FIELD
+        #- penalty_i = c_i \sum_{j ne i} U(IoMIN_{i,j}) p_j/2
+        #- Here U(IoMIN) is the repulsive potential which depends on the amount of overlap 
+        m1 = putative_masks.view(batch_size, n_boxes,1,-1)
+        m2 = putative_masks.view(batch_size, 1,n_boxes,-1)
+        Intersection_vol = torch.sum(m1*m2,dim=-1)
+        mask_diagonal = (1.0 - torch.eye(n_boxes, dtype=m1.dtype, device=m1.device, requires_grad=False)).unsqueeze(0)
 
+        v1 = volume_mask.view(batch_size, n_boxes,1)
+        v2 = volume_mask.view(batch_size, 1,n_boxes)
+        Min_vol = torch.min(v1,v2)
+        U = torch.clamp(0.2-(Intersection_vol/Min_vol),min=0)
+        
+        p_j = box_dimfull.probs.detach().view(batch_size, 1, n_boxes)
+                
+        reg_overlap_mask = torch.sum(0.5*mask_diagonal*U*p_j,dim=-1)
+        
+        # package the regularizations
+        regularizations = collections.namedtuple('reg', "small_box_size mask_volume_fraction mask_volume_absolute overlap_mask")._make(
+            [reg_small_box_size, reg_mask_volume_fraction, reg_mask_volume_absolute, reg_overlap_mask])
+        
         return log_probs,regularizations
     
     
@@ -327,11 +292,11 @@ class Compositional_VAE(torch.nn.Module):
                 
                 # Probability of a box being active
                 p = z_nms.z_where.prob.squeeze(-1)
-                pyro.sample("p_inference",dist.Delta(p_inference))
-                c = pyro.sample("prob_object",dist.Bernoulli(probs = p))     
-                c_mask = c[...,None] # add a singleton for the event dimension
-                
+                pyro.sample("prob_object",dist.Delta(p))
+                c = pyro.sample("presence_object",dist.Bernoulli(probs = p))   
+                                  
                 # GATING of Z_WHAT and Z_MASK
+                c_mask = c[...,None] # add a singleton for the event dimension
                 z_what_mu  = (1-c_mask)*zero             + c_mask*z_nms.z_what.z_mu
                 z_what_std = (1-c_mask)*self.width_zwhat + c_mask*z_nms.z_what.z_std
                 z_mask_mu  = (1-c_mask)*zero             + c_mask*z_nms.z_mask.z_mu
@@ -384,14 +349,10 @@ class Compositional_VAE(torch.nn.Module):
         # vector of ones used to create a vector of parameters.
         # Each entry corresponds to a different channels
         one_chs  = torch.ones(ch,dtype=imgs.dtype,device=imgs.device) 
-
-        fg_mu_cauchy = pyro.param("fg_mu_cauchy", 0.9*one_chs, constraint=constraints.unit_interval)
-        bg_mu_cauchy = pyro.param("bg_mu_cauchy", 0.1*one_chs, constraint=constraints.unit_interval)
-        bg_mu_normal = pyro.param("bg_mu_normal", 0.1*one_chs, constraint=constraints.unit_interval)
-        
-        fg_sigma_cauchy = pyro.param("fg_sigma_cauchy", 0.2*one_chs, constraint=constraints.interval(0.01,0.25))
-        bg_sigma_cauchy = pyro.param("bg_sigma_cauchy", 0.2*one_chs, constraint=constraints.interval(0.01,0.25))
-        bg_sigma_normal = pyro.param("bg_sigma_normal", 0.2*one_chs, constraint=constraints.interval(0.01,0.25))
+        fg_mu    = pyro.param("fg_mu", 0.9*one_chs, constraint=constraints.unit_interval)
+        bg_mu    = pyro.param("bg_mu", 0.1*one_chs, constraint=constraints.unit_interval)
+        fg_sigma = pyro.param("fg_sigma", 0.2*one_chs, constraint=constraints.interval(0.01,0.25))
+        bg_sigma = pyro.param("bg_sigma", 0.2*one_chs, constraint=constraints.interval(0.01,0.25))
                 
         with pyro.plate("batch", batch_size, dim=-2):
             
@@ -402,11 +363,11 @@ class Compositional_VAE(torch.nn.Module):
                 #------------------------#
                 
                 #- Trick to get the value of p from the inference 
-                one  = torch.ones(1,dtype=imgs.dtype,device=imgs.device)
-                p_inference = pyro.sample(NullScoreDistribution_Unit()).to(one.device)
+                one   = torch.ones(1,dtype=imgs.dtype,device=imgs.device)
+                probs = pyro.sample("prob_object",NullScoreDistribution_Unit()).to(one.device)
 
                 #- Z_WHERE 
-                c          = pyro.sample("prob_object",dist.Bernoulli(probs=0.5*one))                    
+                c          = pyro.sample("presence_object",dist.Bernoulli(probs=0.5*one))                    
                 bx_dimfull = pyro.sample("bx_dimfull",dist.Uniform(0,width*one).expand([1]).to_event(1))
                 by_dimfull = pyro.sample("by_dimfull",dist.Uniform(0,width*one).expand([1]).to_event(1))
                 bw_dimfull = pyro.sample("bw_dimfull",dist.Uniform(self.size_min*one,self.size_max).expand([1]).to_event(1))
@@ -416,12 +377,12 @@ class Compositional_VAE(torch.nn.Module):
                 z_what = pyro.sample("z_what",dist.Normal(0,self.width_zwhat*one).expand([self.Zwhat_dim]).to_event(1)) 
                 z_mask = pyro.sample("z_mask",dist.Normal(0,self.width_zmask*one).expand([self.Zmask_dim]).to_event(1)) 
                        
-                    
                 #------------------------------#
                 # 2. Run the generative model -#
                 #------------------------------#
                 box_dimfull = collections.namedtuple('box_dimfull', 'probs bx_dimfull by_dimfull bw_dimfull bh_dimfull')._make(
                                                     [probs,bx_dimfull,by_dimfull,bw_dimfull,bh_dimfull])
+                
 
                 if(len(z_mask.shape) == 4 and z_mask.shape[0] == 2):
                     # This means that I have an extra enumerate dimension in front to account for box being ON/OFF.
@@ -436,29 +397,29 @@ class Compositional_VAE(torch.nn.Module):
                 assert putative_imgs.shape  == (batch_size,self.n_objects_max,ch,width,height)
                 assert sigma_imgs.shape     == (batch_size,self.n_objects_max,1,1,1)
                                 
-
                     
                 if(observed):
                     logp,reg = self.score_observations(box_dimfull,sigma_imgs,putative_imgs,putative_masks,imgs)
                     
-                    total_reg = self.lambda_small_box_size*reg.small_box_size + \
-                                self.lambda_mask_volume_fraction*reg.mask_volume_fraction + \
-                                self.lambda_mask_volume_absolute*reg.mask_volume_absolute + \
-                                self.lambda_tot_var_mask*reg.tot_var_mask + \
-                                self.lambda_overlap*reg.overlap_mask      
-                                                                         
-                    log_prob_ZWHAT = self.LOSS_ZWHAT*torch.stack((logp.logp_off,logp.logp_on_normal-total_reg),dim=-1) 
-                    log_prob_ZMASK = self.LOSS_ZMASK*torch.stack((logp.logp_off,logp.logp_on_cauchy-total_reg),dim=-1) 
-                    pyro.sample("LOSS", Indicator(log_probs=log_prob_ZMASK+log_prob_ZWHAT), obs = c)
-
-                    #pyro.sample("LOSS", Indicator(log_probs=log_prob_ZWHAT), obs = c)
-
-                
+                    # PUT EVERYTHING TOGETHER TO COMPUTE THE LOSS:
+                    # Note that putting the regularization into the common logp term 
+                    # means that the resularizations do not change box on/off
+                    common_logp = logp.definitely_bg/self.n_objects_max - \
+                                  self.lambda_mask_volume_fraction*reg.mask_volume_fraction - \
+                                  self.lambda_small_box_size*reg.small_box_size - \
+                                  self.lambda_mask_volume_absolute*reg.mask_volume_absolute - \
+                                  self.lambda_overlap*reg.overlap_mask  
+                                                
+                    log_probs_ZWHAT = self.LOSS_ZWHAT*torch.stack((common_logp+logp.box_off,common_logp+logp.box_on),dim=-1) 
+                    pyro.sample("LOSS", Indicator(log_probs=log_probs_ZWHAT), obs = c)
+        
+                    
                 # sample the background 
-                background_sample = torch.clamp(dist.Cauchy(bg_mu_cauchy,bg_sigma_cauchy).expand(imgs.shape).sample(),min=0.0,max=1.0)
-                #background_sample = torch.clamp(dist.Normal(bg_mu_normal,bg_sigma_normal).expand(imgs.shape).sample(),min=0.0,max=1.0)
+                background_sample = dist.Cauchy(bg_mu,bg_sigma).expand(imgs.shape).sample()
+                #background_sample = dist.Normal(bg_mu_normal,bg_sigma_normal).expand(imgs.shape).sample()
+                background_sample_clamped = torch.clamp(background_sample,min=0.0,max=1.0)
 
-                return putative_imgs,putative_masks,background_sample,c
+                return putative_imgs,putative_masks,background_sample_clamped,c
     
 
     def reconstruct_img(self,original_image,bounding_box=False):
@@ -481,21 +442,26 @@ class Compositional_VAE(torch.nn.Module):
             #--------------------------------#
             #--- 2. Run the model forward ---#
             #--------------------------------#
-            putative_masks = self.generator_masks.forward(z_nms.z_where,z_nms.z_mask.z_mu,width,height)                
-            putative_imgs,sigma_imgs  = self.generator_imgs.forward(z_nms.z_where,z_nms.z_what.z_mu,width,height) 
+            if(len(z_nms.z_mask.z_mu.shape) == 4 and z_nms.z_mask.z_mu.shape[0] == 2):
+                # This means that I have an extra enumerate dimension in front to account for box being ON/OFF.
+                # I need to reconstruct the image only if the box is ON therefore I pass z_mask[1], z_what[1]
+                putative_masks           = self.generator_masks.forward(z_nms.z_where,z_nms.z_mask.z_mu[1],width,height)
+                putative_imgs,sigma_imgs = self.generator_imgs.forward(z_nms.z_where,z_nms.z_what.z_mu[1],width,height) 
+            elif(len(z_nms.z_mask.z_mu.shape) == 3):
+                putative_masks           = self.generator_masks.forward(z_nms.z_where,z_nms.z_mask.z_mu,width,height)
+                putative_imgs,sigma_imgs = self.generator_imgs.forward(z_nms.z_where,z_nms.z_what.z_mu,width,height) 
         
             #---------------------------------#
             #--- 3. Score the model ----------#
-            #---------------------------------#
+            #---------------------------------#            
             logp,reg = self.score_observations(z_nms.z_where,sigma_imgs,putative_imgs,putative_masks,original_image)
         
             #---------------------------------#
             #----- 4. Reconstruct images -----#
             #---------------------------------#
-            p     = z_nms.z_where.prob 
-            assert len(p.shape) == 3
-            box_is_active = (p>0.5).float()[...,None,None]
-            mask_pixel_assignment = self.mask_argmin_argmax(putative_masks,"argmax")   
+            p     = z_nms.z_where.prob[...,None,None] 
+            box_is_active = (p>0.5).float()
+            mask_pixel_assignment = self.mask_argmin_argmax(putative_masks*p,"argmax")   
             fg_mask = (mask_pixel_assignment*putative_masks > 0.0).float()
             reconstructed_image = torch.sum(box_is_active*fg_mask*putative_imgs,dim=-4,keepdim=False)
             

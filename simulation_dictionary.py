@@ -25,12 +25,10 @@ class SimulationDictionary(dict):
         self['REGULARIZATION.randomize_nms_factor']=0.2   #strenght of Gaussian noise 
         self['REGULARIZATION.p_corr_factor']=0.0
         
-        self['REGULARIZATION.lambda_small_box_size']=0.0  # bounding box should be as small as possible
+        self['REGULARIZATION.lambda_small_box_size']=1.0  # bounding box should be as small as possible
         self['REGULARIZATION.lambda_mask_volume_fraction']=1.0 # mask should occupy at least 10% of the box 
         self['REGULARIZATION.lambda_mask_volume_absolute']=0.0 # mask volume should be between min and max volume        
-        self['REGULARIZATION.lambda_tot_var_mask']=0.0    # mask should have small tot_variation
-        self['REGULARIZATION.lambda_overlap']=0.0         # mask should not overlap
-        self['REGULARIZATION.LOSS_ZMASK']=0.0
+        self['REGULARIZATION.lambda_overlap']=1.0         # mask should not overlap
         self['REGULARIZATION.LOSS_ZWHAT']=10.0
         
         # Parameters for the PRIOR in the VAE model
