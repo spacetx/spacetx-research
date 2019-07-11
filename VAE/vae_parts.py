@@ -83,9 +83,6 @@ class Inference(torch.nn.Module):
         self.unet = UNet(params)
         self.nms = Non_Max_Suppression(params)
         self.cropper = Cropper(params)
-        
-        # stuff for the select_top_boxes_by_prob
-        self.n_objects_max = params["PRIOR.n_objects_max"]
 
         # encoders z_what,z_mask
         #self.encoder_zwhat = Encoder_MLP(params,is_zwhat=True)
@@ -93,7 +90,7 @@ class Inference(torch.nn.Module):
         self.encoder_zwhat = Encoder_CONV(params,is_zwhat=True)
         self.encoder_zmask = Encoder_CONV(params,is_zwhat=False)        
     
-    def forward(self,imgs_in,p_corr_factor=0.0,randomize_nms_factor=0.0):
+    def forward(self,imgs_in,p_corr_factor=0.0,randomize_nms_factor=0.0,n_objects_max=10):
         raw_width,raw_height = imgs_in.shape[-2:]
         
         # UNET
@@ -113,8 +110,17 @@ class Inference(torch.nn.Module):
             new_p = (1-p_corr_factor)*z_where_all.prob+p_corr_factor*p_approx
             z_where_all = z_where_all._replace(prob=new_p)
         
+        # CHECK
+        try:
+            assert torch.max(z_where_all.prob) <= 1.0
+            assert torch.min(z_where_all.prob) >= 0.0
+        except:
+            print("BEFORE NMS")
+            print(z_where_all.prob)
+            exit()
+        
         # NMS   
-        z_where = self.nms.forward(z_where_all,randomize_nms_factor)
+        z_where = self.nms.forward(z_where_all,randomize_nms_factor,n_objects_max)
         #z_where = select_top_boxes_by_prob(z_where_all,self.n_objects_max)
         #print("z_where.prob[0]",z_where.prob[0])
         

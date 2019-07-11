@@ -79,45 +79,30 @@ class prediction_Zwhere(torch.nn.Module):
     def __init__(self, channel_in,params: dict):
         super().__init__()
         self.ch_in = channel_in
-        self.comp_p     = torch.nn.Conv2d(self.ch_in,1,kernel_size=1, stride=1, padding=0, bias=True)
-        self.comp_tx    = torch.nn.Conv2d(self.ch_in,1,kernel_size=1, stride=1, padding=0, bias=True)
-        self.comp_ty    = torch.nn.Conv2d(self.ch_in,1,kernel_size=1, stride=1, padding=0, bias=True)
-        self.comp_tw    = torch.nn.Conv2d(self.ch_in,1,kernel_size=1, stride=1, padding=0, bias=True)
-        self.comp_th    = torch.nn.Conv2d(self.ch_in,1,kernel_size=1, stride=1, padding=0, bias=True)
+        self.conv       = torch.nn.Conv2d(self.ch_in,5,kernel_size=1, stride=1, padding=0, bias=True)
         self.size_min   = params['PRIOR.size_object_min']
         self.size_max   = params['PRIOR.size_object_max']
         self.size_delta = self.size_max - self.size_min
-    
-        # Here I am initializing the bias with large value so that p also has large value
-        # This in turns helps the model not to get stuck in the empty configuration which is a local minimum
-        self.comp_p.bias.data += 1.0
-
 
     def forward(self,x,width_raw_image,height_raw_image):
         
         batch, ch, n_width, n_height = x.shape 
         
         with torch.no_grad():
-            ix = torch.arange(0,n_width,  dtype=x.dtype, device=x.device).view(1,1,-1,1) #between 0 and 1
-            iy = torch.arange(0,n_height, dtype=x.dtype, device=x.device).view(1,1,1,-1) #between 0 and 1
+            ix = torch.arange(start=0, end=n_width,  step=1, dtype=x.dtype, device=x.device).view(1,1,-1,1) #between 0 and n_width-1
+            iy = torch.arange(start=0, end=n_height, step=1, dtype=x.dtype, device=x.device).view(1,1,1,-1) #between 0 and n_height-1
             
-        # probability
-        logit_p = torch.sigmoid(self.comp_p(x))
-
-        # center of bounding box from dimfull to dimless and reshaping
-        bx = torch.sigmoid(self.comp_tx(x)) + ix #-- in (0,n_width)
-        by = torch.sigmoid(self.comp_ty(x)) + iy #-- in (0,n_height)
-        bx_dimfull = width_raw_image*bx/n_width  # in (0,width_raw_image)
-        by_dimfull = height_raw_image*by/n_height # in (0,height_raw_image)  
-        
-        # size of the bounding box
-        bw_dimless = torch.sigmoid(self.comp_tw(x)) # between 0 and 1
-        bh_dimless = torch.sigmoid(self.comp_th(x)) # between 0 and 1
-        bw_dimfull = self.size_min + self.size_delta*bw_dimless # in (min_size,max_size)
-        bh_dimfull = self.size_min + self.size_delta*bh_dimless # in (min_size,max_size)
-        
+        # raw information in (0,1)
+        prob,tx,ty,tw,th = torch.split(torch.sigmoid(self.conv(x)),1, dim=1) # split along the channel dimension
+                       
+        # processed information in the right center of bounding box from dimfull to dimless and reshaping
+        bx_dimfull = width_raw_image *(tx+ix)/n_width   # in (0,width_raw_image)
+        by_dimfull = height_raw_image*(ty+iy)/n_height  # in (0,height_raw_image)  
+        bw_dimfull = self.size_min + self.size_delta*tw # in (min_size,max_size)
+        bh_dimfull = self.size_min + self.size_delta*th # in (min_size,max_size)
+                
         return collections.namedtuple('z_where', 'prob bx_dimfull by_dimfull bw_dimfull bh_dimfull')._make(
-            [convert_to_box_list(logit_p), 
+            [convert_to_box_list(prob), 
              convert_to_box_list(bx_dimfull), 
              convert_to_box_list(by_dimfull), 
              convert_to_box_list(bw_dimfull), 

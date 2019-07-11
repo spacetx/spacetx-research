@@ -1,6 +1,7 @@
 # %load NON_MAX_SUPPRESSION/non_max_suppression.py
 import torch
 import collections
+import sys
 
 class Non_Max_Suppression(torch.nn.Module):
     """ Use Intersection_over_Union criteria to put most of the entries to zero while leaving few detection unchanged.
@@ -18,7 +19,6 @@ class Non_Max_Suppression(torch.nn.Module):
         super().__init__()
         self.p_threshold          = params['NMS.p_threshold']
         self.overlap_threshold    = params['NMS.overlap_threshold']
-        self.n_objects_max        = params['PRIOR.n_objects_max'] 
         self.randomize_nms_factor = params['REGULARIZATION.randomize_nms_factor']
         
     def unroll_and_compare(self,x,label):
@@ -61,7 +61,7 @@ class Non_Max_Suppression(torch.nn.Module):
     
     
     
-    def compute_nms_mask(self,z_where,randomize_nms_factor):
+    def compute_nms_mask(self,z_where,randomize_nms_factor,n_objects_max):
         """ Compute NMS mask """
         
         # # compute x1,x3,y1,y3
@@ -87,22 +87,28 @@ class Non_Max_Suppression(torch.nn.Module):
         chosen = torch.zeros((batch_size,n_boxes,1),device=score.device).float() # shape: batch x n_box x 1
     
         # Loop
-        for l in range(self.n_objects_max):     
+        for l in range(n_objects_max):     
         #while (possible != 0.0).any():
             #l=l+1
             #print("v3",l)
-            score_mask = cluster_mask*(score*possible)                      # shape: batch x n_box x n_box
-            index = torch.max(score_mask,keepdim=True,dim=-1)[1]            # shape: batch x n_box x 1
+            score_mask = cluster_mask*(score*possible)                  # shape: batch x n_box x n_box
+            index = torch.max(score_mask,keepdim=True,dim=-1)[1]        # shape: batch x n_box x 1
             chosen += possible.permute(0,2,1)*(idx == index).float()    # shape: batch x n_box x 1
             blocks = torch.sum(cluster_mask*chosen,keepdim=True,dim=-2) # shape: batch x 1 x n_box 
             possible *= (blocks==0).float()                             # shape: batch x 1 x n_box
+        
+        # check that I am returning a binary mask
+        unique = torch.unique(chosen, sorted=True, return_inverse=False, return_counts=False)
+        assert (unique == torch.arange(start=0,end=2,step=1, dtype=unique.dtype, device=unique.device)).all()
+        assert chosen.shape == (batch_size, n_boxes, 1)
         return chosen # shape: batch x n_box x 1
         
-    def forward(self,z_where,randomize_nms_factor):
-                
+    def forward(self,z_where,randomize_nms_factor,n_objects_max):        
+                    
         with torch.no_grad():
             # compute yolo mask
-            nms_mask = self.compute_nms_mask(z_where,randomize_nms_factor) 
+            nms_mask = self.compute_nms_mask(z_where,randomize_nms_factor,n_objects_max) 
+            
             
         # mask the probability according to the NMS
         p_masked = z_where.prob*nms_mask #shape batch_size x n_boxes x 1 
@@ -110,18 +116,32 @@ class Non_Max_Suppression(torch.nn.Module):
         
         with torch.no_grad():
             # select the top_k boxes by probability
-            batch_size,n_boxes = p_masked.shape[:2]
-            p_top_k, top_k_indeces = torch.topk(p_masked.squeeze(-1), k=min(self.n_objects_max,n_boxes), dim=-1, largest=True, sorted=True)
-            batch_size, k = top_k_indeces.shape 
+            p_masked_tmp = p_masked.squeeze(-1)  
+            batch_size, nboxes = p_masked_tmp.shape
+            k = min(n_objects_max,nboxes)
+            
+            p_tmp, top_k_indeces = torch.topk(p_masked_tmp, k=k, dim=-1, largest=True, sorted=True)
+            assert top_k_indeces.shape == (batch_size,k)
             batch_indeces = torch.arange(start=0,end=batch_size,step=1,
-                                         dtype=top_k_indeces.dtype,device=top_k_indeces.device).view(-1,1).expand(-1,k)
-            # Next two lines are just to check that I did not mess up the indeces resampling algebra
-            #p_top_k_v3 = p_masked[batch_indeces,top_k_indeces]
-            #assert((p_top_k == p_top_k_v3).all()) 
+                                         dtype=top_k_indeces.dtype,
+                                         device=top_k_indeces.device).view(-1,1).expand(-1,k)
+        
+        
+        try:
+            # Extract the top k probabilities in a differentiable way 
+            p_top_k = p_masked[batch_indeces,top_k_indeces]
+            # Next line is just to check that I did not mess up the indeces resampling algebra
+            assert((p_top_k == p_tmp.unsqueeze(-1)).all()) 
+        except:
+            print("p_top_k",p_top_k.shape,p_top_k[0])
+            print("p_tmp.unsqueeze(-1)",p_tmp.unsqueeze(-1).shape,p_tmp.unsqueeze(-1)[0])
+            print("batch_indeces",batch_indeces)
+            print("top_k_indeces",top_k_indeces)
+            exit()
             
         # package the output
         return collections.namedtuple('z_where', 'prob bx_dimfull by_dimfull bw_dimfull bh_dimfull')._make(
-                [p_masked[batch_indeces,top_k_indeces],
+                [p_top_k,
                  z_where.bx_dimfull[batch_indeces,top_k_indeces],
                  z_where.by_dimfull[batch_indeces,top_k_indeces],
                  z_where.bw_dimfull[batch_indeces,top_k_indeces],

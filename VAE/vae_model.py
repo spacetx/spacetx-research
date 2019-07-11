@@ -139,7 +139,7 @@ class Compositional_VAE(torch.nn.Module):
             return mask
         
         
-    def score_observations(self,box_dimfull,sigma_imgs,putative_imgs,putative_masks,original_imgs): 
+    def score_observations(self,z_where,sigma_imgs,putative_imgs,putative_masks,original_imgs): 
                
         # get the parameters 
         fg_mu    = pyro.param("fg_mu")
@@ -152,7 +152,7 @@ class Compositional_VAE(torch.nn.Module):
         
         # Resolve the conflict. Each pixel belongs to only one FG object.
         # Select the FG object with highest product of probability and mask value
-        p_inferred = box_dimfull.probs[...,None,None,None] #add 3 singletons for ch,width,height 
+        p_inferred = z_where.prob[...,None,None,None] #add 3 singletons for ch,width,height 
         mask_pixel_assignment = self.mask_argmin_argmax(putative_masks*p_inferred,"argmax") 
         
         # If a pixel does not belong to any object it belongs to the background
@@ -185,7 +185,7 @@ class Compositional_VAE(torch.nn.Module):
 
         
         # compute the regularizations
-        volume_box  = (box_dimfull.bw_dimfull*box_dimfull.bh_dimfull).squeeze(-1)
+        volume_box  = (z_where.bw_dimfull*z_where.bh_dimfull).squeeze(-1)
         volume_mask = torch.sum(putative_masks,dim=(-1,-2,-3))
         
         #- reg 1: MAKE SURE THAT THE MASK DOES NOT DISAPPEAR 
@@ -228,7 +228,7 @@ class Compositional_VAE(torch.nn.Module):
         Min_vol = torch.min(v1,v2)
         U = torch.clamp(0.2-(Intersection_vol/Min_vol),min=0)
         
-        p_j = box_dimfull.probs.detach().view(batch_size, 1, n_boxes)
+        p_j = z_where.prob.detach().view(batch_size, 1, n_boxes)
                 
         reg_overlap_mask = torch.sum(0.5*mask_diagonal*U*p_j,dim=-1)
         
@@ -276,7 +276,8 @@ class Compositional_VAE(torch.nn.Module):
             #--------------------------#          
             z_nms = self.inference.forward(imgs,
                                            p_corr_factor=self.p_corr_factor,
-                                           randomize_nms_factor = self.randomize_nms_factor)
+                                           randomize_nms_factor = self.randomize_nms_factor,
+                                           n_objects_max = self.n_objects_max)
 
             with pyro.plate("n_objects", self.n_objects_max, dim =-1 ):
                      
@@ -363,8 +364,8 @@ class Compositional_VAE(torch.nn.Module):
                 #------------------------#
                 
                 #- Trick to get the value of p from the inference 
-                one   = torch.ones(1,dtype=imgs.dtype,device=imgs.device)
-                probs = pyro.sample("prob_object",NullScoreDistribution_Unit()).to(one.device)
+                one  = torch.ones(1,dtype=imgs.dtype,device=imgs.device)
+                prob = pyro.sample("prob_object",NullScoreDistribution_Unit()).to(one.device)
 
                 #- Z_WHERE 
                 c          = pyro.sample("presence_object",dist.Bernoulli(probs=0.5*one))                    
@@ -372,6 +373,8 @@ class Compositional_VAE(torch.nn.Module):
                 by_dimfull = pyro.sample("by_dimfull",dist.Uniform(0,width*one).expand([1]).to_event(1))
                 bw_dimfull = pyro.sample("bw_dimfull",dist.Uniform(self.size_min*one,self.size_max).expand([1]).to_event(1))
                 bh_dimfull = pyro.sample("bh_dimfull",dist.Uniform(self.size_min*one,self.size_max).expand([1]).to_event(1))
+                z_where = collections.namedtuple('z_where', 'prob bx_dimfull by_dimfull bw_dimfull bh_dimfull')._make(
+                                                    [prob, bx_dimfull,by_dimfull,bw_dimfull,bh_dimfull])
                 
                 #- Z_WHAT, Z_WHERE 
                 z_what = pyro.sample("z_what",dist.Normal(0,self.width_zwhat*one).expand([self.Zwhat_dim]).to_event(1)) 
@@ -380,18 +383,15 @@ class Compositional_VAE(torch.nn.Module):
                 #------------------------------#
                 # 2. Run the generative model -#
                 #------------------------------#
-                box_dimfull = collections.namedtuple('box_dimfull', 'probs bx_dimfull by_dimfull bw_dimfull bh_dimfull')._make(
-                                                    [probs,bx_dimfull,by_dimfull,bw_dimfull,bh_dimfull])
                 
-
                 if(len(z_mask.shape) == 4 and z_mask.shape[0] == 2):
                     # This means that I have an extra enumerate dimension in front to account for box being ON/OFF.
                     # I need to reconstruct the image only if the box is ON therefore I pass z_mask[1], z_what[1]
-                    putative_masks           = self.generator_masks.forward(box_dimfull,z_mask[1],width,height)
-                    putative_imgs,sigma_imgs = self.generator_imgs.forward(box_dimfull,z_what[1],width,height) 
+                    putative_masks           = self.generator_masks.forward(z_where,z_mask[1],width,height)
+                    putative_imgs,sigma_imgs = self.generator_imgs.forward(z_where,z_what[1],width,height) 
                 elif(len(z_mask.shape) == 3):
-                    putative_masks           = self.generator_masks.forward(box_dimfull,z_mask,width,height)
-                    putative_imgs,sigma_imgs = self.generator_imgs.forward(box_dimfull,z_what,width,height) 
+                    putative_masks           = self.generator_masks.forward(z_where,z_mask,width,height)
+                    putative_imgs,sigma_imgs = self.generator_imgs.forward(z_where,z_what,width,height) 
                 
                 assert putative_masks.shape == (batch_size,self.n_objects_max,1,width,height)
                 assert putative_imgs.shape  == (batch_size,self.n_objects_max,ch,width,height)
@@ -399,7 +399,7 @@ class Compositional_VAE(torch.nn.Module):
                                 
                     
                 if(observed):
-                    logp,reg = self.score_observations(box_dimfull,sigma_imgs,putative_imgs,putative_masks,imgs)
+                    logp,reg = self.score_observations(z_where,sigma_imgs,putative_imgs,putative_masks,imgs)
                     
                     # PUT EVERYTHING TOGETHER TO COMPUTE THE LOSS:
                     # Note that putting the regularization into the common logp term 
@@ -437,7 +437,8 @@ class Compositional_VAE(torch.nn.Module):
             
             z_nms = self.inference.forward(original_image,
                                            p_corr_factor=self.p_corr_factor,
-                                           randomize_nms_factor = self.randomize_nms_factor)
+                                           randomize_nms_factor = self.randomize_nms_factor,
+                                           n_objects_max = self.n_objects_max)
 
             #--------------------------------#
             #--- 2. Run the model forward ---#
@@ -453,7 +454,10 @@ class Compositional_VAE(torch.nn.Module):
         
             #---------------------------------#
             #--- 3. Score the model ----------#
-            #---------------------------------#            
+            #---------------------------------#    
+            print("z_nms.z_where.prob.shape",z_nms.z_where.prob.shape)
+            print("putative_imgs.shape",putative_imgs.shape)
+            
             logp,reg = self.score_observations(z_nms.z_where,sigma_imgs,putative_imgs,putative_masks,original_image)
         
             #---------------------------------#
