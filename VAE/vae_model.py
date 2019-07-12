@@ -152,7 +152,7 @@ class Compositional_VAE(torch.nn.Module):
         
         # Resolve the conflict. Each pixel belongs to only one FG object.
         # Select the FG object with highest product of probability and mask value
-        p_inferred = z_where.prob[...,None,None,None] #add 3 singletons for ch,width,height 
+        p_inferred = z_where.prob[...,None,None] #add 2 singletons for width,height 
         mask_pixel_assignment = self.mask_argmin_argmax(putative_masks*p_inferred,"argmax") 
         
         # If a pixel does not belong to any object it belongs to the background
@@ -374,7 +374,8 @@ class Compositional_VAE(torch.nn.Module):
                 bw_dimfull = pyro.sample("bw_dimfull",dist.Uniform(self.size_min*one,self.size_max).expand([1]).to_event(1))
                 bh_dimfull = pyro.sample("bh_dimfull",dist.Uniform(self.size_min*one,self.size_max).expand([1]).to_event(1))
                 z_where = collections.namedtuple('z_where', 'prob bx_dimfull by_dimfull bw_dimfull bh_dimfull')._make(
-                                                    [prob, bx_dimfull,by_dimfull,bw_dimfull,bh_dimfull])
+                                                    [prob.unsqueeze(-1), bx_dimfull,by_dimfull,bw_dimfull,bh_dimfull])
+                                                # Note unsqueeze(-1) so that all tensors have shape: batch x nboxes x latent_dim 
                 
                 #- Z_WHAT, Z_WHERE 
                 z_what = pyro.sample("z_what",dist.Normal(0,self.width_zwhat*one).expand([self.Zwhat_dim]).to_event(1)) 
@@ -455,9 +456,6 @@ class Compositional_VAE(torch.nn.Module):
             #---------------------------------#
             #--- 3. Score the model ----------#
             #---------------------------------#    
-            print("z_nms.z_where.prob.shape",z_nms.z_where.prob.shape)
-            print("putative_imgs.shape",putative_imgs.shape)
-            
             logp,reg = self.score_observations(z_nms.z_where,sigma_imgs,putative_imgs,putative_masks,original_image)
         
             #---------------------------------#
