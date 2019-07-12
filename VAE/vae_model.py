@@ -208,11 +208,15 @@ class Compositional_VAE(torch.nn.Module):
             volume_box_min = torch.tensor(self.size_min*self.size_min, device=volume_mask.device, dtype=volume_mask.dtype)
             volume_min     = torch.max(volume_mask,volume_box_min)
         reg_small_box_size = (volume_box/volume_min - 1.0)**2
+        if(torch.isnan(reg_small_box_size).any()):
+            print("WARNINGS reg_small_box_size is Nan",reg_small_box_size)
         
         #- reg 3: MASK VOLUME SHOULD BE BETWEEN MIN and MAX
         tmp_volume_absolute = torch.clamp((self.volume_mask_min-volume_mask)/self.volume_mask_expected,min=0) + \
                               torch.clamp((volume_mask-self.volume_mask_max)/self.volume_mask_expected,min=0)
         reg_mask_volume_absolute = (50*tmp_volume_absolute).pow(2)
+        if(torch.isnan(reg_mask_volume_absolute).any()):
+            print("WARNINGS reg_mask_volume_absolute is Nan",reg_mask_volume_absolute)
         
         #- reg 4: MASK SHOULD NOT OVERLAP ---------------#
         #- This is the only INTERACTION term which will be treated in MEAN FIELD
@@ -231,6 +235,13 @@ class Compositional_VAE(torch.nn.Module):
         p_j = z_where.prob.detach().view(batch_size, 1, n_boxes)
                 
         reg_overlap_mask = torch.sum(0.5*mask_diagonal*U*p_j,dim=-1)
+        if(torch.isnan(reg_overlap_mask).any()):
+            print("WARNINGS reg_overlap_mask is Nan",reg_overlap_mask)
+    
+        # for debug
+        #reg_small_box_size=torch.zeros_like(reg_mask_volume_fraction)
+        #reg_mask_volume_absolute=torch.zeros_like(reg_mask_volume_fraction)
+        #reg_overlap_mask=torch.zeros_like(reg_mask_volume_fraction)
         
         # package the regularizations
         regularizations = collections.namedtuple('reg', "small_box_size mask_volume_fraction mask_volume_absolute overlap_mask")._make(

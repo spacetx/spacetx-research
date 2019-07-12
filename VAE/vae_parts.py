@@ -95,6 +95,15 @@ class Inference(torch.nn.Module):
         
         # UNET
         z_where_all = self.unet.forward(imgs_in,verbose=False)
+        
+        # CHECK
+        try:
+            assert torch.max(z_where_all.prob) <= 1.0
+            assert torch.min(z_where_all.prob) >= 0.0
+        except:
+            print("JUST AFTER UNET")
+            print(z_where_all.prob)
+            exit()
        
         # ANNEAL THE PROBABILITIES IF NECESSARY
         if(p_corr_factor>0):
@@ -106,10 +115,21 @@ class Inference(torch.nn.Module):
                 #p_approx = tmp
                 p_approx = tmp.pow(10) #this is to make p_approx even more peaked
                 
+                # CHECK
+                try:
+                    assert torch.max(p_approx) <= 1.0
+                    assert torch.min(p_approx) >= 0.0
+                except:
+                    print("inside annel probabilities")
+                    print(p_approx.shape)
+                    print(p_approx)
+                    exit()
+                
             # weighted average of the prob by the inference netwrok and probs by the comulative 
             new_p = (1-p_corr_factor)*z_where_all.prob+p_corr_factor*p_approx
             z_where_all = z_where_all._replace(prob=new_p)
-        
+            
+
         # CHECK
         try:
             assert torch.max(z_where_all.prob) <= 1.0
