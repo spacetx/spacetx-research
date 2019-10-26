@@ -8,30 +8,36 @@ class Cropper(torch.nn.Module):
     
     def __init__(self, params: dict):
         super().__init__()
-        self.cropped_width  = params['SD.width']
+        self.cropped_width = params['SD.width']
         self.cropped_height = params['SD.width']
         
-    def forward(self,z_where,uncropped_imgs):
-        batch_size,ch,width_raw,height_raw = uncropped_imgs.shape
-       
-        # Compute the affine matrix
-        affine_matrix = self.compute_affine_cropper(z_where,width_raw,height_raw) 
+    def forward(self, z_where=None, uncropped_imgs=None):
 
-        # Add an index for the n_boxes and extend it.
-        with torch.no_grad():
-            N = affine_matrix.shape[0]
-            n_boxes = int(N/batch_size)
-        uncropped_imgs = uncropped_imgs.unsqueeze(1).expand(-1,n_boxes,-1,-1,-1).contiguous().view(N,ch,width_raw,height_raw)
-                
-        # Create grid to sample the input at all the location necessary for the output
-        cropped_images = torch.zeros((N,ch,self.cropped_width,self.cropped_height),
-                                    dtype=uncropped_imgs.dtype,device=uncropped_imgs.device)  
-        grid = F.affine_grid(affine_matrix, cropped_images.shape) 
-        cropped_images = F.grid_sample(uncropped_imgs, grid, mode='bilinear', padding_mode='reflection')         
-        return cropped_images.view(batch_size,n_boxes,ch,self.cropped_width,self.cropped_height)
-        
-        
-    def compute_affine_cropper(self,z_where,width_raw,height_raw):
+        # Prepare the shapes
+        assert len(uncropped_imgs.shape) == 4  # batch, ch, width, height
+        ch, width_raw, height_raw = uncropped_imgs.shape[-3:]
+        large_dependent_dim = list(uncropped_imgs.shape[-3:])  # ch, width, height
+        small_dependent_dim = [ch, self.cropped_width, self.cropped_height]
+
+        # Compute the affine matrix
+        affine = self.compute_affine_cropper(z_where, width_raw, height_raw)  # shape: independent_dim, 2, 3
+        independent_dim = list(affine.shape[:-2])  # this extract n_boxes, batch
+
+        # The cropped and uncropped imgs have:
+        # a. same independent dimension (boxes, batch)
+        # b. same channels
+        # c. different width and height
+        #  Note that I replicate the uncropped image n_boxes times
+        uncropped_imgs = uncropped_imgs.unsqueeze(1).expand(independent_dim +
+                                                            large_dependent_dim).reshape([-1] + large_dependent_dim)
+        cropped_images = torch.zeros(independent_dim + small_dependent_dim, dtype=uncropped_imgs.dtype,
+                                     device=uncropped_imgs.device).view([-1] + small_dependent_dim)
+        grid = F.affine_grid(affine.view(-1, 2, 3), cropped_images.shape)
+        cropped_images = F.grid_sample(uncropped_imgs, grid, mode='bilinear', padding_mode='reflection')
+        return cropped_images.view(independent_dim + small_dependent_dim)
+
+    @staticmethod
+    def compute_affine_cropper(z_where, width_raw, height_raw):
         """ Source is UNCROPPED (large) image
             Target is CROPPED (small) image.
             
@@ -49,47 +55,49 @@ class Cropper(torch.nn.Module):
             c. sx = bw_dimfull/WIDTH
             d. sy = bh_dimfull/HEIGHT
         """ 
-        kx = (-1.0+2*z_where.bx_dimfull/width_raw).view(-1,1)
-        ky = (-1.0+2*z_where.by_dimfull/height_raw).view(-1,1)
-        sx = (z_where.bw_dimfull/width_raw).view(-1,1)
-        sy = (z_where.bh_dimfull/height_raw).view(-1,1)
+        kx = (-1.0+2*z_where.bx_dimfull/width_raw)
+        ky = (-1.0+2*z_where.by_dimfull/height_raw)
+        sx = (z_where.bw_dimfull/width_raw)
+        sy = (z_where.bh_dimfull/height_raw)
         zero = torch.zeros_like(kx)
-        
-        # old version (slow)
-        #affine = torch.cat((zero,sy,sx,ky,kx), dim=-1)
-        #indeces_resampling = torch.LongTensor([1, 0, 3, 0, 2, 4]).to(affine.device) # indeces to sample: sx,0,kx,0,sy,ky
-        #old = torch.index_select(affine, 1, indeces_resampling).view(-1,2,3) 
-    
-        # newer version is equivalent and faster
-        return torch.cat((sy,zero,ky,zero,sx,kx),dim=-1).view(-1,2,3)
+
+        affine = torch.cat((sy, zero, ky, zero, sx, kx), dim=-1).view(list(kx.shape[:-1]) + [2, 3])
+        return affine.view(list(kx.shape[:-1]) + [2, 3])
 
     
 class Uncropper(torch.nn.Module):
     """ Use STN to uncrop the original images according to z_where. """
     
-    def __init__(self, params: dict):
-        super().__init__()      
+    def __init__(self):
+        super().__init__()
 
-    def forward(self,z_where,cropped_imgs,width_raw,height_raw):
-        batch_size,ch,cropped_width,cropped_height = cropped_imgs.shape
-       
-        # Compute the affine matrix
-        affine_matrix = self.compute_affine_uncropper(z_where,width_raw,height_raw) 
-        assert(affine_matrix.shape[0] == batch_size)
+    def forward(self, z_where=None, small_stuff=None, width_big=None, height_big=None):
+
+        # Check and prepare the sizes
+        ch = small_stuff.shape[-3]  # this is the channels
+        independent_dim = list(small_stuff.shape[:-3])  # this includes: boxes, batch
+        small_dependent_dim = list(small_stuff.shape[-3:])  # this includes: ch, small_width, small_height
+        large_dependent_dim = [ch, width_big, height_big]  # these are the dependent dimensions
+
+        # Compute the affine matrix. Note that z_where has only independent dimensions
+        affine_matrix = self.compute_affine_uncropper(z_where, width_big, height_big)
+        assert affine_matrix.shape == torch.Size(independent_dim + [2,3])
+
 
         # The cropped and uncropped imgs have:
-        # a. same batch and channel dimension
-        # b. different width and height
-        uncropped_imgs = torch.zeros((batch_size,ch,width_raw,height_raw),
-                                    dtype=cropped_imgs.dtype,device=cropped_imgs.device)          
-        grid = F.affine_grid(affine_matrix, uncropped_imgs.shape) 
-        uncropped_imgs = F.grid_sample(cropped_imgs, grid, mode='bilinear', padding_mode='zeros')  
-        
-        # unbox the first two dimensions and return
-        n1,n2 = z_where.bx_dimfull.shape[:2]
-        return uncropped_imgs.view(n1,n2,ch,width_raw,height_raw) 
-  
-    def compute_affine_uncropper(self,z_where,width_raw,height_raw):
+        # a. same independent dimension (enumeration, boxes, batch)
+        # b. same channels
+        # c. different width and height
+        uncropped_stuff = torch.zeros(independent_dim + large_dependent_dim,
+                                      dtype=small_stuff.dtype,
+                                      device=small_stuff.device).view([-1] + large_dependent_dim)
+        grid = F.affine_grid(affine_matrix.view(-1, 2, 3), uncropped_stuff.shape)
+        uncropped_stuff = F.grid_sample(small_stuff.view([-1] + small_dependent_dim), grid,
+                                        mode='bilinear', padding_mode='zeros')
+        return uncropped_stuff.view(independent_dim + large_dependent_dim)
+
+    @staticmethod
+    def compute_affine_uncropper(z_where, width_raw, height_raw):
         """ Source is CROPPED (small) image
             Target is UNCROPPED (large) image.
             
@@ -107,16 +115,11 @@ class Uncropper(torch.nn.Module):
             c. sx = WIDTH/bw_dimfull
             d. sy = HEIGHT/bh_dimfull
         """ 
-        kx = ((width_raw-2*z_where.bx_dimfull)/z_where.bw_dimfull).view(-1,1)
-        ky = ((height_raw-2*z_where.by_dimfull)/z_where.bh_dimfull).view(-1,1)
-        sx = (width_raw/z_where.bw_dimfull).view(-1,1)
-        sy = (height_raw/z_where.bh_dimfull).view(-1,1)
-        zero = torch.zeros_like(kx)    
-        
-        #old version (slow)
-        #affine = torch.cat((zero,sy,sx,ky,kx), dim=-1)
-        #indeces_resampling = torch.LongTensor([1, 0, 3, 0, 2, 4]).to(affine.device) # indeces to sample: sx,0,kx,0,sy,ky
-        #old = torch.index_select(affine, 1, indeces_resampling).view(-1,2,3) 
+        kx = ((width_raw-2*z_where.bx_dimfull)/z_where.bw_dimfull)
+        ky = ((height_raw-2*z_where.by_dimfull)/z_where.bh_dimfull)
+        sx = (width_raw/z_where.bw_dimfull)
+        sy = (height_raw/z_where.bh_dimfull)
+        zero = torch.zeros_like(kx)
 
-        # newer version is equivalent and faster
-        return torch.cat((sy,zero,ky,zero,sx,kx),dim=-1).view(-1,2,3)
+        affine = torch.cat((sy, zero, ky, zero, sx, kx), dim=-1)
+        return affine.view(list(kx.shape[:-1]) + [2, 3])

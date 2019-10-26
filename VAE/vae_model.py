@@ -24,9 +24,8 @@ class Compositional_VAE(torch.nn.Module):
     
     def reset(self):
         reset_parameters(self.inference)
-        reset_parameters(self.generator_imgs)
-        reset_parameters(self.generator_masks)
-        
+        reset_parameters(self.generator)
+
     def save_everything(self,root_dir,name):
     
         # pyro params
@@ -74,9 +73,8 @@ class Compositional_VAE(torch.nn.Module):
         
         # Instantiate the encoder and decoder
         self.inference = Inference(params)
-        self.generator_imgs  = Imgs_Generator(params)
-        self.generator_masks = Masks_Generator(params)
- 
+        self.generator = Generator(params)
+
         #-------------------------#
         #--- Global Parameters ---#
         #-------------------------#
@@ -331,8 +329,7 @@ class Compositional_VAE(torch.nn.Module):
         #-----------------------#
         
         # register the modules 
-        pyro.module("generator_imgs",  self.generator_imgs)
-        pyro.module("generator_masks", self.generator_masks)
+        pyro.module("generator",  self.generator)
 
         # register the parameters of the distribution used to score the results
         bg_mu        = pyro.param("bg_mu", 0.1*one, constraint=constraints.unit_interval)
@@ -372,20 +369,21 @@ class Compositional_VAE(torch.nn.Module):
                 #------------------------------#
                 box_dimfull = collections.namedtuple('box_dimfull', 'bx_dimfull by_dimfull bw_dimfull bh_dimfull')._make(
                                                     [bx_dimfull,by_dimfull,bw_dimfull,bh_dimfull])
-                
-                putative_imgs  = self.generator_imgs.forward(box_dimfull,z_what,width,height) 
-                putative_masks = self.generator_masks.forward(box_dimfull,z_mask,width,height)
-                
+
+                generated = self.generator(z_where=box_dimfull,
+                                           z_what=z_what,
+                                           z_mask=z_mask,
+                                           width_raw=width,
+                                           height_raw=height)
+                putative_imgs = generated.big_mu_sigmoid
+                putative_masks = generated.big_w_sigmoid
+
                 # Resolve the conflict. Each pixel belongs to only one FG object
                 # If a pixel does not belong to any object it belongs to the background
                 mask_pixel_assignment = self.mask_argmin_argmax(putative_masks,"argmax") 
                 #mask_pixel_assignment = self.mask_argmin_argmax(putative_masks*p_inferred[...,None,None,None],"argmax") 
                 definitely_bg_mask = (torch.sum(mask_pixel_assignment,dim=-4,keepdim=True) == 0.0) 
                 
-                # sample the background 
-                background_sample = torch.clamp(dist.Cauchy(bg_mu,bg_sigma).expand(imgs.shape).sample(),min=0.0,max=1.0)
-
-                    
                 if(observed):
                     logp,reg = self.score_observations(box_dimfull,putative_imgs,putative_masks,
                                                        mask_pixel_assignment,definitely_bg_mask,imgs)
@@ -399,9 +397,6 @@ class Compositional_VAE(torch.nn.Module):
                     log_prob_ZWHAT = getattr(self,'LOSS_ZWHAT',0.0)*torch.stack((logp.logp_off,logp.logp_on_normal-total_reg),dim=-1) 
 
                     pyro.sample("LOSS", Indicator(log_probs=log_prob_ZMASK+log_prob_ZWHAT), obs = c)
-                    
-                return putative_imgs,putative_masks,background_sample,c
-    
 
     def reconstruct_img(self,original_image,bounding_box=False):
         if(self.use_cuda):
@@ -480,31 +475,3 @@ class Compositional_VAE(torch.nn.Module):
         # Transform np to torch, rescale from [0,255] to (0,1) 
         batch_bb_torch = torch.from_numpy(batch_bb_np).permute(0,3,2,1).float()/255 # permute(0,3,2,1) is CORRECT
         return batch_bb_torch.to(p.device)   
-           
-    def generate_synthetic_data(self, N=100):
-        
-        # prepare the storage 
-        putative_imgs,putative_masks,background,c = self.model()
-        assert putative_masks.shape[-2:] == background.shape[-2:] == putative_imgs.shape[-2:] # width, height are the same
-        batch_size, n_boxes, ch, width, height = putative_imgs.shape
-        synthetic_data = torch.zeros((N, ch, width, height), 
-                                     dtype=torch.float32, 
-                                     device='cpu', 
-                                     requires_grad=False) 
-            
-        # loop to generate the images
-        l = 0 
-        while (l<N):         
-            
-            # generate the images and mask
-            putative_imgs,putative_masks,background,c = self.model()
-            box_is_active = (c == 1).float()[...,None,None,None] # add singleton for ch,width,height 
-            imgs_prior = torch.sum((box_is_active*putative_imgs),dim=-4) + background
-            
-            # Compute left and right indeces
-            r = min(l+batch_size,N)
-            d = r-l           
-            synthetic_data[l:r,:,:,:]=imgs_prior[0:d,:,:,:].detach().cpu()
-            l = r
-            
-        return torch.clamp(synthetic_data,min=0.0, max=1.0)
