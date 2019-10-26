@@ -33,10 +33,14 @@ class EncoderConv(torch.nn.Module):
 
     def forward(self, x):
 
-        independent_dim = list(x.shape[:-3])  # this includes: n_boxes, batch
+        independent_dim = list(x.shape[:-3])  # this might includes: enumeration, n_boxes, batch_size
         dependent_dim = list(x.shape[-3:])  # this includes: ch, width, height
 
         x1 = x.view([-1] + dependent_dim)  # flatten the independent dimensions
-        x2 = self.conv(x1).view(independent_dim + [-1])  # flatten the dependent dimensions
+        x2 = self.conv(x1)
+        assert (64, 7, 7) == x2.shape[-3:]
+        x3 = x2.view(-1, 64*7*7)  # flatten the dependent dimension
 
-        return self.result(z_mu=self.compute_mu(x2), z_std=F.softplus(self.compute_std(x2)))
+        return self.result(z_mu=self.compute_mu(x3).view(independent_dim + [self.dim_z]),
+                           z_std=F.softplus(self.compute_std(x3)).view(independent_dim + [self.dim_z]))
+    

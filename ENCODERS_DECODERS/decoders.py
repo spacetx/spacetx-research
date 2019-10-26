@@ -2,6 +2,7 @@ import torch
 import collections
 import torch.nn.functional as F
 
+
 class DecoderConv(torch.nn.Module):
     """ Decode z -> x
         INPUT:  z of shape: batch x dim_z 
@@ -26,6 +27,10 @@ class DecoderConv(torch.nn.Module):
     def forward(self, z):
         assert z.shape[-1] == self.dim_z
         independent_dim = list(z.shape[:-1])
-        x0 = z.view(-1, self.dim_z)
-        x1 = self.upsample(x0).view(-1, 64, 7, 7)
-        return self.decoder(x1).view(independent_dim + [self.ch_out, self.width, self.width])
+        x1 = self.upsample(z)
+        assert x1.shape == torch.Size(independent_dim + [64*7*7])
+        x2 = x1.view(-1, 64, 7, 7)
+        x3 = self.decoder(x2)
+        assert (self.ch_out, self.width, self.width) == x3.shape[-3:]
+        return x3.view(independent_dim + [self.ch_out, self.width, self.width])
+    
