@@ -25,12 +25,20 @@ class DecoderConv(torch.nn.Module):
         )
 
     def forward(self, z):
+        #assert z.shape[-1] == self.dim_z
+        #independent_dim = list(z.shape[:-1])
+        #x1 = self.upsample(z)
+        #assert x1.shape == torch.Size(independent_dim + [64*7*7])
+        #x2 = x1.view(-1, 64, 7, 7)
+        #x3 = self.decoder(x2)
+        #assert (self.ch_out, self.width, self.width) == x3.shape[-3:]
+        #return x3.view(independent_dim + [self.ch_out, self.width, self.width])
+
         assert z.shape[-1] == self.dim_z
         independent_dim = list(z.shape[:-1])
-        x1 = self.upsample(z)
-        assert x1.shape == torch.Size(independent_dim + [64*7*7])
-        x2 = x1.view(-1, 64, 7, 7)
-        x3 = self.decoder(x2)
-        assert (self.ch_out, self.width, self.width) == x3.shape[-3:]
-        return x3.view(independent_dim + [self.ch_out, self.width, self.width])
+        dependent_dim = [self.ch_out, self.width, self.width]
+        x1 = self.upsample(z.view(-1, self.dim_z)).view(-1, 64, 7, 7)
+        x2 = self.decoder(x1)
+        assert x2.shape[-3:] == torch.Size(dependent_dim)
+        return x2.view(independent_dim + dependent_dim)
     
