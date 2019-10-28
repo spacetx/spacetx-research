@@ -16,127 +16,131 @@ class Non_Max_Suppression(torch.nn.Module):
 
     def __init__(self,params: dict):
         super().__init__()
-        self.p_threshold       = params['NMS.p_threshold']
-        self.overlap_threshold = params['NMS.overlap_threshold']
-        self.n_max_object      = params['PRIOR.n_max_objects'] 
-        
-    def unroll_and_compare(self,x,label):
-        """ Given a vector of size: batch x n_boxes 
-            it creates a matrix of size: batch x n_boxes x n_boxes 
-            obtained by comparing all vecotr entries with all other vector entries 
-            The comparison is either: MIN,MAX,GE,GT,LE,LT,EQ  """
-        assert len(x.shape) == 2
-        batch_size,nbox = x.shape
-        tmp_A = x.view(batch_size,1,nbox).expand(-1,nbox,nbox)
-        tmp_B = x.view(batch_size,nbox,1).expand(-1,nbox,nbox)
-        if(label=="MAX"):
-            return torch.max(tmp_A,tmp_B)
-        elif(label=="MIN"):
-            return torch.min(tmp_A,tmp_B)
-        elif(label=="GE"):
-            return (tmp_A >= tmp_B)
-        elif(label=="GT"):
-            return (tmp_A > tmp_B)
-        elif(label=="LE"):
-            return (tmp_A <= tmp_B)
-        elif(label=="LT"):
-            return (tmp_A < tmp_B)
-        elif(label=="EQ"):
-            return (tmp_A == tmp_B)
-        else:
-            raise Exception("label is unknown. It is ",label)
+        self.score_threshold       = params['NMS.score_threshold']
 
-    def compute_intersection_over_min_area(self,x1,x3,y1,y3,area):
-        """ compute the matrix of shape: batch x n_boxes x n_boxes with the Intersection Over Unions """
-       
-        min_area = self.unroll_and_compare(area,"MIN") #min of area between box1 and box2
-        xi1 = self.unroll_and_compare(x1,"MAX") #max of x1 between box1 and box2
-        yi1 = self.unroll_and_compare(y1,"MAX") #max of y1 between box1 and box2
-        xi3 = self.unroll_and_compare(x3,"MIN") #min of x3 between box1 and box2
-        yi3 = self.unroll_and_compare(y3,"MIN") #min of y3 between box1 and box2
-        
-        intersection_area = torch.clamp(xi3-xi1,min=0)*torch.clamp(yi3-yi1,min=0) 
-        return intersection_area/min_area
-    
-    
-    
-    def compute_nms_mask(self,z_where):
-        """ Compute NMS mask """
-        
-        # # compute x1,x3,y1,y3
-        x1    = (z_where.bx_dimfull - 0.5*z_where.bw_dimfull).squeeze(-1)
-        x3    = (z_where.bx_dimfull + 0.5*z_where.bw_dimfull).squeeze(-1)
-        y1    = (z_where.by_dimfull - 0.5*z_where.bh_dimfull).squeeze(-1)
-        y3    = (z_where.by_dimfull + 0.5*z_where.bh_dimfull).squeeze(-1)
-        area  = (z_where.bw_dimfull * z_where.bh_dimfull).squeeze(-1)
-        batch_size, n_boxes = x1.shape
-        
-        # computes the overlap measure, this is O(N^2) algorithm
-        # Note that cluster_mask is of size: (batch x n_boxes x n_boxes) ans has entry 0.0 or 1.0
-        overlap_measure = self.compute_intersection_over_min_area(x1,x3,y1,y3,area) # shape: batch x n_box x n_box
-        cluster_mask = (overlap_measure > self.overlap_threshold).float()           # shape: batch x n_box x n_box
-            
-        # This is the NON-MAX-SUPPRESSION algorithm:
-        # Preparation
-        p_raw = z_where.prob.view(batch_size, 1, n_boxes)
-        possible  = (p_raw > self.p_threshold).float() # # shape: batch x 1 x n_box, chosen objects must have p > p_threshold
-        idx = torch.arange(start=0,end=n_boxes,step=1,device=p_raw.device).view(1,n_boxes,1).long()
-        chosen = torch.zeros((batch_size,n_boxes,1),device=p_raw.device).float()
-    
+    @staticmethod
+    def perform_nms_selection(mask_overlap, score, possible, n_objects_max):
+        """ Input:
+            mask_overlap: n x n x batch
+            score: n x batch
+            possible: n x batch
+            n_objects_max: integer
+            Output: n x batch
+
+            It assumes score >= 0.0
+        """
+
+        # check input formats
+        assert len(mask_overlap.shape) == 3
+        n_boxes, n_boxes, batch_size = mask_overlap.shape
+        assert score.shape == (n_boxes, batch_size)
+        assert possible.shape == (n_boxes, batch_size)
+
+        # reshape
+        score = score.unsqueeze(0)                                                     # 1 x n_box x batch
+        possible = possible.unsqueeze(0)                                               # 1 x n_box x batch
+        idx = torch.arange(start=0, end=n_boxes, step=1,
+                           device=score.device).view(n_boxes, 1, 1).long()             # n_box x 1 x 1
+        selected = torch.zeros((n_boxes, 1, batch_size), device=score.device).float()  # n_box x 1 x batch
+
         # Loop
-        for l in range(self.n_max_object):     
-        #while (possible != 0.0).any():
-            #l=l+1
-            #print("v3",l)
-            p_mask = cluster_mask*(p_raw*possible)                      # shape: batch x n_box x n_box
-            index = torch.max(p_mask,keepdim=True,dim=-1)[1]            # shape: batch x n_box x 1
-            chosen += possible.permute(0,2,1)*(idx == index).float()    # shape: batch x n_box x 1
-            blocks = torch.sum(cluster_mask*chosen,keepdim=True,dim=-2) # shape: batch x 1 x n_box 
-            possible *= (blocks==0).float()                             # shape: batch x 1 x n_box
-        return chosen    
-        
-    def forward(self,z_where):
-                
-        with torch.no_grad():
-            # compute yolo mask
-            nms_mask = self.compute_nms_mask(z_where) 
-            
-        # mask the probability according to the NMS
-        p_masked = z_where.prob*nms_mask #shape batch_size x n_boxes x 1 
-        
-        
-        with torch.no_grad():
-            # select the top_k boxes by probability
-            batch_size,n_boxes = p_masked.shape[:2]
-            p_top_k, top_k_indeces = torch.topk(p_masked.squeeze(-1), k=min(self.n_max_object,n_boxes), dim=-1, largest=True, sorted=True)
-            batch_size, k = top_k_indeces.shape 
-            batch_indeces = torch.arange(start=0,end=batch_size,step=1,
-                                         dtype=top_k_indeces.dtype,device=top_k_indeces.device).view(-1,1).expand(-1,k)
-            # Next two lines are just to check that I did not mess up the indeces resampling algebra
-            #p_top_k_v3 = p_masked[batch_indeces,top_k_indeces]
-            #assert((p_top_k == p_top_k_v3).all()) 
-            
+        for l in range(n_objects_max):  # you never need more than n_objects_max proposals
+            score_mask = mask_overlap*(score*possible)                       # n_box x n_box x batch
+            index = torch.max(score_mask, keepdim=True, dim=-2)[1]           # n_box x 1 x batch
+            selected += possible.permute(1, 0, 2)*(idx == index).float()     # n_box x 1 x batch
+            blocks = torch.sum(mask_overlap*selected, keepdim=True, dim=-3)  # 1 x n_box x batch
+            possible *= (blocks == 0).float()                                # 1 x n_box x batch
+
+        # return
+        return selected.squeeze(-2)  # shape: n_box x batch
+
+
+    @staticmethod
+    def unroll_and_compare(x, label):
+        """ Given a vector of size: batch x n_boxes
+        it creates a matrix of size: batch x n_boxes x n_boxes
+        obtained by comparing all vecotr entries with all other vector entries
+        The comparison is either: MIN,MAX """
+        assert len(x.shape) == 2
+        n_box, batch_size = x.shape
+        tmp_a = x.view(1, n_box, batch_size)
+        tmp_b = x.view(n_box, 1, batch_size)
+        if label == "MAX":
+            return torch.max(tmp_a, tmp_b)
+        elif label == "MIN":
+            return torch.min(tmp_a, tmp_b)
+        else:
+            raise Exception("label is unknown. It is ", label)
+
+    def compute_box_intersection_over_min_area(self, z_where=None):
+        """ compute the matrix of shape: batch x n_boxes x n_boxes with the Intersection Over Unions """
+
+        # compute x1,x3,y1,y3
+        x1 = (z_where.bx_dimfull - 0.5 * z_where.bw_dimfull).squeeze(-1)
+        x3 = (z_where.bx_dimfull + 0.5 * z_where.bw_dimfull).squeeze(-1)
+        y1 = (z_where.by_dimfull - 0.5 * z_where.bh_dimfull).squeeze(-1)
+        y3 = (z_where.by_dimfull + 0.5 * z_where.bh_dimfull).squeeze(-1)
+        area = (z_where.bw_dimfull * z_where.bh_dimfull).squeeze(-1)
+
+        min_area = self.unroll_and_compare(area, "MIN")  # min of area between box1 and box2
+        xi1 = self.unroll_and_compare(x1, "MAX")  # max of x1 between box1 and box2
+        yi1 = self.unroll_and_compare(y1, "MAX")  # max of y1 between box1 and box2
+        xi3 = self.unroll_and_compare(x3, "MIN")  # min of x3 between box1 and box2
+        yi3 = self.unroll_and_compare(y3, "MIN")  # min of y3 between box1 and box2
+
+        intersection_area = torch.clamp(xi3 - xi1, min=0) * torch.clamp(yi3 - yi1, min=0)
+        return intersection_area / min_area
+
+    def compute_nms_mask(self, z_where=None, overlap_threshold=None, randomize_nms_factor=None,
+                         n_objects_max=None, topk_only=None):
+
+        # compute the indices to do nms + topk filter based on noisy probabilities
+        prob_all = z_where.prob.squeeze(-1)
+        assert len(prob_all.shape) == 2
+        n_boxes, batch_size = prob_all.shape
+
+        overlap_measure = self.compute_box_intersection_over_min_area(z_where=z_where)  # this is O(N^2) algorithm
+        binarized_overlap_measure = (overlap_measure > overlap_threshold).float()
+        assert binarized_overlap_measure.shape == (n_boxes, n_boxes, batch_size)
+
+        # The noise need to be added to the probabilities
+        noisy_score = torch.clamp(prob_all + randomize_nms_factor * torch.randn_like(prob_all), min=0.0)
+        assert noisy_score.shape == (n_boxes, batch_size)
+
+        if topk_only:
+            # If nms_mask = 1 then this is equivalent to do topk only
+            chosen_nms_mask = torch.ones_like(noisy_score)
+        else:
+            possible = (noisy_score > self.score_threshold).float()
+            chosen_nms_mask = self.perform_nms_selection(binarized_overlap_measure, noisy_score, possible, n_objects_max)
+        assert chosen_nms_mask.shape == (n_boxes, batch_size)
+
+        # select the indices of the top boxes according to the masked scores.
+        # Note that masked_score:
+        # 1. is based on the noisy score
+        # 2. is zero for boxes which underwent NMS
+        masked_score = chosen_nms_mask * noisy_score
+        k = min(n_objects_max, n_boxes)
+        scores_tmp, top_k_indices = torch.topk(masked_score, k=k, dim=-2, largest=True, sorted=True)
+        batch_indices = torch.arange(start=0, end=batch_size, step=1, dtype=top_k_indices.dtype,
+                                     device=top_k_indices.device).view(1, -1).expand(n_objects_max, -1)
+
+        return chosen_nms_mask, top_k_indices, batch_indices
+
+    def forward(self, z_where=None, overlap_threshold=None, randomize_nms_factor=None, n_objects_max=None, topk_only=None):
+
         # package the output
+        with torch.no_grad():
+            nms_mask, top_k_indices, batch_indices = self.compute_nms_mask(z_where=z_where,
+                                                                           overlap_threshold=overlap_threshold,
+                                                                           randomize_nms_factor=randomize_nms_factor,
+                                                                           n_objects_max=n_objects_max,
+                                                                           topk_only=topk_only)
+        nms_mask = nms_mask.unsqueeze(-1)
+        assert nms_mask.shape == z_where.prob.shape
         return collections.namedtuple('z_where', 'prob bx_dimfull by_dimfull bw_dimfull bh_dimfull')._make(
-                [p_masked[batch_indeces,top_k_indeces],
-                 z_where.bx_dimfull[batch_indeces,top_k_indeces],
-                 z_where.by_dimfull[batch_indeces,top_k_indeces],
-                 z_where.bw_dimfull[batch_indeces,top_k_indeces],
-                 z_where.bh_dimfull[batch_indeces,top_k_indeces]])
-        
-        
-        #### for debug here I am just selecting the first k-boxes
-        ###with torch.no_grad():
-        ###    batch_size,n_boxes = z_where.prob.shape[:2]
-        ###    k=min(self.n_max_object,n_boxes)
-        ###    top_k_indeces = torch.randint(low=0,high=n_boxes,size=(batch_size,k)).to(z_where.prob.device)
-        ###    batch_indeces = torch.arange(batch_size).unsqueeze(-1).expand(-1,k).to(top_k_indeces.device)
-        ###
-        #### package the output
-        ###return collections.namedtuple('z_where', 'prob bx_dimfull by_dimfull bw_dimfull bh_dimfull')._make(
-        ###    [z_where.prob[batch_indeces,top_k_indeces],
-        ###     z_where.bx_dimfull[batch_indeces,top_k_indeces],
-        ###     z_where.by_dimfull[batch_indeces,top_k_indeces],
-        ###     z_where.bw_dimfull[batch_indeces,top_k_indeces],
-        ###     z_where.bh_dimfull[batch_indeces,top_k_indeces]])
-            
+                [(z_where.prob*nms_mask)[top_k_indices, batch_indices],
+                  z_where.bx_dimfull[top_k_indices, batch_indices],
+                  z_where.by_dimfull[top_k_indices, batch_indices],
+                  z_where.bw_dimfull[top_k_indices, batch_indices],
+                  z_where.bh_dimfull[top_k_indices, batch_indices]])

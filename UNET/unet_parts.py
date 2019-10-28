@@ -9,7 +9,7 @@ def convert_to_box_list(x):
         where n_list = width x height
     """
     batch_size, ch, width, height = x.shape
-    return x.permute(0,2,3,1).view(batch_size,-1,ch)
+    return x.permute(2, 3, 0, 1).view(width*height, batch_size, ch)
   
 class prediction_Zwhere_Zmask(torch.nn.Module):
     def __init__(self, channel_in, params: dict):

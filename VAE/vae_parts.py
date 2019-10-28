@@ -15,20 +15,19 @@ RESULT = collections.namedtuple('result', "prob z_where z_what z_mask")  # this 
 GEN = collections.namedtuple("generated", "small_mu_raw small_w_raw big_mu_sigmoid big_w_sigmoid")
 
 
-def compute_ranking(x,dim=-1):
-    _, order = torch.sort(x,    dim=dim, descending=False)
-    
-    # this is the brute force but slow way (b/c it has a second argsort)
-    # _, rank  = torch.sort(order,dim=dim, descending=False)
+def compute_ranking(x):
+    """ Given a vector of shape: n, batch_size
+        For each batch dimension it ranks the n elements"""
+    assert len(x.shape) == 2
+    n, batch_size = x.shape
+    _, order = torch.sort(x, dim=-2, descending=False)
 
-    # rhis is the fast way which uses indexing on the left
-    n1,n2 = order.shape
+    # this is the fast way which uses indexing on the left
     rank = torch.zeros_like(order)
-    batch_index = torch.arange(n1,dtype=order.dtype,device=order.device).view(-1,1).expand(n1,n2)
-    rank[batch_index,order]=torch.arange(n2,dtype=order.dtype,device=order.device).view(1,-1).expand(n1,n2)
-    
+    batch_index = torch.arange(batch_size, dtype=order.dtype, device=order.device).view(1, -1).expand(n, batch_size)
+    rank[order, batch_index] = torch.arange(n, dtype=order.dtype, device=order.device).view(-1, 1).expand(n, batch_size)
     return rank
-        
+
 def compute_average_intensity_in_box(imgs,z_where):
     """ Input batch of images: batch x ch x w x h
         z_where collections of [prob,bx,by,bw,bh]
@@ -38,57 +37,40 @@ def compute_average_intensity_in_box(imgs,z_where):
         Output: 
         av_intensity = batch x n_box
     """
-    
-    # sum the channels, do cumulative sum in width and height
-    cum = torch.cumsum(torch.cumsum(imgs,dim=-2),dim=-1)[:,0,:,:]
-    assert len(cum.shape)==3
-    batch_size, w, h = cum.shape 
-    
+    # cumulative sum in width and height, standard sum in channels
+    cum = torch.sum(torch.cumsum(torch.cumsum(imgs, dim=-1), dim=-2), dim=-3)
+    assert len(cum.shape) == 3
+    batch_size, w, h = cum.shape
+
     # compute the x1,y1,x3,y3
-    x1 = torch.clamp((z_where.bx_dimfull-0.5*z_where.bw_dimfull).long(),min=0,max=w-1).squeeze(-1) 
-    x3 = torch.clamp((z_where.bx_dimfull+0.5*z_where.bw_dimfull).long(),min=0,max=w-1).squeeze(-1) 
-    y1 = torch.clamp((z_where.by_dimfull-0.5*z_where.bh_dimfull).long(),min=0,max=h-1).squeeze(-1) 
-    y3 = torch.clamp((z_where.by_dimfull+0.5*z_where.bh_dimfull).long(),min=0,max=h-1).squeeze(-1) 
-    
+    x1 = torch.clamp((z_where.bx_dimfull - 0.5 * z_where.bw_dimfull).long(), min=0, max=w-1).squeeze(-1)
+    x3 = torch.clamp((z_where.bx_dimfull + 0.5 * z_where.bw_dimfull).long(), min=0, max=w-1).squeeze(-1)
+    y1 = torch.clamp((z_where.by_dimfull - 0.5 * z_where.bh_dimfull).long(), min=0, max=h-1).squeeze(-1)
+    y3 = torch.clamp((z_where.by_dimfull + 0.5 * z_where.bh_dimfull).long(), min=0, max=h-1).squeeze(-1)
+    assert x1.shape == x3.shape == y1.shape == y3.shape
+
     # compute the area
     # Note that this way penalizes boxes that go out-of-bound
     # This is in contrast to area = (x3-x1)*(y3-y1) which does NOT penalize boxes out of bound
-    area = (z_where.bw_dimfull*z_where.bh_dimfull).squeeze(-1) 
+    area = (z_where.bw_dimfull*z_where.bh_dimfull).squeeze(-1)
+    assert area.shape == x1.shape == x3.shape == y1.shape == y3.shape
+    n_boxes, batch_size = area.shape
 
-    # Make some checks
-    #assert x1.shape == x3.shape == y1.shape == y3.shape == area.shape
-    #assert len(area.shape)==2
-    #assert area.shape[0] == cum.shape[0]
-    batch_size, n_boxes = area.shape
-    
     # compute the total intensity in each box
-    batch_index = torch.arange(start=0,end=batch_size,step=1,device=x1.device,dtype=x1.dtype).view(-1,1).expand(-1,n_boxes)
-    tot_intensity = cum[batch_index,x3,y3]-cum[batch_index,x1,y3]-cum[batch_index,x3,y1]+cum[batch_index,x1,y1]
-    #assert (batch_size, n_boxes) == tot_intensity.shape
-   
+    batch_index = torch.arange(start=0, end=batch_size, step=1, device=x1.device,
+                               dtype=x1.dtype).view(1, -1).expand(n_boxes, -1)
+    assert batch_index.shape == x1.shape
+
+    tot_intensity = cum[batch_index, x3, y3] \
+        + cum[batch_index, x1, y1] \
+        - cum[batch_index, x1, y3] \
+        - cum[batch_index, x3, y1]
+
     # return the average intensity
-    return tot_intensity/area 
+    assert tot_intensity.shape == x1.shape
+    return tot_intensity/area
 
 
-def select_top_boxes_by_prob(z_where_all,n_max_object):
-    
-    p=z_where_all.prob.squeeze(-1)
-    batch_size,n_boxes = p.shape 
-    p_top_k, top_k_indeces = torch.topk(p, k=min(n_max_object,n_boxes), dim=-1, largest=True, sorted=True)
-    batch_size, k = top_k_indeces.shape 
-    batch_indeces = torch.arange(start=0,end=batch_size,step=1,
-                                 device=top_k_indeces.device,dtype=top_k_indeces.dtype).view(-1,1).expand(-1,k)
-               
-    # package the output
-    return collections.namedtuple('z_where', 'prob bx_dimfull by_dimfull bw_dimfull bh_dimfull')._make(
-            [z_where_all.prob[batch_indeces,top_k_indeces],
-             z_where_all.bx_dimfull[batch_indeces,top_k_indeces],
-             z_where_all.by_dimfull[batch_indeces,top_k_indeces],
-             z_where_all.bw_dimfull[batch_indeces,top_k_indeces],
-             z_where_all.bh_dimfull[batch_indeces,top_k_indeces]])
-
-
-        
 class Inference(torch.nn.Module):
     
     def __init__(self,params):
@@ -97,40 +79,42 @@ class Inference(torch.nn.Module):
         self.nms = Non_Max_Suppression(params)
         self.cropper = Cropper(params)
         
-        # stuff for the select_top_boxes_by_prob
-        self.n_max_objects = params["PRIOR.n_max_objects"]
-
         # encoders z_what,z_mask
-        #self.encoder_zwhat = Encoder_MLP(params,is_zwhat=True)
-        #self.encoder_zmask = Encoder_MLP(params,is_zwhat=False)
         self.encoder_zwhat = EncoderConv(params, dim_z=params['ZWHAT.dim'], name="z_what")
         self.encoder_zmask = EncoderConv(params, dim_z=params['ZMASK.dim'], name="z_mask")
 
-    def forward(self,imgs_in,p_corr_factor=0.0):
-        raw_width,raw_height = imgs_in.shape[-2:]
-        
+    def forward(self, imgs_in, prob_corr_factor=0.0, overlap_threshold=0.2,
+                randomize_nms_factor=0.0, n_objects_max=6, topk_only=False):
+
         # UNET
+        #print("start UNET")
         z_where_all = self.unet.forward(imgs_in)
-       
+        #print("end UNET")
+
         # ANNEAL THE PROBABILITIES IF NECESSARY
-        if(p_corr_factor>0):
+        if prob_corr_factor>0:
             with torch.no_grad():
-                x = compute_average_intensity_in_box(imgs_in,z_where_all)
-                tmp = (compute_ranking(x,dim=-1).float()/(x.shape[-1]-1)).view_as(z_where_all.prob)  # this is rescaled ranking
-                #print("x.shape, tmp.shape",x.shape,tmp.shape)
-                #print("print tmp[0]",tmp[0])  
-                #p_approx = tmp
-                p_approx = tmp.pow(10) #this is to make p_approx even more peaked
-                
-            # weighted average of the prob by the inference netwrok and probs by the comulative 
-            new_p = (1-p_corr_factor)*z_where_all.prob+p_corr_factor*p_approx
+                av_intensity = compute_average_intensity_in_box(imgs_in, z_where_all)
+                assert len(av_intensity.shape) == 2
+                n_boxes_all, batch_size = av_intensity.shape
+                ranking = compute_ranking(av_intensity)  # shape: n_boxes_all, batch. This is in [0,n_box_all-1]
+                tmp = ((ranking + 1).float() / (n_boxes_all + 1)).view_as(z_where_all.prob)
+                p_approx = tmp.pow(10)
+
+            # weighted average of the prob by the inference netwrok and probs by the comulative
+            new_p = (1-prob_corr_factor)*z_where_all.prob+prob_corr_factor*p_approx
             z_where_all = z_where_all._replace(prob=new_p)
-        
-        # NMS   
-        z_where = self.nms.forward(z_where_all)
-        #z_where = select_top_boxes_by_prob(z_where_all,self.n_max_objects)
-        #print("z_where.prob[0]",z_where.prob[0])
-        
+
+
+        # NMS
+        #print("start NMS")
+        z_where = self.nms.forward(z_where=z_where_all,
+                                   overlap_threshold=overlap_threshold,
+                                   randomize_nms_factor=randomize_nms_factor,
+                                   n_objects_max=n_objects_max,
+                                   topk_only=topk_only)
+        #print("end NMS")
+
         # CROP
         cropped_imgs = self.cropper.forward(z_where,imgs_in) 
         
@@ -159,7 +143,7 @@ class Generator(nn.Module):
         small_w_raw = self.decoder_masks.forward(z_mask)
 
         # Use uncropper to generate the big stuff
-        # from the small stuff obtaine dby catting along the channel dims
+        # from the small stuff obtain dby catting along the channel dims
         ch_dims = (small_mu_raw.shape[-3], small_w_raw.shape[-3])
         big_stuff = self.uncropper.forward(z_where=z_where,
                                            small_stuff=torch.sigmoid(torch.cat((small_mu_raw, small_w_raw), dim=-3)),  # cat ch dimension

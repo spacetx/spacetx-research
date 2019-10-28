@@ -18,7 +18,7 @@ class SimulationDictionary(dict):
         self['ZMASK.dim'] = 50 
         
         # Parameters regularizations
-        self['REGULARIZATION.p_corr_factor']=0.0
+        self['REGULARIZATION.prob_corr_factor']=0.0
         self['REGULARIZATION.lambda_small_box_size']=0.0
         self['REGULARIZATION.lambda_big_mask_volume']=1.0
         self['REGULARIZATION.lambda_tot_var_mask']=0.0
@@ -27,7 +27,7 @@ class SimulationDictionary(dict):
         self['REGULARIZATION.LOSS_ZWHAT']=10.0
         
         # Parameters for the PRIOR in the VAE model
-        self['PRIOR.n_max_objects'] = 6
+        self['PRIOR.n_objects_max'] = 6
         self['PRIOR.min_object_size'] = 15 #in pixels
         self['PRIOR.max_object_size'] = 35 #in pixels
         self['PRIOR.expected_object_size'] = 20 #in pixels
@@ -43,7 +43,7 @@ class SimulationDictionary(dict):
         self['UNET.N_prediction_maps'] = 1 # if 1 only the rightmost layer export the prediction
         
         # Stuff for YOLO FILTER (a.k.a. non max suppression)
-        self['NMS.p_threshold']=0.0 # it might be that there are no boxes. Then only the background is present
+        self['NMS.score_threshold'] = -1 # it might be that there are no boxes. Then only the background is present
         self['NMS.overlap_threshold']=0.2
 
         # Enviromental variable
@@ -64,5 +64,5 @@ class SimulationDictionary(dict):
         assert( self['UNET.N_max_pool'] >= self['UNET.N_up_conv'])
         assert( 1<= self['UNET.N_prediction_maps'] <= (self['UNET.N_up_conv']+1))
         
-        assert( 0<=self['NMS.p_threshold']<=1.0 )
+        assert self['NMS.score_threshold'] <= 1.0
         assert( 0<=self['NMS.overlap_threshold']<=1.0 )
