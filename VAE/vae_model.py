@@ -415,10 +415,16 @@ class Compositional_VAE(torch.nn.Module):
             
             #--------------------------#
             #-- 1. run the inference --#
-            #--------------------------#        
-            z_nms = self.inference.forward(original_image,p_corr_factor=self.p_corr_factor)
+            #--------------------------#      
+            z_nms = self.inference.forward(original_image,
+                                           prob_corr_factor=self.prob_corr_factor,
+                                           overlap_threshold=self.overlap_threshold,
+                                           randomize_nms_factor=self.randomize_nms_factor,
+                                           n_objects_max=self.n_objects_max,
+                                           topk_only=False)
+                
             p       = z_nms.z_where.prob         
-            assert p.shape == (batch_size,self.n_max_objects,1)
+            assert p.shape == (self.n_objects_max,batch_size,1)
 
             #--------------------------------#
             #--- 2. Run the model forward ---#
@@ -445,7 +451,7 @@ class Compositional_VAE(torch.nn.Module):
             #---------------------------------#
             box_is_active = (p>0.5).float()[...,None,None]
             fg_mask = (mask_pixel_assignment*putative_masks > 0.0).float()
-            reconstructed_image = torch.sum(box_is_active*fg_mask*putative_imgs,dim=-4,keepdim=False)
+            reconstructed_image = torch.sum(box_is_active*fg_mask*putative_imgs,dim=-5)
             
             # 3. If bounding_box == True compute the bounding box
             if(bounding_box == False):
@@ -458,17 +464,17 @@ class Compositional_VAE(torch.nn.Module):
     def draw_batch_of_images_with_bb_only(self,z_where,width,height):
        
         # Exttract the probabilities for each box
-        batch_size,n_boxes = z_where.prob.shape[:2]
-        p = z_where.prob.view(batch_size,n_boxes,-1)
+        n_boxes, batch_size = z_where.prob.shape[:2]
+        p = z_where.prob.view(n_boxes, batch_size, -1)
         
         # prepare the storage
         batch_bb_np    = np.zeros((batch_size,width,height,3)) # numpy storage for bounding box images
         
         # compute the coordinates of the bounding boxes and the probability of each box
-        x1 = (z_where.bx_dimfull-0.5*z_where.bw_dimfull).view(batch_size,n_boxes,-1)
-        x3 = (z_where.bx_dimfull+0.5*z_where.bw_dimfull).view(batch_size,n_boxes,-1)
-        y1 = (z_where.by_dimfull-0.5*z_where.bh_dimfull).view(batch_size,n_boxes,-1)
-        y3 = (z_where.by_dimfull+0.5*z_where.bh_dimfull).view(batch_size,n_boxes,-1)
+        x1 = (z_where.bx_dimfull-0.5*z_where.bw_dimfull).view(n_boxes, batch_size, -1)
+        x3 = (z_where.bx_dimfull+0.5*z_where.bw_dimfull).view(n_boxes, batch_size, -1)
+        y1 = (z_where.by_dimfull-0.5*z_where.bh_dimfull).view(n_boxes, batch_size, -1)
+        y3 = (z_where.by_dimfull+0.5*z_where.bh_dimfull).view(n_boxes, batch_size, -1)
 
         assert( len(x1.shape) == 3) 
         x1y1x3y3 = torch.cat((x1,y1,x3,y3),dim=2)
@@ -479,9 +485,9 @@ class Compositional_VAE(torch.nn.Module):
             # Draw on PIL
             img = Image.new('RGB', (width,height), color=0)
             draw = ImageDraw.Draw(img)
-            for i in range(n_boxes):
-                #if(p[b,i,0]>0.0):
-                draw.rectangle(x1y1x3y3[b,i,:].cpu().numpy(), outline='red', fill=None)
+            for n in range(n_boxes):
+                #if(p[n,b,0]>0.0):
+                draw.rectangle(x1y1x3y3[n,b,:].cpu().numpy(), outline='red', fill=None)
             batch_bb_np[b,...] = np.array(img.getdata(),np.uint8).reshape(width,height,3)
 
         # Transform np to torch, rescale from [0,255] to (0,1) 
