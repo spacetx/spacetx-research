@@ -4,8 +4,7 @@ import torch.nn as nn
 import collections
 from UNET.unet_model import UNet
 from NON_MAX_SUPPRESSION.non_max_suppression import Non_Max_Suppression 
-from ENCODERS_DECODERS.encoders import EncoderConv
-from ENCODERS_DECODERS.decoders import DecoderConv
+from ENCODERS_DECODERS.encoders_decoders import EncoderConv, DecoderConv
 from CROPPER_UNCROPPER.cropper_uncropper import Uncropper, Cropper
 
 
