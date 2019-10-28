@@ -417,8 +417,14 @@ class Compositional_VAE(torch.nn.Module):
             #--------------------------------#
             #--- 2. Run the model forward ---#
             #--------------------------------#
-            putative_imgs  = self.generator_imgs.forward(z_nms.z_where,z_nms.z_what.z_mu,width,height) 
-            putative_masks = self.generator_masks.forward(z_nms.z_where,z_nms.z_mask.z_mu,width,height)                
+            generated = self.generator(z_where=z_nms.z_where,
+                                       z_what=z_nms.z_what.z_mu,
+                                       z_mask=z_nms.z_mask.z_mu,
+                                       width_raw=width,
+                                       height_raw=height)
+            putative_imgs = generated.big_mu_sigmoid
+            putative_masks = generated.big_w_sigmoid
+                              
             mask_pixel_assignment = self.mask_argmin_argmax(putative_masks,"argmax")   
             definitely_bg_mask = (torch.sum(mask_pixel_assignment,dim=-4,keepdim=True) == 0.0) 
             
