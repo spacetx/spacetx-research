@@ -55,7 +55,7 @@ class Cropper(torch.nn.Module):
             c. sx = bw_dimfull/WIDTH
             d. sy = bh_dimfull/HEIGHT
         """ 
-        independent_dim = list(z_where.bx.shape[:-1])
+        independent_dim = list(z_where.bx.shape)
 
         kx = (-1.0+2*z_where.bx/width_raw).view(-1, 1)
         ky = (-1.0+2*z_where.by/height_raw).view(-1, 1)
@@ -116,7 +116,7 @@ class Uncropper(torch.nn.Module):
             c. sx = WIDTH/bw_dimfull
             d. sy = HEIGHT/bh_dimfull
         """
-        independent_dim = list(z_where.bx.shape[:-1])
+        independent_dim = list(z_where.bx.shape)
 
         kx = ((width_raw-2*z_where.bx)/z_where.bw).view(-1, 1)
         ky = ((height_raw-2*z_where.by)/z_where.bh).view(-1, 1)

@@ -231,24 +231,20 @@ class Compositional_VAE(torch.nn.Module):
                 - cxcy ~ N(cxcy_mu,0.1) 
                 - dxdy ~ gamma(dxdy_mu,0.1) 
         """
-        
-        #-----------------------#
-        #--------  Trick -------#
-        #-----------------------#
-        if(imgs is None):
+
+        # Trick #
+        if imgs is None:
             imgs = torch.zeros(8, self.ch_raw_image, self.size_raw_image, self.size_raw_image)
-            if(self.use_cuda):
-                imgs=imgs.cuda()
-        assert(len(imgs.shape)==4)
-        batch_size,ch,width,height = imgs.shape    
-        assert(width == height) 
-        one  = torch.ones(1,dtype=imgs.dtype,device=imgs.device)
-        #-----------------------#
-        #----- Enf of Trick ----#
-        #-----------------------#
-        
+            if self.use_cuda:
+                imgs = imgs.cuda()
+        assert len(imgs.shape) == 4
+        batch_size, ch, width, height = imgs.shape
+        assert(width == height)
+        one = torch.ones([1], dtype=imgs.dtype, device=imgs.device)
+        # End of Trick #
+
         # register the modules
-        pyro.module("inference",self.inference)
+        pyro.module("inference", self.inference)
         
         #register the oparameters
         pyro.param("std_bx", one, constraint=constraints.greater_than(0.1))
@@ -258,9 +254,7 @@ class Compositional_VAE(torch.nn.Module):
 
         with pyro.plate("batch", batch_size, dim =-1 ):
             
-            #--------------------------#
-            #-- 1. run the inference --#
-            #--------------------------#          
+            # run the inference #
             self.guide_results, self.guide_kl = self.inference.forward(imgs,
                                                                        prob_corr_factor=self.prob_corr_factor,
                                                                        overlap_threshold=self.overlap_threshold,
@@ -287,25 +281,20 @@ class Compositional_VAE(torch.nn.Module):
             1. effectively test the priors
             2. debug shapes by using poutine.trace
         """
-        #-----------------------#
-        #--------  Trick -------#
-        #-----------------------#
-        if(imgs is None):
+        # Trick #
+        if imgs is None:
             observed = False
-            imgs = torch.zeros(8,self.ch_raw_image,self.size_raw_image,self.size_raw_image)
-            if(self.use_cuda):
+            imgs = torch.zeros(8, self.ch_raw_image, self.size_raw_image, self.size_raw_image)
+            if self.use_cuda:
                 imgs=imgs.cuda()
         else:
             observed = True
-        assert(len(imgs.shape)==4)
-        batch_size,ch,width,height = imgs.shape    
-        assert(width == height) 
-        one  = torch.ones(1,dtype=imgs.dtype,device=imgs.device)
-        zero = torch.zeros(1,dtype=imgs.dtype,device=imgs.device)
-        #-----------------------#
-        #----- Enf of Trick ----#
-        #-----------------------#
-        
+        assert len(imgs.shape) == 4
+        batch_size, ch, width, height = imgs.shape
+        assert width == height
+        one = torch.ones(1, dtype=imgs.dtype, device=imgs.device)
+        # End of Trick #
+
         # register the modules 
         pyro.module("generator",  self.generator)
 
@@ -348,7 +337,7 @@ class Compositional_VAE(torch.nn.Module):
                          self.guide_kl.zwhat + \
                          self.guide_kl.zmask
 
-                p = self.guide_results.prob.squeeze(-1)
+                p = self.guide_results.prob
 
                 total_off = (getattr(self, 'LOSS_ZMASK', 0.0) + getattr(self, 'LOSS_ZWHAT', 0.0)) * logp.logp_off
                 total_on = getattr(self, 'LOSS_ZMASK', 0.0) * (logp.logp_on_cauchy - total_reg) + \
@@ -362,10 +351,10 @@ class Compositional_VAE(torch.nn.Module):
         if self.use_cuda:
             original_image = original_image.cuda()
         
-        batch_size,ch,width,height = original_image.shape
-        assert(width==height)
-        self.eval() # set the model into evaluation mode
-        with torch.no_grad(): # do not keep track of the gradients
+        batch_size, ch, width, height = original_image.shape
+        assert width == height
+        self.eval()  # set the model into evaluation mode
+        with torch.no_grad():  # do not keep track of the gradients
             
             #--------------------------#
             #-- 1. run the inference --#
@@ -379,7 +368,7 @@ class Compositional_VAE(torch.nn.Module):
                                                  noisy_sampling=False)
 
             p = results.prob
-            assert p.shape == (self.n_objects_max,batch_size,1)
+            assert p.shape == (self.n_objects_max, batch_size)
 
             #--------------------------------#
             #--- 2. Run the model forward ---#
@@ -392,14 +381,14 @@ class Compositional_VAE(torch.nn.Module):
             putative_imgs = generated.big_mu_sigmoid
             putative_masks = generated.big_w_sigmoid
                               
-            mask_pixel_assignment = self.mask_argmin_argmax(putative_masks,"argmax")   
-            definitely_bg_mask = (torch.sum(mask_pixel_assignment,dim=-5,keepdim=True) == 0.0)
+            mask_pixel_assignment = self.mask_argmin_argmax(putative_masks, "argmax")
+            definitely_bg_mask = (torch.sum(mask_pixel_assignment, dim=-5, keepdim=True) == 0.0)
             
             #---------------------------------#
             #--- 3. Score the model ----------#
             #---------------------------------#
-            logp,reg = self.score_observations(results.z_where,putative_imgs,putative_masks,
-                                               mask_pixel_assignment,definitely_bg_mask,original_image)
+            logp, reg = self.score_observations(results.z_where, putative_imgs, putative_masks,
+                                               mask_pixel_assignment, definitely_bg_mask, original_image)
             
             total_reg = self.lambda_small_box_size*reg.small_box_size + \
                         self.lambda_big_mask_volume*reg.big_mask_volume + \
@@ -409,50 +398,50 @@ class Compositional_VAE(torch.nn.Module):
             #---------------------------------#
             #----- 4. Reconstruct images -----#
             #---------------------------------#
-            box_is_active = (p>0.5).float()[...,None,None]
+            box_is_active = (p > 0.5).float()[..., None, None, None]  # add singleton for ch,w,h
             fg_mask = (mask_pixel_assignment*putative_masks > 0.0).float()
-            reconstructed_image = torch.sum(box_is_active*fg_mask*putative_imgs,dim=-5)
+            reconstructed_image = torch.sum(box_is_active*fg_mask*putative_imgs, dim=-5)
             
             # 3. If bounding_box == True compute the bounding box
-            if(bounding_box == False):
-                return reconstructed_image,results.z_where,putative_imgs,putative_masks,logp,reg,total_reg
-            elif(bounding_box == True):
+            if bounding_box == False:
+                return reconstructed_image, results, putative_imgs, putative_masks, logp, reg, total_reg
+            elif bounding_box == True:
                 bounding_boxes = self.draw_batch_of_images_with_bb_only(prob=results.prob,
                                                                         z_where=results.z_where,
                                                                         width=width,
                                                                         height=height)
                 reconstructed_image_with_bb = bounding_boxes + reconstructed_image
-                return reconstructed_image_with_bb,results,putative_imgs,putative_masks,logp,reg,total_reg
-    
-    def draw_batch_of_images_with_bb_only(self,prob=None, z_where=None, width=None, height=None):
+                return reconstructed_image_with_bb, results, putative_imgs, putative_masks, logp, reg, total_reg
+
+    def draw_batch_of_images_with_bb_only(self, prob=None, z_where=None, width=None, height=None):
        
         # Exttract the probabilities for each box
-        n_boxes, batch_size = prob.shape[:2]
-        p = prob.view(n_boxes, batch_size, -1)
-        
+        assert len(prob.shape) == 2
+        n_boxes, batch_size = prob.shape
+
         # prepare the storage
-        batch_bb_np    = np.zeros((batch_size,width,height,3)) # numpy storage for bounding box images
+        batch_bb_np = np.zeros((batch_size, width, height, 3)) # numpy storage for bounding box images
         
         # compute the coordinates of the bounding boxes and the probability of each box
-        x1 = (z_where.bx - 0.5*z_where.bw).view(n_boxes, batch_size, -1)
-        x3 = (z_where.bx + 0.5*z_where.bw).view(n_boxes, batch_size, -1)
-        y1 = (z_where.by - 0.5*z_where.bh).view(n_boxes, batch_size, -1)
-        y3 = (z_where.by + 0.5*z_where.bh).view(n_boxes, batch_size, -1)
+        x1 = z_where.bx - 0.5*z_where.bw
+        x3 = z_where.bx + 0.5*z_where.bw
+        y1 = z_where.by - 0.5*z_where.bh
+        y3 = z_where.by + 0.5*z_where.bh
 
-        assert( len(x1.shape) == 3) 
-        x1y1x3y3 = torch.cat((x1,y1,x3,y3),dim=2)
-                
+        assert x1.shape == x3.shape == y1.shape == y3.shape == prob.shape
+        x1y1x3y3 = torch.stack((x1, y1, x3, y3), dim=-1)
+
         # draw the bounding boxes
         for b in range(batch_size):
         
             # Draw on PIL
-            img = Image.new('RGB', (width,height), color=0)
+            img = Image.new('RGB', (width, height), color=0)
             draw = ImageDraw.Draw(img)
             for n in range(n_boxes):
-                #if(p[n,b,0]>0.0):
-                draw.rectangle(x1y1x3y3[n,b,:].cpu().numpy(), outline='red', fill=None)
-            batch_bb_np[b,...] = np.array(img.getdata(),np.uint8).reshape(width,height,3)
+                #if(prob[n,b,0]>0.0):
+                draw.rectangle(x1y1x3y3[n, b, :].cpu().numpy(), outline='red', fill=None)
+            batch_bb_np[b, ...] = np.array(img.getdata(), np.uint8).reshape(width, height, 3)
 
         # Transform np to torch, rescale from [0,255] to (0,1) 
-        batch_bb_torch = torch.from_numpy(batch_bb_np).permute(0,3,2,1).float()/255 # permute(0,3,2,1) is CORRECT
-        return batch_bb_torch.to(p.device)   
+        batch_bb_torch = torch.from_numpy(batch_bb_np).permute(0, 3, 2, 1).float()/255  # permute(0,3,2,1) is CORRECT
+        return batch_bb_torch.to(prob.device)

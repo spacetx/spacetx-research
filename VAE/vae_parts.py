@@ -40,13 +40,13 @@ def compute_ranking(x):
     return rank
 
 def compute_average_intensity_in_box(imgs,z_where):
-    """ Input batch of images: batch x ch x w x h
-        z_where collections of [prob,bx,by,bw,bh]
-        z_where.prob.shape = batch x n_box x 1 
-        similarly for bx,by,bw,bh
+    """ Input batch of images: batch_size x ch x w x h
+        z_where collections of [bx,by,bw,bh]
+        bx.shape = batch x n_box
+        similarly for by,bw,bh
         
         Output: 
-        av_intensity = batch x n_box
+        av_intensity = n_box x batch_size
     """
     # cumulative sum in width and height, standard sum in channels
     cum = torch.sum(torch.cumsum(torch.cumsum(imgs, dim=-1), dim=-2), dim=-3)
@@ -54,16 +54,16 @@ def compute_average_intensity_in_box(imgs,z_where):
     batch_size, w, h = cum.shape
 
     # compute the x1,y1,x3,y3
-    x1 = torch.clamp((z_where.bx - 0.5 * z_where.bw).long(), min=0, max=w-1).squeeze(-1)
-    x3 = torch.clamp((z_where.bx + 0.5 * z_where.bw).long(), min=0, max=w-1).squeeze(-1)
-    y1 = torch.clamp((z_where.by - 0.5 * z_where.bh).long(), min=0, max=h-1).squeeze(-1)
-    y3 = torch.clamp((z_where.by + 0.5 * z_where.bh).long(), min=0, max=h-1).squeeze(-1)
+    x1 = torch.clamp((z_where.bx - 0.5 * z_where.bw).long(), min=0, max=w-1)
+    x3 = torch.clamp((z_where.bx + 0.5 * z_where.bw).long(), min=0, max=w-1)
+    y1 = torch.clamp((z_where.by - 0.5 * z_where.bh).long(), min=0, max=h-1)
+    y3 = torch.clamp((z_where.by + 0.5 * z_where.bh).long(), min=0, max=h-1)
     assert x1.shape == x3.shape == y1.shape == y3.shape
 
     # compute the area
     # Note that this way penalizes boxes that go out-of-bound
     # This is in contrast to area = (x3-x1)*(y3-y1) which does NOT penalize boxes out of bound
-    area = (z_where.bw * z_where.bh).squeeze(-1)
+    area = z_where.bw * z_where.bh
     assert area.shape == x1.shape == x3.shape == y1.shape == y3.shape
     n_boxes, batch_size = area.shape
 
@@ -109,12 +109,12 @@ class Inference(torch.nn.Module):
         # print("unet_results.tp_mu.shape", unet_results.tp_mu.shape)
 
         # CONVERT tp,tx,ty,tw,th to prob, bx, by, bw, bh
-        prob_all_before_correction = torch.sigmoid(unet_results.tp_mu)
+        prob_all_before_correction = torch.sigmoid(unet_results.tp_mu.squeeze(-1))
         z_where_all = ZWHERE(
-            bx=(unet_results.W_over_nw * (unet_results.ix + torch.sigmoid(self.alpha * unet_results.tx_mu))),
-            by=(unet_results.H_over_nh * (unet_results.iy + torch.sigmoid(self.alpha * unet_results.ty_mu))),
-            bw=(self.size_min + self.size_delta * torch.sigmoid(self.alpha * unet_results.tw_mu)),
-            bh=(self.size_min + self.size_delta * torch.sigmoid(self.alpha * unet_results.th_mu)))
+            bx=(unet_results.W_over_nw * (unet_results.ix + torch.sigmoid(self.alpha * unet_results.tx_mu))).squeeze(-1),
+            by=(unet_results.H_over_nh * (unet_results.iy + torch.sigmoid(self.alpha * unet_results.ty_mu))).squeeze(-1),
+            bw=(self.size_min + self.size_delta * torch.sigmoid(self.alpha * unet_results.tw_mu)).squeeze(-1),
+            bh=(self.size_min + self.size_delta * torch.sigmoid(self.alpha * unet_results.th_mu)).squeeze(-1))
 
         # ANNEAL THE PROBABILITIES IF NECESSARY
         if prob_corr_factor > 0:
@@ -141,7 +141,6 @@ class Inference(torch.nn.Module):
                                                                   n_objects_max=n_objects_max,
                                                                   topk_only=topk_only)
 
-        nms_mask = nms_mask.unsqueeze(-1)
         assert nms_mask.shape == prob_all.shape
         prob_few = (prob_all*nms_mask)[top_k_indices, batch_indices]
         z_where_few = ZWHERE(bx=z_where_all.bx[top_k_indices, batch_indices],
@@ -180,10 +179,10 @@ class Inference(torch.nn.Module):
         one = torch.ones([1], dtype=imgs_in.dtype, device=imgs_in.device)
         kl_zwhat = kl_N0_to_N1(z_what_mu, z_what_std, zero, one).sum(dim=-1)
         kl_zmask = kl_N0_to_N1(z_mask_mu, z_mask_std, zero, one).sum(dim=-1)
-        kl_bx = (dist.Normal(z_where_few.bx, pyro.param("std_bx")).log_prob(z_where_sampled.bx) - torch.log(one*imgs_in.shape[-2])).sum(dim=-1)
-        kl_by = (dist.Normal(z_where_few.by, pyro.param("std_by")).log_prob(z_where_sampled.by) - torch.log(one*imgs_in.shape[-1])).sum(dim=-1)
-        kl_bw = (dist.Normal(z_where_few.bw, pyro.param("std_bw")).log_prob(z_where_sampled.bw) - torch.log(one*self.size_delta)).sum(dim=-1)
-        kl_bh = (dist.Normal(z_where_few.bh, pyro.param("std_bh")).log_prob(z_where_sampled.bh) - torch.log(one*self.size_delta)).sum(dim=-1)
+        kl_bx = (dist.Normal(z_where_few.bx, pyro.param("std_bx")).log_prob(z_where_sampled.bx) - torch.log(one*imgs_in.shape[-2]))
+        kl_by = (dist.Normal(z_where_few.by, pyro.param("std_by")).log_prob(z_where_sampled.by) - torch.log(one*imgs_in.shape[-1]))
+        kl_bw = (dist.Normal(z_where_few.bw, pyro.param("std_bw")).log_prob(z_where_sampled.bw) - torch.log(one*self.size_delta))
+        kl_bh = (dist.Normal(z_where_few.bh, pyro.param("std_bh")).log_prob(z_where_sampled.bh) - torch.log(one*self.size_delta))
         kl = collections.namedtuple('kl', 'bx by bw bh zwhat zmask')._make([kl_bx, kl_by, kl_bw, kl_bh, kl_zwhat, kl_zmask])
 
         assert kl_bx.shape == kl_by.shape == kl_bw.shape == kl_bh.shape == kl_zmask.shape == kl_zwhat.shape

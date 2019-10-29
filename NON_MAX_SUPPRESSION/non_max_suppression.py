@@ -76,11 +76,11 @@ class Non_Max_Suppression(torch.nn.Module):
         """ compute the matrix of shape: batch x n_boxes x n_boxes with the Intersection Over Unions """
 
         # compute x1,x3,y1,y3
-        x1 = (z_where.bx - 0.5 * z_where.bw).squeeze(-1)
-        x3 = (z_where.bx + 0.5 * z_where.bw).squeeze(-1)
-        y1 = (z_where.by - 0.5 * z_where.bh).squeeze(-1)
-        y3 = (z_where.by + 0.5 * z_where.bh).squeeze(-1)
-        area = (z_where.bw * z_where.bh).squeeze(-1)
+        x1 = z_where.bx - 0.5 * z_where.bw
+        x3 = z_where.bx + 0.5 * z_where.bw
+        y1 = z_where.by - 0.5 * z_where.bh
+        y3 = z_where.by + 0.5 * z_where.bh
+        area = z_where.bw * z_where.bh
 
         min_area = self.unroll_and_compare(area, "MIN")  # min of area between box1 and box2
         xi1 = self.unroll_and_compare(x1, "MAX")  # max of x1 between box1 and box2
@@ -95,16 +95,15 @@ class Non_Max_Suppression(torch.nn.Module):
                          n_objects_max=None, topk_only=None):
 
         # compute the indices to do nms + topk filter based on noisy probabilities
-        prob_all = prob.squeeze(-1)
-        assert len(prob_all.shape) == 2
-        n_boxes, batch_size = prob_all.shape
+        assert len(prob.shape) == 2
+        n_boxes, batch_size = prob.shape
 
         overlap_measure = self.compute_box_intersection_over_min_area(z_where=z_where)  # this is O(N^2) algorithm
         binarized_overlap_measure = (overlap_measure > overlap_threshold).float()
         assert binarized_overlap_measure.shape == (n_boxes, n_boxes, batch_size)
 
         # The noise need to be added to the probabilities
-        noisy_score = torch.clamp(prob_all + randomize_nms_factor * torch.randn_like(prob_all), min=0.0)
+        noisy_score = torch.clamp(prob + randomize_nms_factor * torch.randn_like(prob), min=0.0)
         assert noisy_score.shape == (n_boxes, batch_size)
 
         if topk_only:
