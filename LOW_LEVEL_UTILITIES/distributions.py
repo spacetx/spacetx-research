@@ -6,6 +6,38 @@ from numbers import Number
 from math import pi as PI
 
 
+class CustomLogProbTerm(TorchDistribution):
+    """ This is a bogus distribution which only has the log_prob method.
+        It always return custom_log_prob for any value.
+        See:
+        def log_prob(self, value):
+            return self.custom_log_prob
+    """
+    arg_constraints = {'custom_log_prob': constraints.real}
+
+    def __init__(self, custom_log_prob=None, validate_args=None):
+        if custom_log_probs is None:
+            raise ValueError("custom_log_prob must be specified")
+        else:
+            self.custom_log_prob = custom_log_prob
+
+        if isinstance(self.custom_log_prob, Number):
+            batch_shape = torch.Size()
+        else:
+            batch_shape = self.custom_log_prob.size()
+        super(CustomLogProbTerm, self).__init__(batch_shape, validate_args=validate_args)
+
+    def expand(self, batch_shape, _instance=None):
+        new = self._get_checked_instance(CustomLogProbTerm, _instance)
+        batch_shape = torch.Size(batch_shape)
+        new.custom_log_probs = self.custom_log_probs.expand(batch_shape)
+        super(CustomLogProbTerm, new).__init__(batch_shape, validate_args=False)
+        new._validate_args = self._validate_args
+        return new
+
+    def log_prob(self, value):
+        return self.custom_log_prob
+
 class NullScoreDistribution(TorchDistribution):
     
     def __init__(self, validate_args=None):

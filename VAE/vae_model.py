@@ -1,16 +1,15 @@
 import numpy as np
+from PIL import Image, ImageDraw
+from LOW_LEVEL_UTILITIES.distributions import CustomLogProbTerm, UnitCauchy
+from LOW_LEVEL_UTILITIES.utilities import reset_parameters, save_obj, load_obj
+from VAE.vae_parts import *
+import collections
+from torch.distributions import constraints
+import matplotlib.pyplot as plt
+import pyro.poutine as poutine
 import torch
 import pyro
 import pyro.distributions as dist
-from PIL import Image, ImageDraw
-from LOW_LEVEL_UTILITIES.distributions import UniformWithTails, Indicator, NullScoreDistribution_Bernoulli, UnitCauchy
-from LOW_LEVEL_UTILITIES.utilities import reset_parameters,save_obj,load_obj
-from VAE.vae_parts import *
-import matplotlib.pyplot as plt
-import collections
-from torch.distributions import constraints
-import pyro.poutine as poutine
-
 
 
 class Compositional_VAE(torch.nn.Module):
@@ -175,7 +174,7 @@ class Compositional_VAE(torch.nn.Module):
 
         
         # compute the regularizations
-        volume_box  = (box_dimfull.bw_dimfull*box_dimfull.bh_dimfull).squeeze(-1)
+        volume_box  = (box_dimfull.bw*box_dimfull.bh).squeeze(-1)
         volume_mask = torch.sum(mask_pixel_assignment*putative_masks,dim=(-1,-2,-3))
         
         
@@ -252,50 +251,23 @@ class Compositional_VAE(torch.nn.Module):
         pyro.module("inference",self.inference)
         
         #register the oparameters
-        std_bx_dimfull = pyro.param("std_bx_dimfull", one, constraint=constraints.greater_than(0.1))
-        std_by_dimfull = pyro.param("std_by_dimfull", one, constraint=constraints.greater_than(0.1))
-        std_bw_dimfull = pyro.param("std_bw_dimfull", one, constraint=constraints.greater_than(0.1))
-        std_bh_dimfull = pyro.param("std_bh_dimfull", one, constraint=constraints.greater_than(0.1))
+        pyro.param("std_bx", one, constraint=constraints.greater_than(0.1))
+        pyro.param("std_by", one, constraint=constraints.greater_than(0.1))
+        pyro.param("std_bw", one, constraint=constraints.greater_than(0.1))
+        pyro.param("std_bh", one, constraint=constraints.greater_than(0.1))
 
         with pyro.plate("batch", batch_size, dim =-1 ):
             
             #--------------------------#
             #-- 1. run the inference --#
             #--------------------------#          
-            z_nms = self.inference.forward(imgs,
-                                           prob_corr_factor=self.prob_corr_factor,
-                                           overlap_threshold=self.overlap_threshold,
-                                           randomize_nms_factor=self.randomize_nms_factor,
-                                           n_objects_max=self.n_objects_max,
-                                           topk_only=False)
-
-            with pyro.plate("n_objects", self.n_objects_max, dim =-2 ):
-                     
-                #---------------#    
-                #-- 2. Sample --#
-                #---------------#
-                   
-                # Z_WHAT
-                pyro.sample("z_what",dist.Normal(z_nms.z_what.z_mu, z_nms.z_what.z_std).to_event(1))
-                                
-                # Z_MASK
-                pyro.sample("z_mask",dist.Normal(z_nms.z_mask.z_mu, z_nms.z_mask.z_std).to_event(1)) 
-
-                # Z_WHERE
-
-                # Location of bounding box
-                pyro.sample("bx_dimfull",dist.Normal(z_nms.z_where.bx_dimfull, std_bx_dimfull).to_event(1))
-                pyro.sample("by_dimfull",dist.Normal(z_nms.z_where.by_dimfull, std_by_dimfull).to_event(1))
-                
-                # Size of Bounding Box 
-                pyro.sample("bw_dimfull",dist.Normal(z_nms.z_where.bw_dimfull, std_bw_dimfull).to_event(1)) 
-                pyro.sample("bh_dimfull",dist.Normal(z_nms.z_where.bh_dimfull, std_bh_dimfull).to_event(1))
-                
-                # Prob of an object 
-                p = z_nms.z_where.prob.squeeze(-1)
-                c = pyro.sample("prob_object",dist.Bernoulli(probs = p))                    
-                
-                
+            self.guide_results, self.guide_kl = self.inference.forward(imgs,
+                                                                       prob_corr_factor=self.prob_corr_factor,
+                                                                       overlap_threshold=self.overlap_threshold,
+                                                                       randomize_nms_factor=self.randomize_nms_factor,
+                                                                       n_objects_max=self.n_objects_max,
+                                                                       topk_only=False,
+                                                                       noisy_sampling=True)
 
     def model(self, imgs=None, epoch=None):
         """ The MODEL takes a mini-batch of images and:
@@ -340,73 +312,55 @@ class Compositional_VAE(torch.nn.Module):
         # register the parameters of the distribution used to score the results
         pyro.param("bg_mu", 0.1*one, constraint=constraints.unit_interval)
         pyro.param("fg_mu", 0.9*one, constraint=constraints.unit_interval)
-        pyro.param("bg_sigma", 0.2*one, constraint=constraints.interval(0.01,0.25))
-        pyro.param("fg_sigma", 0.2*one, constraint=constraints.interval(0.01,0.25))
-        pyro.param("normal_sigma", 0.2*one, constraint=constraints.interval(0.01,0.25))
+        pyro.param("bg_sigma", 0.2*one, constraint=constraints.interval(0.01, 0.25))
+        pyro.param("fg_sigma", 0.2*one, constraint=constraints.interval(0.01, 0.25))
+        pyro.param("normal_sigma", 0.2*one, constraint=constraints.interval(0.01, 0.25))
 
         with pyro.plate("batch", batch_size, dim=-1):
             
-            with pyro.plate("n_objects", self.n_objects_max, dim =-2):
-            
-                #------------------------#
-                # 1. Sample from priors -#
-                #------------------------#
-                
-                # 1. Probability of a box being active
-                c = pyro.sample("prob_object",NullScoreDistribution_Bernoulli()).to(one.device)
-                c_mask = (c != 0)  # convert FloatTensor -> ByteTensor
-                
-                with poutine.mask(mask=c_mask):
-                
-                    #- Z_WHAT, Z_WHERE 
-                    z_what = pyro.sample("z_what",dist.Normal(zero,one).expand([self.Zwhat_dim]).to_event(1))    
-                    z_mask = pyro.sample("z_mask",dist.Normal(zero,one).expand([self.Zmask_dim]).to_event(1)) 
-                                   
-                    #= Location of bounding box
-                    bx_dimfull = pyro.sample("bx_dimfull",UniformWithTails(zero,width,self.tails_dist_center).expand([1]).to_event(1))
-                    by_dimfull = pyro.sample("by_dimfull",UniformWithTails(zero,width,self.tails_dist_center).expand([1]).to_event(1))
-                
-                    #- Size of bounding box
-                    bw_dimfull = pyro.sample("bw_dimfull",UniformWithTails(self.min_size*one,self.max_size,self.tails_dist_size).expand([1]).to_event(1))
-                    bh_dimfull = pyro.sample("bh_dimfull",UniformWithTails(self.min_size*one,self.max_size,self.tails_dist_size).expand([1]).to_event(1))
-        
-                #------------------------------#
-                # 2. Run the generative model -#
-                #------------------------------#
-                box_dimfull = collections.namedtuple('box_dimfull', 'bx_dimfull by_dimfull bw_dimfull bh_dimfull')._make(
-                                                    [bx_dimfull,by_dimfull,bw_dimfull,bh_dimfull])
+            generated = self.generator(z_where=self.guide_results.z_where,
+                                       z_what=self.guide_results.z_what,
+                                       z_mask=self.guide_results.z_mask,
+                                       width_raw=width,
+                                       height_raw=height)
+            putative_imgs = generated.big_mu_sigmoid
+            putative_masks = generated.big_w_sigmoid
 
-                generated = self.generator(z_where=box_dimfull,
-                                           z_what=z_what,
-                                           z_mask=z_mask,
-                                           width_raw=width,
-                                           height_raw=height)
-                putative_imgs = generated.big_mu_sigmoid
-                putative_masks = generated.big_w_sigmoid
+            # Resolve the conflict. Each pixel belongs to only one FG object
+            # If a pixel does not belong to any object it belongs to the background
+            mask_pixel_assignment = self.mask_argmin_argmax(putative_masks, "argmax")
+            # mask_pixel_assignment = self.mask_argmin_argmax(putative_masks*p_inferred[...,None,None,None],"argmax")
+            definitely_bg_mask = (torch.sum(mask_pixel_assignment, dim=-5, keepdim=True) == 0.0)
 
-                # Resolve the conflict. Each pixel belongs to only one FG object
-                # If a pixel does not belong to any object it belongs to the background
-                mask_pixel_assignment = self.mask_argmin_argmax(putative_masks,"argmax") 
-                #mask_pixel_assignment = self.mask_argmin_argmax(putative_masks*p_inferred[...,None,None,None],"argmax") 
-                definitely_bg_mask = (torch.sum(mask_pixel_assignment,dim=-5,keepdim=True) == 0.0)
-                
-                if(observed):
-                    logp,reg = self.score_observations(box_dimfull,putative_imgs,putative_masks,
-                                                       mask_pixel_assignment,definitely_bg_mask,imgs)
-                    
-                    total_reg = self.lambda_small_box_size*reg.small_box_size + \
-                                self.lambda_big_mask_volume*reg.big_mask_volume + \
-                                self.lambda_tot_var_mask*reg.tot_var_mask + \
-                                self.lambda_overlap*reg.overlap_mask      
-                            
-                    log_prob_ZMASK = getattr(self,'LOSS_ZMASK',0.0)*torch.stack((logp.logp_off,logp.logp_on_cauchy-total_reg),dim=-1) 
-                    log_prob_ZWHAT = getattr(self,'LOSS_ZWHAT',0.0)*torch.stack((logp.logp_off,logp.logp_on_normal-total_reg),dim=-1) 
+            if observed:
+                logp, reg = self.score_observations(self.guide_results.z_where, putative_imgs, putative_masks,
+                                                    mask_pixel_assignment, definitely_bg_mask, imgs)
 
-                    pyro.sample("LOSS", Indicator(log_probs=log_prob_ZMASK+log_prob_ZWHAT), obs = c)
+                total_reg = self.lambda_small_box_size*reg.small_box_size + \
+                            self.lambda_big_mask_volume*reg.big_mask_volume + \
+                            self.lambda_tot_var_mask*reg.tot_var_mask + \
+                            self.lambda_overlap*reg.overlap_mask
 
-    def reconstruct_img(self,original_image,bounding_box=False):
-        if(self.use_cuda):
-            original_image=original_image.cuda()
+                kl_tot = self.guide_kl.bx + \
+                         self.guide_kl.by + \
+                         self.guide_kl.bw + \
+                         self.guide_kl.bh + \
+                         self.guide_kl.zwhat + \
+                         self.guide_kl.zmask
+
+                p = self.guide_results.prob.squeeze(-1)
+
+                total_off = (getattr(self, 'LOSS_ZMASK', 0.0) + getattr(self, 'LOSS_ZWHAT', 0.0)) * logp.logp_off
+                total_on = getattr(self, 'LOSS_ZMASK', 0.0) * (logp.logp_on_cauchy - total_reg) + \
+                           getattr(self, 'LOSS_ZWHAT', 0.0) * (logp.logp_on_normal - total_reg)
+                objective = (1 - p) * total_off + p * (total_on - kl_tot)
+                # print("objective.shape", objective.shape)
+                with pyro.plate("n_objects", objective.shape[0], dim=-2):
+                    pyro.sample("OBJECTIVE", CustomLogProbTerm(custom_log_prob=objective), obs=objective)
+
+    def reconstruct_img(self, original_image, bounding_box=False):
+        if self.use_cuda:
+            original_image = original_image.cuda()
         
         batch_size,ch,width,height = original_image.shape
         assert(width==height)
@@ -416,22 +370,23 @@ class Compositional_VAE(torch.nn.Module):
             #--------------------------#
             #-- 1. run the inference --#
             #--------------------------#      
-            z_nms = self.inference.forward(original_image,
-                                           prob_corr_factor=self.prob_corr_factor,
-                                           overlap_threshold=self.overlap_threshold,
-                                           randomize_nms_factor=self.randomize_nms_factor,
-                                           n_objects_max=self.n_objects_max,
-                                           topk_only=False)
-                
-            p       = z_nms.z_where.prob         
+            results, kl = self.inference.forward(original_image,
+                                                 prob_corr_factor=self.prob_corr_factor,
+                                                 overlap_threshold=self.overlap_threshold,
+                                                 randomize_nms_factor=self.randomize_nms_factor,
+                                                 n_objects_max=self.n_objects_max,
+                                                 topk_only=False,
+                                                 noisy_sampling=False)
+
+            p = results.prob
             assert p.shape == (self.n_objects_max,batch_size,1)
 
             #--------------------------------#
             #--- 2. Run the model forward ---#
             #--------------------------------#
-            generated = self.generator(z_where=z_nms.z_where,
-                                       z_what=z_nms.z_what.z_mu,
-                                       z_mask=z_nms.z_mask.z_mu,
+            generated = self.generator(z_where=results.z_where,
+                                       z_what=results.z_what,
+                                       z_mask=results.z_mask,
                                        width_raw=width,
                                        height_raw=height)
             putative_imgs = generated.big_mu_sigmoid
@@ -455,11 +410,11 @@ class Compositional_VAE(torch.nn.Module):
             
             # 3. If bounding_box == True compute the bounding box
             if(bounding_box == False):
-                return reconstructed_image,z_nms.z_where,putative_imgs,putative_masks,logp,reg
+                return reconstructed_image,results.z_where,putative_imgs,putative_masks,logp,reg
             elif(bounding_box == True):
-                bounding_boxes = self.draw_batch_of_images_with_bb_only(z_nms.z_where,width,height)
+                bounding_boxes = self.draw_batch_of_images_with_bb_only(results.z_where,width,height)
                 reconstructed_image_with_bb = bounding_boxes + reconstructed_image
-                return reconstructed_image_with_bb,z_nms.z_where,putative_imgs,putative_masks,logp,reg
+                return reconstructed_image_with_bb,results.z_where,putative_imgs,putative_masks,logp,reg
     
     def draw_batch_of_images_with_bb_only(self,z_where,width,height):
        

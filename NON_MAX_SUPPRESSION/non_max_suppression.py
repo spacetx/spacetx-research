@@ -76,11 +76,11 @@ class Non_Max_Suppression(torch.nn.Module):
         """ compute the matrix of shape: batch x n_boxes x n_boxes with the Intersection Over Unions """
 
         # compute x1,x3,y1,y3
-        x1 = (z_where.bx_dimfull - 0.5 * z_where.bw_dimfull).squeeze(-1)
-        x3 = (z_where.bx_dimfull + 0.5 * z_where.bw_dimfull).squeeze(-1)
-        y1 = (z_where.by_dimfull - 0.5 * z_where.bh_dimfull).squeeze(-1)
-        y3 = (z_where.by_dimfull + 0.5 * z_where.bh_dimfull).squeeze(-1)
-        area = (z_where.bw_dimfull * z_where.bh_dimfull).squeeze(-1)
+        x1 = (z_where.bx - 0.5 * z_where.bw).squeeze(-1)
+        x3 = (z_where.bx + 0.5 * z_where.bw).squeeze(-1)
+        y1 = (z_where.by - 0.5 * z_where.bh).squeeze(-1)
+        y3 = (z_where.by + 0.5 * z_where.bh).squeeze(-1)
+        area = (z_where.bw * z_where.bh).squeeze(-1)
 
         min_area = self.unroll_and_compare(area, "MIN")  # min of area between box1 and box2
         xi1 = self.unroll_and_compare(x1, "MAX")  # max of x1 between box1 and box2
@@ -91,11 +91,11 @@ class Non_Max_Suppression(torch.nn.Module):
         intersection_area = torch.clamp(xi3 - xi1, min=0) * torch.clamp(yi3 - yi1, min=0)
         return intersection_area / min_area
 
-    def compute_nms_mask(self, z_where=None, overlap_threshold=None, randomize_nms_factor=None,
+    def compute_nms_mask(self, prob=None, z_where=None, overlap_threshold=None, randomize_nms_factor=None,
                          n_objects_max=None, topk_only=None):
 
         # compute the indices to do nms + topk filter based on noisy probabilities
-        prob_all = z_where.prob.squeeze(-1)
+        prob_all = prob.squeeze(-1)
         assert len(prob_all.shape) == 2
         n_boxes, batch_size = prob_all.shape
 
@@ -127,20 +127,15 @@ class Non_Max_Suppression(torch.nn.Module):
 
         return chosen_nms_mask, top_k_indices, batch_indices
 
-    def forward(self, z_where=None, overlap_threshold=None, randomize_nms_factor=None, n_objects_max=None, topk_only=None):
+    def forward(self, prob=None, z_where=None, overlap_threshold=None, randomize_nms_factor=None, n_objects_max=None, topk_only=None):
 
         # package the output
         with torch.no_grad():
-            nms_mask, top_k_indices, batch_indices = self.compute_nms_mask(z_where=z_where,
+            nms_mask, top_k_indices, batch_indices = self.compute_nms_mask(prob=prob,
+                                                                           z_where=z_where,
                                                                            overlap_threshold=overlap_threshold,
                                                                            randomize_nms_factor=randomize_nms_factor,
                                                                            n_objects_max=n_objects_max,
                                                                            topk_only=topk_only)
-        nms_mask = nms_mask.unsqueeze(-1)
-        assert nms_mask.shape == z_where.prob.shape
-        return collections.namedtuple('z_where', 'prob bx_dimfull by_dimfull bw_dimfull bh_dimfull')._make(
-                [(z_where.prob*nms_mask)[top_k_indices, batch_indices],
-                  z_where.bx_dimfull[top_k_indices, batch_indices],
-                  z_where.by_dimfull[top_k_indices, batch_indices],
-                  z_where.bw_dimfull[top_k_indices, batch_indices],
-                  z_where.bh_dimfull[top_k_indices, batch_indices]])
+
+        return nms_mask, top_k_indices, batch_indices
