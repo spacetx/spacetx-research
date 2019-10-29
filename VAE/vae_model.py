@@ -398,8 +398,13 @@ class Compositional_VAE(torch.nn.Module):
             #---------------------------------#
             #--- 3. Score the model ----------#
             #---------------------------------#
-            logp,reg = self.score_observations(z_nms.z_where,putative_imgs,putative_masks,
+            logp,reg = self.score_observations(results.z_where,putative_imgs,putative_masks,
                                                mask_pixel_assignment,definitely_bg_mask,original_image)
+            
+            total_reg = self.lambda_small_box_size*reg.small_box_size + \
+                        self.lambda_big_mask_volume*reg.big_mask_volume + \
+                        self.lambda_tot_var_mask*reg.tot_var_mask + \
+                        self.lambda_overlap*reg.overlap_mask
            
             #---------------------------------#
             #----- 4. Reconstruct images -----#
@@ -410,26 +415,29 @@ class Compositional_VAE(torch.nn.Module):
             
             # 3. If bounding_box == True compute the bounding box
             if(bounding_box == False):
-                return reconstructed_image,results.z_where,putative_imgs,putative_masks,logp,reg
+                return reconstructed_image,results.z_where,putative_imgs,putative_masks,logp,reg,total_reg
             elif(bounding_box == True):
-                bounding_boxes = self.draw_batch_of_images_with_bb_only(results.z_where,width,height)
+                bounding_boxes = self.draw_batch_of_images_with_bb_only(prob=results.prob,
+                                                                        z_where=results.z_where,
+                                                                        width=width,
+                                                                        height=height)
                 reconstructed_image_with_bb = bounding_boxes + reconstructed_image
-                return reconstructed_image_with_bb,results.z_where,putative_imgs,putative_masks,logp,reg
+                return reconstructed_image_with_bb,results,putative_imgs,putative_masks,logp,reg,total_reg
     
-    def draw_batch_of_images_with_bb_only(self,z_where,width,height):
+    def draw_batch_of_images_with_bb_only(self,prob=None, z_where=None, width=None, height=None):
        
         # Exttract the probabilities for each box
-        n_boxes, batch_size = z_where.prob.shape[:2]
-        p = z_where.prob.view(n_boxes, batch_size, -1)
+        n_boxes, batch_size = prob.shape[:2]
+        p = prob.view(n_boxes, batch_size, -1)
         
         # prepare the storage
         batch_bb_np    = np.zeros((batch_size,width,height,3)) # numpy storage for bounding box images
         
         # compute the coordinates of the bounding boxes and the probability of each box
-        x1 = (z_where.bx_dimfull-0.5*z_where.bw_dimfull).view(n_boxes, batch_size, -1)
-        x3 = (z_where.bx_dimfull+0.5*z_where.bw_dimfull).view(n_boxes, batch_size, -1)
-        y1 = (z_where.by_dimfull-0.5*z_where.bh_dimfull).view(n_boxes, batch_size, -1)
-        y3 = (z_where.by_dimfull+0.5*z_where.bh_dimfull).view(n_boxes, batch_size, -1)
+        x1 = (z_where.bx - 0.5*z_where.bw).view(n_boxes, batch_size, -1)
+        x3 = (z_where.bx + 0.5*z_where.bw).view(n_boxes, batch_size, -1)
+        y1 = (z_where.by - 0.5*z_where.bh).view(n_boxes, batch_size, -1)
+        y3 = (z_where.by + 0.5*z_where.bh).view(n_boxes, batch_size, -1)
 
         assert( len(x1.shape) == 3) 
         x1y1x3y3 = torch.cat((x1,y1,x3,y3),dim=2)
