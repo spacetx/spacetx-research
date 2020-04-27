@@ -1,0 +1,74 @@
+{
+        "global" : {
+                "__comment" : "global parameters",
+                "dim_zwhat" : 25,
+                "dim_zmask" : 25,
+                "dim_zwhere" : 5,
+                "dim_weight" : 32,
+                "cropped_width" : 28},
+
+        "unet" : {
+                "__comment" : "parameters of the unet. level_zwhere_output is between 0 and n_max_pool included",
+        	    "n_max_pool" : 4,
+	            "level_zwhere_output" : 3,
+	            "level_background_output" : 4,
+         	    "n_ch_output_features" : 32,
+	            "n_ch_after_first_two_conv" : 32},
+        
+	"input_image" : {
+                "__comment" : "parameters describing the input images",
+                "n_objects_max" : 20,
+                "size_object_min" : 10,
+                "size_object_max" : 35,
+                "size_object_expected" : 20,
+                "size_raw_image" : 80,
+                "ch_in_description" : ["DAPI"]},
+
+        "nms" : {
+                "__comment" : "parameters for the non-max-suppression",
+                "score_threshold_test" : -1,
+                "score_threshold_train" : -1,
+                "overlap_threshold_test" : 0.3,
+                "overlap_threshold_train" : 0.3,
+                "randomize_nms_factor_test" :  0.2,
+                "randomize_nms_factor_train" :  0.2},
+        
+	"noise" : {
+                "__comment" : "noise to add in tx, ty, tw, th",
+                "prob_noise" : 0.00,
+		"tx_noise" : 0.00,
+                "ty_noise" : 0.00,
+                "tw_noise" : 0.00,
+                "th_noise" : 0.00},
+        
+
+        "loss" : {
+                "__comment" : "parameter of the observation model",
+                "bg_std" : 0.1,
+        	"fg_std" : 0.1,
+		"base_lr" : 0.001,
+        	"betas" : [0.9, 0.999],
+		"eps" : 1E-8},
+
+	"GECO" : {
+                "__comment" : "if active=false use ELBO, else use GECO with Log-Likelihood threshold = n_pixels * n_channel * threshold",
+		"initial_value" : 0.95,
+		"initial_time" : 100,
+		"goal" : [1.2,1.2],
+		"times" : [100,500],
+		"min" : 0.05,
+		"max" : 0.95,
+		"base_lr" : 0.001,
+		"betas" : [0.9, 0.999],
+		"eps" : 1E-8},
+
+  "training_prob_corr_factor" : {
+        "__comment" : "training protocoll to decay prob_corr_factor",
+        "values" : [0.5, 0.0],
+        "times" : [20, 50]},
+
+  "training_disk_corr_factor" : {
+        "__comment" : "training protocoll to decay disk_corr_factor",
+        "values" : [0.5, 0.0],
+        "times" : [20, 50]}
+}

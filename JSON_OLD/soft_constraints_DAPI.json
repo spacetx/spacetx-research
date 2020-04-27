@@ -1,0 +1,35 @@
+{
+    "prob_map_integral" : {
+        "__comment" : "the probability map fraction needs to be smaller than total number of objects",
+   	"upper_bound_value": 21.0,
+	"upper_bound_width": 1.0,
+	"upper_bound_strength": 1E-1,
+	"upper_bound_exponent": 1},
+    
+    "overlap" : {
+        "__comment" : "cost which encouranges mask from overlapping",
+        "strength" : 1E-2, 
+	"exponent" : 1.0},
+
+    "volume_mask_fraction" : {
+        "__comment" : "the mask volume fraction should be at least 25%",
+        "lower_bound_value": 0.20,
+        "lower_bound_width": 0.05,
+        "lower_bound_strength": 1E-1,
+        "lower_bound_exponent": 2,
+        "upper_bound_value": 0.80,
+        "upper_bound_width": 0.05,
+        "upper_bound_strength": 1E-1,
+        "upper_bound_exponent": 2.0},
+
+    "fg_pixel_fraction" : {
+        "__comment" : "Fraction of fg_pixel needs to be in a specific range",
+        "lower_bound_value": 0.03,
+        "lower_bound_width": 0.02,
+        "lower_bound_strength": 1E-1,
+        "lower_bound_exponent": 2.0,
+    	"upper_bound_value": 0.55,
+	"upper_bound_width": 0.02,
+	"upper_bound_strength": 1E-1,
+	"upper_bound_exponent": 2.0}
+}
