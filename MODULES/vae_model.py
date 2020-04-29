@@ -207,7 +207,6 @@ class CompositionalVae(torch.nn.Module):
 
         # Note that before returning I am computing the mean over the batch_size (which is the only dimension left)
         assert cost_fg_pixel_fraction.shape == cost_overlap.shape 
-
         return RegMiniBatch(cost_fg_pixel_fraction=cost_fg_pixel_fraction.mean(),
                             cost_overlap=cost_overlap.mean())
     
@@ -235,7 +234,7 @@ class CompositionalVae(torch.nn.Module):
         # Note that nll_off_bg is detached when appears with the minus sign. 
         # This is b/c we want the best possible background on top of which to add FOREGROUD objects
         nll_on = self.NLL_MSE(output=inference.big_img, target=imgs_in, sigma=self.sigma_fg)
-        nll_off = self.NLL_MSE(output=inference.bg_mu, target=imgs_in, sigma=self.sigma_bg) # batch_size, ch, w, h
+        nll_off = self.NLL_MSE(output=inference.bg_mu, target=imgs_in, sigma=self.sigma_bg)  # batch_size, ch, w, h
         delta_nll_obj = torch.mean(inference.big_mask * (nll_on - nll_off), dim=(-1, -2, -3))  # average over: ch, w, h
         delta_nll = torch.sum(inference.prob * delta_nll_obj, dim=0)  # sum over boxes -> batch_size
         nll_av = nll_off.mean() + delta_nll.mean()  # first term has means over batch_size, ch, w, h. Second term meand over batch_size
@@ -250,7 +249,6 @@ class CompositionalVae(torch.nn.Module):
         kl_zwhat_and_mask = 2 * torch.mean(torch.max(inference.kl_zwhat_each_obj,
                                                      inference.kl_zmask_each_obj))  # encourage even split
         kl_total_av = kl_zwhat_and_mask + kl_zwhere_av  #+ kl_logit_av  # one kl MIGHT be much bigger than others
-
 
         # compute the sparsity term: (sum over batch, ch=1, w, h and divide by n_instances * typical_size)
         n_box, batch_size, latent_zwhat = inference.kl_zwhat_each_obj.shape

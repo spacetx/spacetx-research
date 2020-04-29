@@ -58,6 +58,7 @@ class Inference(NamedTuple):
     kl_zmask_each_obj: torch.Tensor
     kl_zwhere_map: torch.Tensor
     kl_logit_map: torch.Tensor
+    integer_segmentation_mask: torch.Tensor
 ##     zmask: torch.Tensor
 ##     zwhat: torch.Tensor
 ##     zwhere_map: torch.Tensor

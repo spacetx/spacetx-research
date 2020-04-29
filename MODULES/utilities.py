@@ -3,6 +3,7 @@ import json
 from PIL import Image as pilimage
 from PIL import ImageDraw as pilimagedraw
 import pickle
+import random
 import numpy as np
 from torchvision import utils
 from matplotlib import pyplot as plt
@@ -10,6 +11,8 @@ from torch.utils.data.dataset import Dataset
 from torch.distributions.utils import broadcast_all
 from typing import Union, Callable, Optional, List, Tuple
 from .namedtuple import BB, DIST
+import torch.nn.functional as F
+
 
 
 def save_obj(obj, path):
@@ -228,72 +231,139 @@ def flatten_list(my_list: List[List]) -> list:
     return flat_list
 
 
-class DatasetInMemory(Dataset):
-    """ Typical usage:
+##class MyBatchSampler(Sampler):
+##    def __init__(self, dataset, batch_size=4, drop_last=False, shuffle=False):
+##        self.len = len(dataset)
+##        self.drop_last = drop_last
+##        self.batch_size = batch_size
+##        self.shuffle = shuffle
+##        self.n_max = self.len - (self.len % self.batch_size) if self.drop_last else self.len
+##
+##    def __iter__(self):
+##        index = torch.randperm(self.len).numpy() if self.shuffle else torch.arange(self.len).numpy()
+##        return (index[pos:pos+self.batch_size] for pos in range(0, self.n_max, self.batch_size))
+##
+##    def __len__(self):
+##        return self.n_max
 
-        synthetic_data_test  = dataset_in_memory(root_dir,"synthetic_data_DISK_test_v1",use_cuda=False)
-        for epoch in range(5):
-            print("EPOCH")
-            batch_iterator = synthetic_data_test.generate_batch_iterator(batch_size)
-            for i, x in enumerate(batch_iterator):
-                print(x)
-                blablabla
-                ......
-    """
 
-    def __init__(self, path, use_cuda=False):
-        super().__init__()
-        self.use_cuda = use_cuda
+
+
+class ManyRandomCropsTensor(object):
+    """Crop a torch Tensor at random locations to obtain output of given size """
+
+    def __init__(self, desired_w, desired_h, n_crops=1, mask=None):
+        self.desired_w = desired_w
+        self.desired_h = desired_h
+        self.mask = mask
+        self.augmentation_factor = n_crops
+
+    @staticmethod
+    def get_params(w_raw, h_raw, w_desired, h_desired):
+        assert w_desired <= w_raw
+        assert h_desired <= h_raw
+
+        if w_raw == w_desired and h_raw == h_desired:
+            return 0, 0
+        i = torch.randint(low=0, high=w_raw-w_desired, size=[1])
+        j = torch.randint(low=0, high=h_raw-h_desired, size=[1])
+        return i, j
+
+    def __call__(self, img):
+        assert isinstance(img, torch.Tensor)
+
+        crops = []
+        while len(crops) < self.augmentation_factor:
+            i, j = self.get_params(w_raw=img.shape[-2],
+                                   h_raw=img.shape[-1],
+                                   w_desired=self.desired_w,
+                                   h_desired=self.desired_h)
+
+            if self.mask is None or (self.mask[..., i, j] and self.mask[..., i+self.desired_w, j] and
+                                     self.mask[..., i, j+self.desired_h] and
+                                     self.mask[..., i+self.desired_w, j+self.desired_h]):
+                crops.append(img[..., i:(i+self.desired_w), j:(j+self.desired_h)])
+
+        return torch.cat([crop for crop in crops], dim=0)
+
+
+class LoaderInMemory(object):
+    def __init__(self, x=torch.Tensor,
+                 y=None,
+                 data_augmentation=None,
+                 transform_y=False,
+                 pin_in_cuda_memory=False,
+                 drop_last=False,
+                 batch_size=4,
+                 shuffle=False):
+
+        self.pin_in_cuda_memory = pin_in_cuda_memory
+        self.drop_last = drop_last
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.data_augmentation = data_augmentation
+        self.augmentation_factor = 1 if self.data_augmentation is None else self.data_augmentation.augmentation_factor
+        self.transform_y = transform_y
+        if y is None:
+            y = -1 * torch.ones(x.shape[0])
+        assert x.shape[0] == y.shape[0]
+        assert len(x.shape) == 4  # batch, ch, w, h
 
         with torch.no_grad():
-            # this is when I have both imgs and labels
-            imgs, labels = load_obj(path)
-            self.n = imgs.shape[0]
-
-            if self.use_cuda:
-                self.data = imgs.cuda()
-                self.labels = labels.cuda()
-            else:
-                self.data = imgs.cpu().detach()
-                self.labels = labels.cpu().detach()
-
-    def __len__(self):
-        return self.n
+            self.x = x.cuda().detach() if self.pin_in_cuda_memory else x.cpu().detach()
+            self.y = y.cuda().detach() if self.pin_in_cuda_memory else y.cpu().detach()
 
     def __getitem__(self, index):
-        return self.data[index, ...], self.labels[index]
+        if self.data_augmentation is None:
+            return [self.x[index], self.y[index], index]
+        else:
+            if self.transform_y:
+                x_new = self.data_augmentation(self.x[index])
+                y_new = self.data_augmentation(self.y[index])
+                index_new = index.repeat(self.data_augmentation.augmentation_factor)
+                return [x_new, y_new, index_new]
+            else:
+                x_new = self.data_augmentation(self.x[index])
+                y_new = self.y[index].repeat(self.data_augmentation.augmentation_factor)
+                index_new = index.repeat(self.data_augmentation.augmentation_factor)
+                return [x_new, y_new, index_new]
 
-    def load(self, batch_size=8, indices=None):
-        if indices is None:
-            indices = torch.randint(low=0, high=self.n, size=(batch_size,)).long()
-        return self.__getitem__(indices[:batch_size])
+    def __len__(self):
+        return self.x.shape[0]
 
-    def generate_batch_iterator(self, batch_size):
-        indices = torch.randperm(self.n).numpy()
-        remainder = len(indices) % batch_size
-        # n_max = len(indices) - remainder  # Note the trick so that all the minibatches have the same size
-        n_max = len(indices)
-        assert (n_max >= batch_size), "batch_size is too big for this dataset of size."
-        batch_iterator = (indices[pos:pos + batch_size] for pos in range(0, n_max, batch_size))
-        return batch_iterator
+    def __iter__(self, batch_size=None, drop_last=None, shuffle=None):
+        # If not specified use defaults
+        batch_size = self.batch_size if batch_size is None else batch_size
+        drop_last = self.drop_last if drop_last is None else drop_last
+        shuffle = self.shuffle if shuffle is None else shuffle
+        batch_size_eff = max(1, batch_size // self.augmentation_factor)
 
-    def check(self):
+        # Actual generation of iterator
+        n_max = max(1, self.__len__() - (self.__len__() % batch_size_eff) if drop_last else self.__len__())
+        index = torch.randperm(self.__len__()).long() if shuffle else torch.arange(self.__len__()).long()
+        return (self.__getitem__(index=index[pos:pos + batch_size_eff]) for pos in range(0, n_max, batch_size_eff))
 
-        imgs, labels = self.load(batch_size=8)
-        title = "# labels =" + str(labels.cpu().numpy().tolist())
-
+    def check_batch(self):
         print("Dataset lenght:", self.__len__())
-        print("imgs.shape", imgs.shape)
-        print("type(imgs)", type(imgs))
-        print("imgs.device", imgs.device)
-        print("torch.max(imgs)", torch.max(imgs))
-        print("torch.min(imgs)", torch.min(imgs))
+        print("imgs.shape", self.x.shape)
+        print("type(imgs)", type(self.x))
+        print("imgs.device", self.x.device)
+        print("torch.max(imgs)", torch.max(self.x))
+        print("torch.min(imgs)", torch.min(self.x))
+        # grab one minibatch
+        x, y, index = next(self.__iter__())
+        print("x,y,index shapes ->", x.shape, y.shape, index.shape)
+        return show_batch(x, n_col=4, n_padding=4, pad_value=1)
 
-        return show_batch(imgs, n_col=4, n_padding=4, title=title, pad_value=1)
+    def load(self, batch_size=4, index=None):
+        if (batch_size is None and index is None) or (batch_size is not None and index is not None):
+            raise Exception("Only one between batch_size and index must be specified")
+        index = torch.randint(low=0, high=self.__len__(), size=(batch_size,)).long() if index is None else index
+        return self.__getitem__(index)
 
 
 def process_one_epoch(model: torch.nn.Module,
-                      data_set: DatasetInMemory,
+                      dataloader: LoaderInMemory,
                       optimizer: Optional[torch.optim.Optimizer] = None,
                       weight_clipper: Optional[Callable[[None], None]] = None,
                       batch_size: int = 64,
@@ -302,13 +372,10 @@ def process_one_epoch(model: torch.nn.Module,
     n_term: int = 0
     dict_accumulate_accuracy: dict = {}
     dict_metric_av: dict = {}
-    batch_iterator = data_set.generate_batch_iterator(batch_size)
 
-    for i, indices in enumerate(batch_iterator):  # get the indices
-
-        # get the data from the indices. Note that everything is already loaded into memory
-        imgs_in, labels = data_set[indices]
-        metrics = model.forward(imgs_in=imgs_in).metrics  # the forward function returns metric and other stuff
+    for i, data in enumerate(dataloader):
+        x, y, index = data
+        metrics = model.forward(imgs_in=x).metrics  # the forward function returns metric and other stuff
         if verbose:
             print("i = %3d train_loss=%.5f" % (i, metrics.loss))
 
@@ -326,19 +393,19 @@ def process_one_epoch(model: torch.nn.Module,
         with torch.no_grad():
 
             # Accumulate metrics
-            n_term += len(indices)
+            n_term += len(index)
             for key in metrics._fields:
                 if key == 'n_obj_counts':
-                    counts = getattr(metrics, 'n_obj_counts').view_as(labels)
+                    counts = getattr(metrics, 'n_obj_counts').view_as(y)
                 else:
-                    value = getattr(metrics, key).item() * len(indices)
+                    value = getattr(metrics, key).item() * len(y)
                     dict_metric_av[key] = value + dict_metric_av.get(key, 0.0)
 
             # Accumulate counting accuracy
-            index_wrong_tmp = (labels != counts).cpu()
-            index_right_tmp = (labels == counts).cpu()
-            indices_wrong_examples = indices[index_wrong_tmp].tolist()
-            indices_right_examples = indices[index_right_tmp].tolist()
+            index_wrong_tmp = (y != counts).cpu()
+            index_right_tmp = (y == counts).cpu()
+            indices_wrong_examples = index[index_wrong_tmp].tolist()
+            indices_right_examples = index[index_right_tmp].tolist()
             dict_accumulate_accuracy = accumulate_counting_accuracy(indices_wrong_examples=indices_wrong_examples,
                                                                     indices_right_examples=indices_right_examples,
                                                                     dict_accuracy=dict_accumulate_accuracy)
@@ -562,7 +629,7 @@ class ConstrainedParam(torch.nn.Module):
         self.unconstrained = torch.nn.Parameter(init_unconstrained, requires_grad=True)
 
     def forward(self):
-        # return constrained, self.unconstrained
+        # return constrained parameter
         return self.transformation.to_constrained(self.unconstrained)
 
 

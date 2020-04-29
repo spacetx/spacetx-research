@@ -58,7 +58,10 @@ def invert_convert_to_box_list(x: torch.Tensor, original_width: int, original_he
 
 
 def from_weights_to_masks(weight: torch.Tensor, dim: int):
-    """ Make sure that when summing over dim=dim the mask sum to zero one """
+    """ Make sure that when summing over dim=dim the mask sum to zero or one
+        mask_j = fg_mask * partitioning_j
+        where fg_mask = tanh ( sum_i w_i) and partitioning_j = w_j / (sum_i w_i)
+    """
     assert len(weight.shape) == 5
     sum_weight = torch.sum(weight, dim=dim, keepdim=True)
     fg_mask = torch.tanh(sum_weight)
@@ -277,12 +280,21 @@ class Inference_and_Generation(torch.nn.Module):
                                                         noisy_sampling=noisy_sampling,
                                                         sample_from_prior=generate_synthetic_data)
 
+        # multiply by prob? prob_detached?
         small_weight = F.softplus(self.decoder_mask.forward(zmask_few.sample))
         big_weight = self.uncropper.forward(bounding_box=bounding_box_few,
                                             small_stuff=small_weight,
                                             width_big=width_raw_image,
                                             height_big=height_raw_image)
+        # big_mask = from_weights_to_masks(weight=prob_times_big_weight, dim=-5)
         big_mask = from_weights_to_masks(weight=big_weight, dim=-5)
+
+        # make the segmentation mask (one integer for each object)
+        with torch.no_grad():
+            prob_times_big_weight = prob_few[..., None, None, None] * big_weight
+            index = torch.max(prob_times_big_weight, dim=-5, keepdim=True)[1]
+            most_likely_mask = torch.gather(prob_times_big_weight, dim=-5, index=index)
+            integer_segmentation_mask = ((most_likely_mask > 0.5) * (index+1)).squeeze(-5)  # bg = 0 fg = 1,2,3,...
 
         # ------------------------------------------------------------------#
         # 7. mask the raw image and crop it
@@ -320,4 +332,5 @@ class Inference_and_Generation(torch.nn.Module):
                          kl_logit_map=logit_map.kl,
                          kl_zwhere_map=zwhere_map.kl,
                          kl_zwhat_each_obj=zwhat_few.kl,
-                         kl_zmask_each_obj=zmask_few.kl)
+                         kl_zmask_each_obj=zmask_few.kl,
+                         integer_segmentation_mask=integer_segmentation_mask)
