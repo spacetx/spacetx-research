@@ -419,3 +419,4 @@ class CompositionalVae(torch.nn.Module):
                                            score_threshold=self.nms_dict["score_threshold"],
                                            randomize_nms_factor=self.nms_dict["randomize_nms_factor"],
                                            n_objects_max=self.input_img_dict["n_objects_max"])
+
