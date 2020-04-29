@@ -27,7 +27,6 @@ class BB(NamedTuple):
 class NMSoutput(NamedTuple):
     nms_mask: torch.Tensor
     index_top_k: torch.Tensor
-    batch_index_top_k: torch.Tensor
 
 
 class Checkpoint(NamedTuple):

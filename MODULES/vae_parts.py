@@ -1,9 +1,9 @@
 import torch
 import torch.nn.functional as F
-from .unet_model import UNet
-from .non_max_suppression import NonMaxSuppression
-from .encoders_decoders import EncoderConv, DecoderConv, Decoder1by1Linear # DecoderZwhere # Encoder1by1, Decoder1by1
 from .cropper_uncropper import Uncropper, Cropper
+from .non_max_suppression import NonMaxSuppression
+from .unet_model import UNet
+from .encoders_decoders import EncoderConv, DecoderConv, Decoder1by1Linear # DecoderZwhere # Encoder1by1, Decoder1by1
 from .utilities import compute_average_intensity_in_box, compute_ranking
 from .utilities import sample_and_kl_diagonal_normal, sample_and_kl_multivariate_normal
 from .namedtuple import Inference, BB, NMSoutput, UNEToutput, ZZ, DIST
@@ -120,9 +120,7 @@ class Inference_and_Generation(torch.nn.Module):
 
         # modules
         self.unet: UNet = UNet(params)
-        self.nms: NonMaxSuppression = NonMaxSuppression()
-        self.cropper: Cropper = Cropper()
-        self.uncropper: Uncropper = Uncropper()
+
         # encoder z_what (takes the raw image)
         self.encoder_zwhat: EncoderConv = EncoderConv(size=params["architecture"]["cropped_size"],
                                                       ch_in=params["input_image"]["ch_in"],
@@ -245,26 +243,26 @@ class Inference_and_Generation(torch.nn.Module):
         # 4. NMS and TOP-K to select few probabilities and bounding boxes
         # ------------------------------------------------------------------#
         with torch.no_grad():
-            nms_output: NMSoutput = self.nms.forward(prob=prob_all,
-                                                     bounding_box=bounding_box_all,
-                                                     score_threshold=score_threshold,
-                                                     overlap_threshold=overlap_threshold,
-                                                     randomize_nms_factor=randomize_nms_factor,
-                                                     n_objects_max=n_objects_max,
-                                                     topk_only=topk_only)
-            
-        prob_few: torch.Tensor = (prob_all * nms_output.nms_mask)[nms_output.index_top_k, nms_output.batch_index_top_k]
-        bounding_box_few: BB = BB(bx=bounding_box_all.bx[nms_output.index_top_k, nms_output.batch_index_top_k],
-                                  by=bounding_box_all.by[nms_output.index_top_k, nms_output.batch_index_top_k],
-                                  bw=bounding_box_all.bw[nms_output.index_top_k, nms_output.batch_index_top_k],
-                                  bh=bounding_box_all.bh[nms_output.index_top_k, nms_output.batch_index_top_k])
+            nms_output: NMSoutput = NonMaxSuppression.compute_mask_and_index(prob=prob_all,
+                                                                             bounding_box=bounding_box_all,
+                                                                             score_threshold=score_threshold,
+                                                                             overlap_threshold=overlap_threshold,
+                                                                             randomize_nms_factor=randomize_nms_factor,
+                                                                             n_objects_max=n_objects_max,
+                                                                             topk_only=topk_only)
+
+        prob_few: torch.Tensor = torch.gather((prob_all * nms_output.nms_mask), dim=0, index=nms_output.index_top_k)
+        bounding_box_few: BB = BB(bx=torch.gather(bounding_box_all.bx, dim=0, index=nms_output.index_top_k),
+                                  by=torch.gather(bounding_box_all.by, dim=0, index=nms_output.index_top_k),
+                                  bw=torch.gather(bounding_box_all.bw, dim=0, index=nms_output.index_top_k),
+                                  bh=torch.gather(bounding_box_all.bh, dim=0, index=nms_output.index_top_k))
 
         # ------------------------------------------------------------------#
         # 5. Crop the unet_features according to the selected boxes
         # ------------------------------------------------------------------#
         n_boxes, batch_size = bounding_box_few.bx.shape
         unet_features_expanded = unet_output.features.unsqueeze(0).expand(n_boxes, batch_size, -1, -1, -1)
-        cropped_feature_map: torch.Tensor = self.cropper(bounding_box=bounding_box_few,
+        cropped_feature_map: torch.Tensor = Cropper.crop(bounding_box=bounding_box_few,
                                                          big_stuff=unet_features_expanded,
                                                          width_small=self.cropped_size,
                                                          height_small=self.cropped_size)
@@ -282,10 +280,10 @@ class Inference_and_Generation(torch.nn.Module):
 
         # multiply by prob? prob_detached?
         small_weight = F.softplus(self.decoder_mask.forward(zmask_few.sample))
-        big_weight = self.uncropper.forward(bounding_box=bounding_box_few,
-                                            small_stuff=small_weight,
-                                            width_big=width_raw_image,
-                                            height_big=height_raw_image)
+        big_weight = Uncropper.uncrop(bounding_box=bounding_box_few,
+                                      small_stuff=small_weight,
+                                      width_big=width_raw_image,
+                                      height_big=height_raw_image)
         # big_mask = from_weights_to_masks(weight=prob_times_big_weight, dim=-5)
         big_mask = from_weights_to_masks(weight=big_weight, dim=-5)
 
@@ -300,7 +298,7 @@ class Inference_and_Generation(torch.nn.Module):
         # 7. mask the raw image and crop it
         # should mask be detached here?
         # ------------------------------------------------------------------#
-        cropped_img = self.cropper(bounding_box=bounding_box_few,
+        cropped_img = Cropper.crop(bounding_box=bounding_box_few,
                                    big_stuff=imgs_in * big_mask,  # should mask be detached here?
                                    width_small=self.cropped_size,
                                    height_small=self.cropped_size)
@@ -316,10 +314,10 @@ class Inference_and_Generation(torch.nn.Module):
                                                         noisy_sampling=noisy_sampling,
                                                         sample_from_prior=generate_synthetic_data)
         small_img = torch.sigmoid(self.decoder_imgs.forward(zwhat_few.sample))
-        big_img: torch.Tensor = self.uncropper.forward(bounding_box=bounding_box_few,
-                                                       small_stuff=small_img,
-                                                       width_big=width_raw_image,
-                                                       height_big=height_raw_image)
+        big_img: torch.Tensor = Uncropper.uncrop(bounding_box=bounding_box_few,
+                                                 small_stuff=small_img,
+                                                 width_big=width_raw_image,
+                                                 height_big=height_raw_image)
 
         # 9. Return the inferred quantities
         return Inference(bg_mu=unet_output.bg_mu,

@@ -3,7 +3,7 @@ import torch.nn as nn
 from .namedtuple import BB, NMSoutput
 
 
-class NonMaxSuppression(nn.Module):
+class NonMaxSuppression(object):
     """ Use Intersection_over_Union criteria to put most of the entries to zero while leaving few detection unchanged.
         INPUT  has shape: BATCH x N_BOXES x .... 
         OUTPUT has shape: BATCH x K_MAX   x ....
@@ -74,7 +74,8 @@ class NonMaxSuppression(nn.Module):
         else:
             raise Exception("label is unknown. It is ", label)
 
-    def compute_box_intersection_over_min_area(self, bounding_box: BB) -> torch.Tensor:
+    @staticmethod
+    def compute_box_intersection_over_min_area(bounding_box: BB) -> torch.Tensor:
         """ compute the matrix of shape: batch x n_boxes x n_boxes with the Intersection Over Unions """
 
         # compute x1,x3,y1,y3
@@ -84,29 +85,30 @@ class NonMaxSuppression(nn.Module):
         y3: torch.Tensor = bounding_box.by + 0.5 * bounding_box.bh
         area: torch.Tensor = bounding_box.bw * bounding_box.bh
 
-        min_area: torch.Tensor = self.unroll_and_compare(area, "MIN")  # min of area between box1 and box2
-        xi1: torch.Tensor = self.unroll_and_compare(x1, "MAX")  # max of x1 between box1 and box2
-        yi1: torch.Tensor = self.unroll_and_compare(y1, "MAX")  # max of y1 between box1 and box2
-        xi3: torch.Tensor = self.unroll_and_compare(x3, "MIN")  # min of x3 between box1 and box2
-        yi3: torch.Tensor = self.unroll_and_compare(y3, "MIN")  # min of y3 between box1 and box2
+        min_area: torch.Tensor = NonMaxSuppression.unroll_and_compare(area, "MIN")  # min of area between box1 and box2
+        xi1: torch.Tensor = NonMaxSuppression.unroll_and_compare(x1, "MAX")  # max of x1 between box1 and box2
+        yi1: torch.Tensor = NonMaxSuppression.unroll_and_compare(y1, "MAX")  # max of y1 between box1 and box2
+        xi3: torch.Tensor = NonMaxSuppression.unroll_and_compare(x3, "MIN")  # min of x3 between box1 and box2
+        yi3: torch.Tensor = NonMaxSuppression.unroll_and_compare(y3, "MIN")  # min of y3 between box1 and box2
 
         intersection_area: torch.Tensor = torch.clamp(xi3 - xi1, min=0) * torch.clamp(yi3 - yi1, min=0)
         return intersection_area / min_area
 
-    def compute_nms_mask(self, prob: torch.Tensor,
-                         bounding_box: BB,
-                         score_threshold: float,
-                         overlap_threshold: float,
-                         randomize_nms_factor: float,
-                         n_objects_max: int,
-                         topk_only: bool) -> NMSoutput:
+    @staticmethod
+    def compute_mask_and_index(prob: torch.Tensor,
+                               bounding_box: BB,
+                               score_threshold: float,
+                               overlap_threshold: float,
+                               randomize_nms_factor: float,
+                               n_objects_max: int,
+                               topk_only: bool) -> NMSoutput:
 
         # compute the indices to do nms + topk filter based on noisy probabilities
         assert len(prob.shape) == 2
         n_boxes, batch_size = prob.shape
 
         # this is O(N^2) algorithm
-        overlap_measure = self.compute_box_intersection_over_min_area(bounding_box=bounding_box)
+        overlap_measure = NonMaxSuppression.compute_box_intersection_over_min_area(bounding_box=bounding_box)
         binarized_overlap_measure = (overlap_measure > overlap_threshold).float()
         assert binarized_overlap_measure.shape == (n_boxes, n_boxes, batch_size)
 
@@ -119,10 +121,10 @@ class NonMaxSuppression(nn.Module):
             chosen_nms_mask = torch.ones_like(noisy_score)
         else:
             possible = (noisy_score > score_threshold).float()
-            chosen_nms_mask: torch.Tensor = self.perform_nms_selection(mask_overlap=binarized_overlap_measure,
-                                                                       score=noisy_score,
-                                                                       possible=possible,
-                                                                       n_objects_max=n_objects_max)
+            chosen_nms_mask: torch.Tensor = NonMaxSuppression.perform_nms_selection(mask_overlap=binarized_overlap_measure,
+                                                                                    score=noisy_score,
+                                                                                    possible=possible,
+                                                                                    n_objects_max=n_objects_max)
 
             assert chosen_nms_mask.shape == (n_boxes, batch_size)
 
@@ -133,22 +135,7 @@ class NonMaxSuppression(nn.Module):
         masked_score = chosen_nms_mask * noisy_score
         k = min(n_objects_max, n_boxes)
         indices_top_k: torch.Tensor = torch.topk(masked_score, k=k, dim=-2, largest=True, sorted=True)[1]
-        batch_tmp: torch.Tensor = torch.arange(start=0, end=batch_size, step=1, dtype=indices_top_k.dtype,
-                                               device=indices_top_k.device).view(1, -1)
 
         return NMSoutput(nms_mask=chosen_nms_mask,
-                         index_top_k=indices_top_k,
-                         batch_index_top_k=batch_tmp.expand(k, -1))
+                         index_top_k=indices_top_k)
 
-    def forward(self, prob=None, bounding_box=None, score_threshold=None, overlap_threshold=None,
-                randomize_nms_factor=None, n_objects_max=None, topk_only=None):
-
-        # package the output
-        with torch.no_grad():
-            return self.compute_nms_mask(prob=prob,
-                                         bounding_box=bounding_box,
-                                         score_threshold=score_threshold,
-                                         overlap_threshold=overlap_threshold,
-                                         randomize_nms_factor=randomize_nms_factor,
-                                         n_objects_max=n_objects_max,
-                                         topk_only=topk_only)

@@ -3,14 +3,15 @@ import torch.nn.functional as F
 from .namedtuple import BB
 
 
-class Cropper(torch.nn.Module):
+class Cropper(object):
     """ Use STN to crop out a patch of the original images according to z_where. 
         It uses REFLECTION padding """
     
     def __init__(self):
         super().__init__()
 
-    def forward(self, bounding_box: BB, big_stuff: torch.Tensor, width_small: int, height_small: int) -> torch.Tensor:
+    @staticmethod
+    def crop(bounding_box: BB, big_stuff: torch.Tensor, width_small: int, height_small: int) -> torch.Tensor:
 
         # Prepare the shapes
         independent_dim: list = list(big_stuff.shape[:-3])  # this extract n_boxes, batch
@@ -20,9 +21,9 @@ class Cropper(torch.nn.Module):
         assert independent_dim == list(bounding_box.bx.shape)
 
         # Compute the affine matrix
-        affine: torch.Tensor = self.compute_affine_cropper(bounding_box=bounding_box,
-                                                           width_raw=width_raw,
-                                                           height_raw=height_raw)
+        affine: torch.Tensor = Cropper.compute_affine_cropper(bounding_box=bounding_box,
+                                                              width_raw=width_raw,
+                                                              height_raw=height_raw)
 
         # The cropped and uncropped imgs have:
         # a. same independent dimension (boxes, batch)
@@ -66,13 +67,14 @@ class Cropper(torch.nn.Module):
         return torch.cat((sy, zero, ky, zero, sx, kx), dim=-1).view(-1, 2, 3)
 
     
-class Uncropper(torch.nn.Module):
+class Uncropper(object):
     """ Use STN to uncrop the original images according to z_where. """
     
     def __init__(self):
         super().__init__()
 
-    def forward(self, bounding_box: BB, small_stuff: torch.Tensor, width_big: int, height_big: int) -> torch.Tensor:
+    @staticmethod
+    def uncrop(bounding_box: BB, small_stuff: torch.Tensor, width_big: int, height_big: int) -> torch.Tensor:
 
         # Check and prepare the sizes
         ch: int = small_stuff.shape[-3]  # this is the channels
@@ -82,9 +84,9 @@ class Uncropper(torch.nn.Module):
         assert independent_dim == list(bounding_box.bx.shape)
 
         # Compute the affine matrix. Note that z_where has only independent dimensions
-        affine_matrix: torch.Tensor = self.compute_affine_uncropper(bounding_box=bounding_box,
-                                                                    width_raw=width_big,
-                                                                    height_raw=height_big).view(independent_dim+[2, 3])
+        affine_matrix: torch.Tensor = Uncropper.compute_affine_uncropper(bounding_box=bounding_box,
+                                                                         width_raw=width_big,
+                                                                         height_raw=height_big).view(independent_dim+[2, 3])
 
         # The cropped and uncropped imgs have:
         # a. same independent dimension (enumeration, boxes, batch)
