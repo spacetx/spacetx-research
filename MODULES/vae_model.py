@@ -378,7 +378,11 @@ class CompositionalVae(torch.nn.Module):
         assert 0.5*crop_w <= str_w <= crop_w
         assert 0.5*crop_h <= str_h <= crop_h
 
+        #try:
         img_padded = F.pad(img, pad=[overlap_w, pad_w, overlap_h, pad_h], mode='reflect')
+        #except:
+        #    img_padded = F.pad(img, pad=[overlap_w, pad_w, overlap_h, pad_h], mode='constant', value=0)
+
         stitched_segmentation_mask = torch.zeros_like(img_padded)
 
         self.eval()  # do I need this?
