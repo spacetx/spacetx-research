@@ -353,7 +353,7 @@ class LoaderInMemory(object):
         # grab one minibatch
         x, y, index = next(self.__iter__())
         print("x,y,index shapes ->", x.shape, y.shape, index.shape)
-        return show_batch(x, n_col=4, n_padding=4, pad_value=1)
+        return show_batch(x[:8], n_col=4, n_padding=4, pad_value=1)
 
     def load(self, batch_size=4, index=None):
         if (batch_size is None and index is None) or (batch_size is not None and index is not None):
