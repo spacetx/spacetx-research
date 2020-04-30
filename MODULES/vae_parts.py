@@ -287,13 +287,6 @@ class Inference_and_Generation(torch.nn.Module):
         # big_mask = from_weights_to_masks(weight=prob_times_big_weight, dim=-5)
         big_mask = from_weights_to_masks(weight=big_weight, dim=-5)
 
-        # make the segmentation mask (one integer for each object)
-        with torch.no_grad():
-            prob_times_big_weight = prob_few[..., None, None, None] * big_weight
-            index = torch.max(prob_times_big_weight, dim=-5, keepdim=True)[1]
-            most_likely_mask = torch.gather(prob_times_big_weight, dim=-5, index=index)
-            integer_segmentation_mask = ((most_likely_mask > 0.5) * (index+1)).squeeze(-5)  # bg = 0 fg = 1,2,3,...
-
         # ------------------------------------------------------------------#
         # 7. mask the raw image and crop it
         # should mask be detached here?
@@ -330,5 +323,4 @@ class Inference_and_Generation(torch.nn.Module):
                          kl_logit_map=logit_map.kl,
                          kl_zwhere_map=zwhere_map.kl,
                          kl_zwhat_each_obj=zwhat_few.kl,
-                         kl_zmask_each_obj=zmask_few.kl,
-                         integer_segmentation_mask=integer_segmentation_mask)
+                         kl_zmask_each_obj=zmask_few.kl)

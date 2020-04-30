@@ -321,6 +321,87 @@ class CompositionalVae(torch.nn.Module):
                                delta_2=delta_2,
                                n_obj_counts=n_obj_counts)
 
+    def segment(self, img, n_objects_max=None):
+        n_objects_max = self.input_img_dict["n_objects_max"] if n_objects_max is None else n_objects_max
+        self.eval()
+        with torch.no_grad():
+            results = self.inference_and_generator(imgs_in=img,
+                                                   generate_synthetic_data=False,
+                                                   prob_corr_factor=getattr(self, "prob_corr_factor", 0.0),
+                                                   overlap_threshold=self.nms_dict["overlap_threshold"],
+                                                   score_threshold=self.nms_dict["score_threshold"],
+                                                   randomize_nms_factor=0.0,  # self.nms_dict["randomize_nms_factor"]
+                                                   n_objects_max=n_objects_max,
+                                                   topk_only=False,
+                                                   noisy_sampling=False)
+
+            # make the segmentation mask (one integer for each object)
+            prob_times_big_mask = results.prob[..., None, None, None] * results.big_mask
+            most_likely_mask, index = torch.max(prob_times_big_mask, dim=-5, keepdim=True)
+            integer_segmentation_mask = ((most_likely_mask > 0.5) * (index + 1)).squeeze(-5)  # bg = 0 fg = 1,2,3,...
+
+        return integer_segmentation_mask
+
+    def segment_with_tiling(self, img, crop_w, crop_h, stride_w, stride_h, n_objects_max_per_patch=None):
+
+        # Initialization
+        batch_size, ch, w, h = img.shape
+        n_obj_tot = torch.zeros(batch_size)  # add singleton for ch, w, h
+        if n_objects_max_per_patch is None:
+            n_objects_max_per_patch = self.input_img_dict["n_objects_max"]
+
+        # solve overlap = (crop - stride) / 2
+        # Recompute stride b/c overlap is rounded
+        overlap_w = int(np.ceil(0.5*(crop_w - stride_w)))
+        overlap_h = int(np.ceil(0.5*(crop_h - stride_h)))
+        str_w = crop_w - 2*overlap_w  # new stride
+        str_h = crop_h - 2*overlap_h  # new stride
+        filter_keep = torch.zeros((crop_w, crop_h))
+        filter_keep[overlap_w:crop_w-overlap_w, overlap_h:crop_h-overlap_h] = 1
+        print("overlaps", overlap_w, overlap_h)
+        print("strides", str_w, str_h)
+
+        # solve crop + n * stride >= size + 2 * overlap
+        n_w = int(np.ceil(float(w + 2*overlap_w - crop_w)/str_w))
+        n_h = int(np.ceil(float(h + 2*overlap_h - crop_h)/str_h))
+        print("nw ->", n_w, "crop+ n*stride ->", crop_w + n_w*str_w, "w + 2*overlap ->", w + 2*overlap_w)
+        print("nh ->", n_h, "crop+ n*stride ->", crop_h + n_h*str_h, "h + 2*overlap ->", h + 2*overlap_h)
+
+        # compute how much padding to do to the right (padding to the left is exactly the overlap
+        pad_w = n_w * str_w + crop_w - overlap_w - w
+        pad_h = n_h * str_h + crop_h - overlap_h - h
+        print("pad_w pad_h ->", pad_w, pad_h)
+
+        # assertions
+        assert len(img.shape) == 4
+        assert isinstance(img, torch.Tensor)
+        assert 0.5*crop_w <= str_w <= crop_w
+        assert 0.5*crop_h <= str_h <= crop_h
+
+        img_padded = F.pad(img, pad=[overlap_w, pad_w, overlap_h, pad_h], mode='reflect')
+        stitched_segmentation_mask = torch.zeros_like(img_padded)
+
+        self.eval()  # do I need this?
+        with torch.no_grad():
+            for i_w in range(n_w+1):
+                w1 = i_w * str_w
+                w2 = w1 + crop_w
+                for i_h in range(n_h+1):
+                    h1 = i_h * str_h
+                    h2 = h1 + crop_h
+
+                    integer_mask = self.segment(img=img_padded[..., w1:w2, h1:h2],
+                                                n_objects_max=n_objects_max_per_patch)
+
+                    integer_mask = integer_mask * filter_keep  # this need to be improved
+                    integer_mask_shifted = torch.where(integer_mask > 0,
+                                                       integer_mask + n_obj_tot.view(-1, 1, 1, 1),
+                                                       torch.zeros_like(integer_mask))  # shift the integers
+                    n_obj_tot = torch.max(integer_mask_shifted.view(batch_size, -1), dim=-1, keepdim=False)[0]
+                    stitched_segmentation_mask[..., w1:w2, h1:h2] += integer_mask_shifted
+
+        return stitched_segmentation_mask[..., overlap_w:overlap_w+w, overlap_h:overlap_h+h]
+
     # this is the generic function which has all the options unspecified
     def process_batch_imgs(self,
                            imgs_in: torch.tensor,
