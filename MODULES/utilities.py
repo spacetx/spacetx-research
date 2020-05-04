@@ -231,6 +231,58 @@ def flatten_list(my_list: List[List]) -> list:
     return flat_list
 
 
+def estimate_noise(img: torch.Tensor, radius_nn: int=2):
+    # Compute average first
+    avg = torch.zeros_like(img)
+    n = 0
+    for dx in range(-radius_nn,radius_nn+1):
+        y_tmp = torch.roll(img, dx, dims=-2)
+        for dy in range(-radius_nn,radius_nn+1):
+            y = torch.roll(y_tmp, dy, dims=-1)
+            avg += y
+            n +=1
+    avg = avg.float()/n
+    # print("avg ->",torch.min(avg), torch.max(avg))
+                    
+    # Compute variance later
+    var = torch.zeros_like(avg)
+    n = 0
+    for dx in range(-radius_nn,radius_nn+1):
+        y_tmp = torch.roll(img, dx, dims=-2)
+        for dy in range(-radius_nn,radius_nn+1):
+            y = torch.roll(y_tmp, dy, dims=-1)
+            var += (y-avg)**2
+            n +=1
+    var = var / (n-1)
+    # print("var ->",torch.min(var), torch.max(var))
+                        
+    # remove boundaries
+    avg = avg[...,radius_nn+1:-radius_nn-1] 
+    var = var[...,radius_nn+1:-radius_nn-1] 
+                    
+    y = torch.sqrt(var[avg>0]).view(-1)
+    x = avg[avg>0].view(-1)
+    return x,y
+
+
+def index_for_binning(input, bins=100, min=0, max=0):
+    if (min == 0) and (max == 0):
+        min = torch.min(input)
+        max = torch.max(input)
+    index = (bins * (input - min).float()/(max-min)).int()
+    return index
+
+
+def compute_average_in_each_bin(x,y,bins=100, x_min=0, x_max=0):
+    assert x.shape == y.shape
+    index = index_for_binning(x, bins=bins, min=x_min, max=x_max)
+    x_stratified = torch.zeros(bins, dtype=x.dtype, device=x.device)
+    y_stratified = torch.zeros(bins, dtype=x.dtype, device=x.device)
+    for i in range(0,bins):
+        x_stratified[i] = x[index==i].mean()
+        y_stratified[i] = y[index==i].mean()
+    return x_stratified, y_stratified
+
 ##class MyBatchSampler(Sampler):
 ##    def __init__(self, dataset, batch_size=4, drop_last=False, shuffle=False):
 ##        self.len = len(dataset)
