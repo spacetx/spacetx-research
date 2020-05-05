@@ -7,18 +7,18 @@
  "wdl.file_ckpt" : "gs://ld-results-bucket/ckpt/dummy.pkl",
 
  "wdl.bucket_output" : "gs://ld-results-bucket",
- "wdl.dir_output" : "trial_geco_v1",
+ "wdl.dir_output" : "merfish",
 
  "wdl.notebook_name": "MAIN.ipynb",
  "wdl.git_repo": "https://github.com/spacetx/spacetx-research.git",
- "wdl.commit_or_branch": "42_generative_model",
+ "wdl.commit_or_branch": "master",
 
  "simulation" : {
    "__comment" : "there are 3 types of runs: scratch, resume, pre_trained",
    "type" : "scratch",
-   "MAX_EPOCHS" : 301,
+   "MAX_EPOCHS" : 30001,
    "TEST_FREQUENCY" : 5,
-   "CHECKPOINT_FREQUENCY" : 5,
+   "CHECKPOINT_FREQUENCY" : 20,
    "batch_size" : 128
  },
 
@@ -38,10 +38,10 @@
 
  "input_image" : {
    "__comment" : "parameters describing the input images",
-   "n_objects_max" : 6,
+   "n_objects_max" : 20,
    "size_object_min" : 10,
    "size_object_max" : 35,
-   "size_object_expected" : 20,
+   "size_object_expected" : 15,
    "sigma_squared_exp_kernel_porb_map" : 8.0,
    "size_raw_image" : 80,
    "ch_in" : 1
@@ -56,8 +56,8 @@
 
  "loss" : {
    "__comment" : "parameter of the observation model",
-   "bg_std" : 0.1,
-   "fg_std" : 0.1
+   "bg_std" : 0.02,
+   "fg_std" : 0.02
  },
 
  "optimizer" : {
@@ -78,15 +78,15 @@
  "shortcut_prob_corr_factor" : {
    "__comment" : "parameters for the shortcut for porb_corr_factor",
    "values" : [0.5, 0.0],
-   "times" : [20, 50]
+   "times" : [100, 500]
  },
 
  "GECO" : {
    "__comment" : "if active=false use ELBO, else use GECO with Log-Likelihood threshold = n_pixels * n_channel * threshold",
    "is_active" : true,
-   "factor_nll_range" : [0.0, 1.0, 20.0],
-   "factor_sparsity_range" : [0.0, 1.0, 20.0],
-   "target_n_obj" : [3.2, 3.5],
+   "factor_nll_range" : [0.0, 1.0, 40.0],
+   "factor_sparsity_range" : [0.0, 1.0, 40.0],
+   "target_n_obj" : [6.2, 10.5],
    "target_nll" : [0.35, 0.5]
  },
 

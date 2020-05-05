@@ -1,7 +1,7 @@
 import torch
 import json
-from PIL import Image as pilimage
-from PIL import ImageDraw as pilimagedraw
+import PIL.Image 
+import PIL.ImageDraw 
 import pickle
 import random
 import numpy as np
@@ -283,6 +283,32 @@ def compute_average_in_each_bin(x,y,bins=100, x_min=0, x_max=0):
         y_stratified[i] = y[index==i].mean()
     return x_stratified, y_stratified
 
+
+def normalize_tensor(input, scale_each_image=False, scale_each_channel=False, in_place=False):
+    """ Normalize a batch of images to the range 0,1 """
+            
+    assert len(input.shape) == 4  # batch, ch, w,h 
+    
+    if (not scale_each_image) and (not scale_each_channel):
+        max = torch.max(input)
+        min = torch.min(input)
+    elif scale_each_image and (not scale_each_channel):
+        max = torch.max(input, dim=-4, keepdim=True)
+        min = torch.min(input, dim=-4, keepdim=True)
+    elif not(scale_each_image) and scale_each_channel:
+        max = torch.max(input, dim=-3, keepdim=True)
+        min = torch.min(input, dim=-3, keepdim=True)
+    elif scale_each_image and scale_each_channel:
+        max = torch.max(input, dim=(-4,-3), keepdim=True)
+        min = torch.min(input, dim=(-4,-3), keepdim=True)
+            
+    if in_place:
+        data = input.clone().clamp_(min=min, max=max) # avoid modifying tensor in-place
+    else:
+        data = input.clamp_(min=min, max=max)
+    return data.add_(-min).div_(max - min + 1e-5)
+
+
 ##class MyBatchSampler(Sampler):
 ##    def __init__(self, dataset, batch_size=4, drop_last=False, shuffle=False):
 ##        self.len = len(dataset)
@@ -366,7 +392,10 @@ class LoaderInMemory(object):
             self.y = y.cuda().detach() if self.pin_in_cuda_memory else y.cpu().detach()
 
     def __getitem__(self, index):
-        if self.data_augmentation is None:
+        assert isinstance(index, torch.Tensor)
+        index = index.view(-1)  # batch size
+
+        if self.data_augmentation is None:  
             return [self.x[index], self.y[index], index]
         else:
             if self.transform_y:
@@ -405,7 +434,7 @@ class LoaderInMemory(object):
         # grab one minibatch
         x, y, index = next(self.__iter__())
         print("x,y,index shapes ->", x.shape, y.shape, index.shape)
-        return show_batch(x[:8], n_col=4, n_padding=4, pad_value=1)
+        return show_batch(x[:8], n_col=4, n_padding=4, pad_value=1, figsize=(24,24))
 
     def load(self, batch_size=4, index=None):
         if (batch_size is None and index is None) or (batch_size is not None and index is not None):
@@ -483,7 +512,8 @@ def show_batch(images: torch.Tensor,
                n_col: int = 4,
                n_padding: int = 10,
                title: Optional[str] = None,
-               pad_value: int = 1):
+               pad_value: int = 1, 
+               figsize: Optional[Tuple[float,float]] = None): 
     """Visualize a torch tensor of shape: (batch x ch x width x height) """
     assert len(images.shape) == 4  # batch, ch, width, height
     if images.device != "cpu":
@@ -491,7 +521,7 @@ def show_batch(images: torch.Tensor,
     grid = utils.make_grid(images, n_col, n_padding, normalize=True, range=(0.0, 1.0),
                            scale_each=False, pad_value=pad_value)
         
-    fig = plt.figure()
+    fig = plt.figure(figsize=figsize)
     plt.imshow(grid.detach().numpy().transpose((1, 2, 0)))
     if isinstance(title, str):
         plt.title(title)
@@ -579,8 +609,8 @@ def draw_bounding_boxes(prob: Optional[torch.Tensor], bounding_box: BB, width: i
     for batch in range(batch_size):
 
         # Draw on PIL
-        img = pilimage.new('RGB', (width, height), color=0)
-        draw = pilimagedraw.Draw(img)
+        img = PIL.Image.new('RGB', (width, height), color=0)
+        draw = PIL.ImageDraw.Draw(img)
         for box in range(n_boxes):
             if prob[box, batch] > -1:
             # if prob[box, batch] > 0.5:

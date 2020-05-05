@@ -288,14 +288,16 @@ class CompositionalVae(torch.nn.Module):
             # If n_obj_av < min(target_n_obj) -> tmp2 > 0 -> too few objects
             tmp1 = (n_obj_av - max(self.geco_dict["target_n_obj"])).clamp(min=0.0)
             tmp2 = (min(self.geco_dict["target_n_obj"]) - n_obj_av).clamp(min=0.0)
-            delta_1 = torch.sign(tmp2 - tmp1).detach()
+            #delta_1 = torch.sign(tmp2 - tmp1).detach()
+            delta_1 = (tmp2 - tmp1).detach()
             loss_1 = (fspar_c - fnll_c) * delta_1
 
             # If nll_av > max(target_nll) -> tmp3 > 0 -> bad reconstruction
             # If nll_av < min(target_nll) -> tmp4 > 0 -> too good reconstruction
             tmp3 = (nll_av - max(self.geco_dict["target_nll"])).clamp(min=0.0)
             tmp4 = (min(self.geco_dict["target_nll"]) - nll_av).clamp(min=0.0)
-            delta_2 = torch.sign(tmp4 - tmp3).detach()
+            # delta_2 = torch.sign(tmp4 - tmp3).detach()
+            delta_2 = (tmp4 - tmp3).detach()
             loss_2 = fnll_c * delta_2
 
             loss_av = loss_vae + loss_1 + loss_2 - (loss_1 + loss_2).detach()     
@@ -321,7 +323,10 @@ class CompositionalVae(torch.nn.Module):
                                delta_2=delta_2,
                                n_obj_counts=n_obj_counts)
 
-    def segment(self, img, n_objects_max=None):
+    def segment(self, img, n_objects_max=None, draw_bounding_box=False):
+
+
+
         n_objects_max = self.input_img_dict["n_objects_max"] if n_objects_max is None else n_objects_max
         self.eval()
         with torch.no_grad():
@@ -339,14 +344,23 @@ class CompositionalVae(torch.nn.Module):
             prob_times_big_mask = results.prob[..., None, None, None] * results.big_mask
             most_likely_mask, index = torch.max(prob_times_big_mask, dim=-5, keepdim=True)
             integer_segmentation_mask = ((most_likely_mask > 0.5) * (index + 1)).squeeze(-5)  # bg = 0 fg = 1,2,3,...
+       
+            if draw_bounding_box:
+                bounding_boxes = draw_bounding_boxes(prob=results.prob,
+                                                     bounding_box=results.bounding_box,
+                                                     width=integer_segmentation_mask.shape[-2],
+                                                     height=integer_segmentation_mask.shape[-1]) 
+            else:
+                bounding_boxes = torch.zeros_like(integer_segmentation_mask)
 
-        return integer_segmentation_mask
 
-    def segment_with_tiling(self, img, crop_w, crop_h, stride_w, stride_h, n_objects_max_per_patch=None):
+        return bounding_boxes + integer_segmentation_mask
+
+    def segment_with_tiling(self, img, crop_w, crop_h, stride_w, stride_h, n_objects_max_per_patch=None, draw_bounding_box=False):
 
         # Initialization
-        batch_size, ch, w, h = img.shape
-        n_obj_tot = torch.zeros(batch_size)  # add singleton for ch, w, h
+        batch_size, ch, w_raw, h_raw = img.shape
+        n_obj_tot = torch.zeros(batch_size, device=img.device, dtype=img.dtype)  # add singleton for ch, w, h
         if n_objects_max_per_patch is None:
             n_objects_max_per_patch = self.input_img_dict["n_objects_max"]
 
@@ -356,20 +370,21 @@ class CompositionalVae(torch.nn.Module):
         overlap_h = int(np.ceil(0.5*(crop_h - stride_h)))
         str_w = crop_w - 2*overlap_w  # new stride
         str_h = crop_h - 2*overlap_h  # new stride
-        filter_keep = torch.zeros((crop_w, crop_h))
+        filter_keep = torch.zeros((crop_w, crop_h), device=img.device, dtype=img.dtype)
         filter_keep[overlap_w:crop_w-overlap_w, overlap_h:crop_h-overlap_h] = 1
         print("overlaps", overlap_w, overlap_h)
         print("strides", str_w, str_h)
 
         # solve crop + n * stride >= size + 2 * overlap
-        n_w = int(np.ceil(float(w + 2*overlap_w - crop_w)/str_w))
-        n_h = int(np.ceil(float(h + 2*overlap_h - crop_h)/str_h))
-        print("nw ->", n_w, "crop+ n*stride ->", crop_w + n_w*str_w, "w + 2*overlap ->", w + 2*overlap_w)
-        print("nh ->", n_h, "crop+ n*stride ->", crop_h + n_h*str_h, "h + 2*overlap ->", h + 2*overlap_h)
+        n_w = int(np.ceil(float(w_raw + 2*overlap_w - crop_w)/str_w))
+        n_h = int(np.ceil(float(h_raw + 2*overlap_h - crop_h)/str_h))
+        print("ntiles ->", n_w, n_h)
+        print("area covered by tiles", crop_w + n_w*str_w, crop_h + n_h*str_h)
+        print("area to cover", w_raw + 2*overlap_w, h_raw + 2*overlap_h)
 
         # compute how much padding to do to the right (padding to the left is exactly the overlap
-        pad_w = n_w * str_w + crop_w - overlap_w - w
-        pad_h = n_h * str_h + crop_h - overlap_h - h
+        pad_w = n_w * str_w + crop_w - overlap_w - w_raw
+        pad_h = n_h * str_h + crop_h - overlap_h - h_raw
         print("pad_w pad_h ->", pad_w, pad_h)
 
         # assertions
@@ -380,10 +395,11 @@ class CompositionalVae(torch.nn.Module):
 
         #try:
         img_padded = F.pad(img, pad=[overlap_w, pad_w, overlap_h, pad_h], mode='reflect')
+        print("img_padded",img_padded.shape)
         #except:
         #    img_padded = F.pad(img, pad=[overlap_w, pad_w, overlap_h, pad_h], mode='constant', value=0)
 
-        stitched_segmentation_mask = torch.zeros_like(img_padded)
+        stitched_segmentation_mask = None
 
         self.eval()  # do I need this?
         with torch.no_grad():
@@ -393,18 +409,22 @@ class CompositionalVae(torch.nn.Module):
                 for i_h in range(n_h+1):
                     h1 = i_h * str_h
                     h2 = h1 + crop_h
-
+                    # print(h1,h2)
                     integer_mask = self.segment(img=img_padded[..., w1:w2, h1:h2],
-                                                n_objects_max=n_objects_max_per_patch)
+                                                n_objects_max=n_objects_max_per_patch,
+                                                draw_bounding_box=draw_bounding_box)
 
                     integer_mask = integer_mask * filter_keep  # this need to be improved
                     integer_mask_shifted = torch.where(integer_mask > 0,
                                                        integer_mask + n_obj_tot.view(-1, 1, 1, 1),
                                                        torch.zeros_like(integer_mask))  # shift the integers
                     n_obj_tot = torch.max(integer_mask_shifted.view(batch_size, -1), dim=-1, keepdim=False)[0]
+                    if stitched_segmentation_mask is None:
+                        stitched_segmentation_mask = torch.zeros((batch_size, integer_mask.shape[-3], 
+                            img_padded.shape[-2], img_padded.shape[-1]), device=img.device, dtype=img.dtype)
                     stitched_segmentation_mask[..., w1:w2, h1:h2] += integer_mask_shifted
 
-        return stitched_segmentation_mask[..., overlap_w:overlap_w+w, overlap_h:overlap_h+h]
+        return stitched_segmentation_mask[..., overlap_w:overlap_w+w_raw, overlap_h:overlap_h+h_raw]
 
     # this is the generic function which has all the options unspecified
     def process_batch_imgs(self,
