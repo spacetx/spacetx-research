@@ -141,14 +141,11 @@ class CompositionalVae(torch.nn.Module):
 
         self.geco_factor_sparsity = ConstrainedParam(initial_data=
                                                      torch.tensor(np.median(self.geco_dict["factor_sparsity_range"])),
-                                                     transformation=ConstraintBounded(
-                                                         lower_bound=np.min(self.geco_dict["factor_sparsity_range"]),
-                                                         upper_bound=np.max(self.geco_dict["factor_sparsity_range"])))
+                                                     transformation=ConstraintBase())
         
         self.geco_factor_nll = ConstrainedParam(initial_data=torch.tensor(np.median(self.geco_dict["factor_nll_range"])),
-                                                transformation=ConstraintBounded(
-                                                    lower_bound=np.min(self.geco_dict["factor_nll_range"]),
-                                                    upper_bound=np.max(self.geco_dict["factor_nll_range"])))
+                                                transformation=ConstraintLarger(
+                                                    lower_bound=np.min(self.geco_dict["factor_nll_range"])))
 
         # Put everything on the cude if necessary
         self.use_cuda = torch.cuda.is_available()

@@ -12,7 +12,13 @@ from torch.distributions.utils import broadcast_all
 from typing import Union, Callable, Optional, List, Tuple
 from .namedtuple import BB, DIST
 import torch.nn.functional as F
+import skimage.filters
 
+
+def foreground_mask(image_):
+    image_thresh = skimage.filters.threshold_otsu(image_)
+    fg_mask = (image_ > image_thresh).float()  # True = bright, False = dark
+    return fg_mask 
 
 
 def save_obj(obj, path):
@@ -436,7 +442,7 @@ class LoaderInMemory(object):
         print("x,y,index shapes ->", x.shape, y.shape, index.shape)
         return show_batch(x[:8], n_col=4, n_padding=4, pad_value=1, figsize=(24,24))
 
-    def load(self, batch_size=4, index=None):
+    def load(self, batch_size=None, index=None):
         if (batch_size is None and index is None) or (batch_size is not None and index is not None):
             raise Exception("Only one between batch_size and index must be specified")
         index = torch.randint(low=0, high=self.__len__(), size=(batch_size,)).long() if index is None else index
@@ -683,7 +689,25 @@ class ConstraintBase(object):
         return value
 
 
-class ConstraintBounded(ConstraintBase):
+class ConstraintLarger(ConstraintBase):
+    def __init__(self, lower_bound: Union[float, torch.Tensor]) -> None:
+        super().__init__()
+        self.lower_bound = lower_bound
+
+    def to_unconstrained(self, value):
+        """ takes value in (lower_bound, +Infinity) and returns in (-Infinity, Infinity) """
+        assert (self.lower_bound <= value).all()
+        delta = value - self.lower_bound
+        tmp = torch.log(torch.exp(delta)-1.0)
+        result = torch.where(delta > 10.0, delta, tmp)
+        return torch.where(torch.isinf(-result), -14.0*torch.ones_like(result), result) 
+
+    def to_constrained(self, value):
+        """ takes value in (-Infinity, Infinity) and returns in (lower_bound, +Infinity) """
+        return F.softplus(value, beta=1, threshold=10.0) + self.lower_bound
+
+
+class ConstraintRange(ConstraintBase):
     def __init__(self, lower_bound: Union[float, torch.Tensor], upper_bound: Union[float, torch.Tensor]) -> None:
         super().__init__()
         self.lower_bound = lower_bound
