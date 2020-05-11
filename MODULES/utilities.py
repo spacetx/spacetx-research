@@ -398,6 +398,7 @@ class LoaderInMemory(object):
             self.y = y.cuda().detach() if self.pin_in_cuda_memory else y.cpu().detach()
 
     def __getitem__(self, index):
+        #print("index, augmentation_is_none", index, self.data_augmentation is None)
         assert isinstance(index, torch.Tensor)
         index = index.view(-1)  # batch size
 
@@ -517,14 +518,18 @@ def show_batch(images: torch.Tensor,
                n_col: int = 4,
                n_padding: int = 10,
                title: Optional[str] = None,
-               pad_value: int = 1, 
+               pad_value: int = 1,
+               normalize_range: Optional[tuple] = (0.0, 1.0),
                figsize: Optional[Tuple[float,float]] = None): 
     """Visualize a torch tensor of shape: (batch x ch x width x height) """
     assert len(images.shape) == 4  # batch, ch, width, height
     if images.device != "cpu":
         images = images.cpu()
-    grid = utils.make_grid(images, n_col, n_padding, normalize=True, range=(0.0, 1.0),
-                           scale_each=False, pad_value=pad_value)
+    if normalize_range is None:
+        grid = utils.make_grid(images, n_col, n_padding, normalize=False, pad_value=pad_value)
+    else:
+        grid = utils.make_grid(images, n_col, n_padding, normalize=True, range=(0.0, 1.0),
+                               scale_each=False, pad_value=pad_value)
         
     fig = plt.figure(figsize=figsize)
     plt.imshow(grid.detach().numpy().transpose((1, 2, 0)))

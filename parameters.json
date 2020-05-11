@@ -24,8 +24,8 @@
 
  "architecture" : {
    "__comment" : "architecture parameters, level_zwhere_output is between 0 and n_max_pool included",
-   "dim_zwhat" : 25,
-   "dim_zmask" : 25,
+   "dim_zwhat" : 10,
+   "dim_zmask" : 10,
    "dim_zwhere" : 4,
    "dim_logit" : 1,
    "cropped_size" : 28,
@@ -38,9 +38,9 @@
 
  "input_image" : {
    "__comment" : "parameters describing the input images",
-   "n_objects_max" : 20,
-   "size_object_min" : 10,
-   "size_object_max" : 35,
+   "n_objects_max" : 15,
+   "size_object_min" : 5,
+   "size_object_max" : 20,
    "size_object_expected" : 15,
    "sigma_squared_exp_kernel_porb_map" : 8.0,
    "size_raw_image" : 80,
@@ -58,8 +58,8 @@
 
  "loss" : {
    "__comment" : "parameter of the observation model",
-   "bg_std" : 0.02,
-   "fg_std" : 0.02
+   "bg_std" : 0.1,
+   "fg_std" : 0.1
  },
 
  "optimizer" : {
@@ -73,14 +73,14 @@
    "eps" : 1E-8,
    "scheduler_is_active" : false,
    "scheduler_type" : "step_LR",
-   "scheduler_step_size" : 100,
+   "scheduler_step_size" : 200,
    "scheduler_gamma" : 0.75
  },
 
  "shortcut_prob_corr_factor" : {
    "__comment" : "parameters for the shortcut for porb_corr_factor",
    "values" : [0.5, 0.0],
-   "times" : [100, 500]
+   "times" : [100, 200]
  },
 
  "GECO" : {
@@ -88,8 +88,8 @@
    "is_active" : true,
    "factor_nll_range" : [0.0, 1.0, 40.0],
    "factor_sparsity_range" : [0.0, 1.0, 40.0],
-   "target_n_obj" : [6.2, 10.5],
-   "target_nll" : [0.35, 0.5]
+   "target_n_obj" : [5.2, 12.5],
+   "target_nll" : [0.5, 1.0]
  },
 
  "soft_constraint" : {
@@ -97,11 +97,11 @@
 
    "fg_pixel_fraction": {
      "__comment": "Fraction of fg_pixel needs to be in a specific range",
-     "lower_bound_value": 0.25,
-     "lower_bound_width": 0.05,
+     "lower_bound_value": 0.05,
+     "lower_bound_width": 0.02,
      "lower_bound_strength": 1E-1,
      "lower_bound_exponent": 2,
-     "upper_bound_value": 0.65,
+     "upper_bound_value": 0.25,
      "upper_bound_width": 0.05,
      "upper_bound_strength": 1E-1,
      "upper_bound_exponent": 2
