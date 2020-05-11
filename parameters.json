@@ -44,7 +44,9 @@
    "size_object_expected" : 15,
    "sigma_squared_exp_kernel_porb_map" : 8.0,
    "size_raw_image" : 80,
-   "ch_in" : 1
+   "ch_in" : 1,
+   "bg_is_zero" : true,
+   "background_resolution_before_upsampling" : 1
  },
 
  "nms" : {

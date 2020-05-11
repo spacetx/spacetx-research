@@ -25,9 +25,10 @@ class PredictBackground(nn.Module):
         super().__init__()
         self.predict = MLP_1by1(ch_in=ch_in, ch_out=ch_out)
 
-    def forward(self, x, desired_w, desired_h):
-        small_bg_mu = torch.sigmoid(self.predict(x))
-        return F.interpolate(small_bg_mu, size=[desired_w, desired_h], mode='bilinear', align_corners=True)
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        bg_mu = torch.sigmoid(self.predict(x))
+        return bg_mu
+
 
 
 class DoubleConvolutionBlock(nn.Module):
