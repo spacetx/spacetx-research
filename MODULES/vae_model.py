@@ -176,12 +176,13 @@ class CompositionalVae(torch.nn.Module):
             2. overlap make sure that mask do not overlap
         """
         
-        p_detached_times_mask = inference.prob[..., None, None, None].detach() * inference.big_mask  # singleton ch,w,h
-        weighted_fg_mask = torch.sum(p_detached_times_mask, dim=-5)  # sum over boxes
-        
-        # 1. fg_pixel_fraction should be in a range. This is a foreground budget. 
-        # The model should allocate the foreground pixel where most necessary (i.e. where description based on background is bad)
-        fraction_fg_pixels = torch.mean(weighted_fg_mask, dim=(-1, -2, -3))  # mean over: ch,w,h
+        # 1. fg_pixel_fraction should be in a range. This is a foreground budget.
+        # The model should allocate the foreground pixel where most necessary
+        # (i.e. where description based on background is bad)
+        # Note that prob is attached so that, if you are in the empty solution,
+        # this regularization helps the object to turn themselves on
+        fg_pixel = torch.sum(inference.prob[..., None, None, None] * inference.big_mask, dim=-5) # singleton ch,w,h
+        fraction_fg_pixels = torch.mean(fg_pixel, dim=(-1, -2, -3))  # mean over: ch,w,h
         cost_fg_pixel_fraction = sample_from_constraints_dict(dict_soft_constraints=self.dict_soft_constraints,
                                                               var_name="fg_pixel_fraction",
                                                               var_value=fraction_fg_pixels,
@@ -192,6 +193,8 @@ class CompositionalVae(torch.nn.Module):
         # This should change the mask but NOT the probabilities therefore prob are DETACHED.
         # cost_i = 0.5 * sum_{x,y} \sum_{i \ne j} (p_i M_i * p_j M_j)
         #        = 0.5 * sum_{x,y} (\sum_i p_i M_i)^2  - \sum_i (p_i M_i)^2
+        p_detached_times_mask = inference.prob[..., None, None, None].detach() * inference.big_mask  # singleton ch,w,h
+        weighted_fg_mask = torch.sum(p_detached_times_mask, dim=-5)  # sum over boxes
         square_first_sum_later = torch.sum(p_detached_times_mask * p_detached_times_mask, dim=-5)  # sum over boxes
         sum_first_square_later = weighted_fg_mask * weighted_fg_mask
         # Now I sum over ch,w,h and make sure that the min value is > 0 (due to rounding error I might get <0)
@@ -322,8 +325,6 @@ class CompositionalVae(torch.nn.Module):
 
     def segment(self, img, n_objects_max=None, draw_bounding_box=False):
 
-
-
         n_objects_max = self.input_img_dict["n_objects_max"] if n_objects_max is None else n_objects_max
         self.eval()
         with torch.no_grad():
@@ -335,25 +336,30 @@ class CompositionalVae(torch.nn.Module):
                                                    randomize_nms_factor=0.0,  # self.nms_dict["randomize_nms_factor"]
                                                    n_objects_max=n_objects_max,
                                                    topk_only=False,
-                                                   noisy_sampling=False)
+                                                   noisy_sampling=False,
+                                                   bg_is_zero=True,
+                                                   bg_resolution=(1,1))
 
             # make the segmentation mask (one integer for each object)
             prob_times_big_mask = results.prob[..., None, None, None] * results.big_mask
             most_likely_mask, index = torch.max(prob_times_big_mask, dim=-5, keepdim=True)
             integer_segmentation_mask = ((most_likely_mask > 0.5) * (index + 1)).squeeze(-5)  # bg = 0 fg = 1,2,3,...
-       
+
             if draw_bounding_box:
                 bounding_boxes = draw_bounding_boxes(prob=results.prob,
                                                      bounding_box=results.bounding_box,
                                                      width=integer_segmentation_mask.shape[-2],
-                                                     height=integer_segmentation_mask.shape[-1]) 
+                                                     height=integer_segmentation_mask.shape[-1])
             else:
                 bounding_boxes = torch.zeros_like(integer_segmentation_mask)
 
-
         return bounding_boxes + integer_segmentation_mask
 
-    def segment_with_tiling(self, img, crop_w, crop_h, stride_w, stride_h, n_objects_max_per_patch=None, draw_bounding_box=False):
+    def segment_with_tiling(self, img: torch.Tensor,
+                            crop: tuple,
+                            stride: tuple,
+                            n_objects_max_per_patch: Optional[int] = None,
+                            draw_bounding_box: bool = False):
 
         # Initialization
         batch_size, ch, w_raw, h_raw = img.shape
@@ -363,6 +369,8 @@ class CompositionalVae(torch.nn.Module):
 
         # solve overlap = (crop - stride) / 2
         # Recompute stride b/c overlap is rounded
+        crop_w, crop_h = crop
+        stride_w, stride_h = stride
         overlap_w = int(np.ceil(0.5*(crop_w - stride_w)))
         overlap_h = int(np.ceil(0.5*(crop_h - stride_h)))
         str_w = crop_w - 2*overlap_w  # new stride
@@ -436,7 +444,9 @@ class CompositionalVae(torch.nn.Module):
                            overlap_threshold: float,
                            score_threshold: float,
                            randomize_nms_factor: float,
-                           n_objects_max: int):
+                           n_objects_max: int,
+                           bg_is_zero: bool,
+                           bg_resolution: tuple):
         """ It needs to return: metric (with a .loss member) and whatever else """
 
         # Checks
@@ -452,7 +462,9 @@ class CompositionalVae(torch.nn.Module):
                                                randomize_nms_factor=randomize_nms_factor,
                                                n_objects_max=n_objects_max,
                                                topk_only=topk_only,
-                                               noisy_sampling=noisy_sampling)
+                                               noisy_sampling=noisy_sampling,
+                                               bg_is_zero=bg_is_zero,
+                                               bg_resolution=bg_resolution)
 
         regularizations = self.compute_regularizations(inference=results,
                                                        verbose=verbose)
@@ -476,7 +488,9 @@ class CompositionalVae(torch.nn.Module):
                 verbose: bool = False):
 
         noisy_sampling: bool = True if self.training else False
-        prob_corr_factor: float = 0.0 if self.prob_corr_factor is None else self.prob_corr_factor
+        prob_corr_factor = getattr(self, "prob_corr_factor", 0.0)
+        bg_is_zero = getattr(self, "bg_is_zero", True)
+        bg_resolution = getattr(self, "bg_resolution", (2, 2))
 
         return self.process_batch_imgs(imgs_in=imgs_in,
                                        generate_synthetic_data=False,
@@ -489,7 +503,9 @@ class CompositionalVae(torch.nn.Module):
                                        overlap_threshold=self.nms_dict["overlap_threshold"],
                                        score_threshold=self.nms_dict["score_threshold"],
                                        randomize_nms_factor=self.nms_dict["randomize_nms_factor"],
-                                       n_objects_max=self.input_img_dict["n_objects_max"])
+                                       n_objects_max=self.input_img_dict["n_objects_max"],
+                                       bg_is_zero=bg_is_zero,
+                                       bg_resolution=bg_resolution)
 
     def generate(self,
                  imgs_in: Optional[torch.tensor] = None,
@@ -520,5 +536,7 @@ class CompositionalVae(torch.nn.Module):
                                            overlap_threshold=self.nms_dict["overlap_threshold"],
                                            score_threshold=self.nms_dict["score_threshold"],
                                            randomize_nms_factor=self.nms_dict["randomize_nms_factor"],
-                                           n_objects_max=self.input_img_dict["n_objects_max"])
+                                           n_objects_max=self.input_img_dict["n_objects_max"],
+                                           bg_is_zero=True,
+                                           bg_resolution=(1, 1))
 

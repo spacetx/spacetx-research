@@ -453,7 +453,6 @@ def process_one_epoch(model: torch.nn.Module,
                       dataloader: LoaderInMemory,
                       optimizer: Optional[torch.optim.Optimizer] = None,
                       weight_clipper: Optional[Callable[[None], None]] = None,
-                      batch_size: int = 64,
                       verbose: bool = False) -> dict:
     """ return a dictionary with all the metrics """
     n_term: int = 0

@@ -69,6 +69,12 @@ def from_weights_to_masks(weight: torch.Tensor, dim: int):
     return fg_mask * partitioning
 
 
+def downsample_and_upsample(x: torch.Tensor, low_resolution: tuple, high_resolution: tuple):
+    low_res_x = F.interpolate(x, size=low_resolution, mode='bilinear', align_corners=True)
+    high_res_x = F.interpolate(low_res_x, size=high_resolution, mode='bilinear', align_corners=True)
+    return high_res_x
+
+
 class Moving_Average_Calculator:
     """ beta is the factor multiplying the moving average.
         Approximately we average the last 1/(1-beta) points.
@@ -153,7 +159,9 @@ class Inference_and_Generation(torch.nn.Module):
                 randomize_nms_factor: float,
                 n_objects_max: int,
                 topk_only: bool,
-                noisy_sampling: bool) -> Inference:
+                noisy_sampling: bool,
+                bg_is_zero: bool,
+                bg_resolution: tuple) -> Inference:
 
         # 0. preparation
         batch_size, ch_raw_image, width_raw_image, height_raw_image = imgs_in.shape
@@ -162,6 +170,12 @@ class Inference_and_Generation(torch.nn.Module):
         # 1. UNET
         # ---------------------------#
         unet_output: UNEToutput = self.unet.forward(imgs_in, verbose=False)
+        if bg_is_zero:
+            bg_mu = torch.zeros_like(imgs_in)
+        else:
+            bg_mu = downsample_and_upsample(unet_output.bg_mu,
+                                            low_resolution=bg_resolution,
+                                            high_resolution=(imgs_in.shape[-2], imgs_in.shape[-1]))
 
         # ---------------------------#
         # 2. ZWHERE to BoundingBoxes
@@ -221,7 +235,7 @@ class Inference_and_Generation(torch.nn.Module):
         # Add probability correction if necessary
         if (prob_corr_factor > 0) and (prob_corr_factor <= 1.0) and not generate_synthetic_data:
             with torch.no_grad():
-                av_intensity: torch.Tensor = compute_average_intensity_in_box(torch.abs(imgs_in - unet_output.bg_mu),
+                av_intensity: torch.Tensor = compute_average_intensity_in_box(torch.abs(imgs_in - bg_mu),
                                                                               bounding_box_all)
                 assert len(av_intensity.shape) == 2
                 n_boxes_all, batch_size = av_intensity.shape
@@ -313,7 +327,7 @@ class Inference_and_Generation(torch.nn.Module):
                                                  height_big=height_raw_image)
 
         # 9. Return the inferred quantities
-        return Inference(bg_mu=unet_output.bg_mu,
+        return Inference(bg_mu=bg_mu,
                          p_map=p_map_cor,
                          area_map=area_map,
                          big_mask=big_mask,

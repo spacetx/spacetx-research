@@ -90,7 +90,7 @@ class UNet(torch.nn.Module):
                 zwhere = self.encode_zwhere(x)
                 logit = self.encode_logit(x)
             if dist_to_end_of_net == self.level_background_output:
-                bg_mu = self.pred_background(x, desired_w=input_w, desired_h=input_h)
+                bg_mu = self.pred_background(x)
 
             x = up(to_be_concatenated.pop(), x, verbose)
             if verbose:
