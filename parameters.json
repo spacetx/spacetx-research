@@ -7,7 +7,7 @@
  "wdl.file_ckpt" : "gs://ld-results-bucket/ckpt/dummy.pkl",
 
  "wdl.bucket_output" : "gs://ld-results-bucket",
- "wdl.dir_output" : "merfish",
+ "wdl.dir_output" : "merfish_adam",
 
  "wdl.notebook_name": "MAIN.ipynb",
  "wdl.git_repo": "https://github.com/spacetx/spacetx-research.git",
@@ -58,13 +58,13 @@
 
  "loss" : {
    "__comment" : "parameter of the observation model",
-   "bg_std" : 0.1,
-   "fg_std" : 0.1
+   "bg_std" : 0.02,
+   "fg_std" : 0.02
  },
 
  "optimizer" : {
    "__comment" : "which optimizer to use",
-   "type" : "SGD",
+   "type" : "adam",
    "base_lr" : 0.001,
    "betas" : [0.9, 0.999],
    "base_lr_geco" : 0.001,
