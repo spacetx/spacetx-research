@@ -37,15 +37,15 @@ def save_everything(path: str,
 def load_info(path: str,
               load_params: bool = False,
               load_epoch: bool = False,
-              load_history: bool = False) -> tuple:
+              load_history: bool = False) -> Checkpoint:
 
     if torch.cuda.is_available():
-        resumed = torch.load(path, map_location="cuda:0")
+        resumed = torch.load(path) #, map_location="cuda:0")
     else:
         resumed = torch.load(path, map_location=torch.device('cpu'))
 
     epoch = resumed['epoch'] if load_epoch else None
-    hyperparams_dict = resumed['hyperparams_dict'] if load_params else None
+    hyperparams_dict = resumed['hyperparam_dict'] if load_params else None
     history_dict = resumed['history_dict'] if load_history else None
 
     return Checkpoint(history_dict=history_dict, epoch=epoch, hyperparams_dict=hyperparams_dict)
