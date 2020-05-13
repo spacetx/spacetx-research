@@ -364,9 +364,9 @@ class ManyRandomCropsTensor(object):
                                    w_desired=self.desired_w,
                                    h_desired=self.desired_h)
 
-            if self.fg_mask is None or 
-            torch.mean(self.fg_mask[...,i:(i+self.desired_w), j:(j+self.desired_h)], 
-                       dim=(-1,-2)) > self.fg_fraction_threshold:
+            if self.fg_mask is None or torch.mean(self.fg_mask[...,i:(i+self.desired_w), 
+                                                               j:(j+self.desired_h)], 
+                                                  dim=(-1,-2)) > self.fg_fraction_threshold:
                 crops.append(img[..., i:(i+self.desired_w), j:(j+self.desired_h)])
 
         return torch.cat([crop for crop in crops], dim=0)
