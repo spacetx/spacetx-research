@@ -33,8 +33,30 @@ def img_pre_processing(pilfile, reduction_factor=1, remove_background=True):
     else:
         img_tmp = skimage.exposure.rescale_intensity(img_np, in_range="image", out_range=(0.0,1.0)) 
                 
-    PREPROCESS = collections.namedtuple("preprocess", "img mask")
-    return PREPROCESS(img=img_tmp, mask=mask)
+    #PREPROCESS = collections.namedtuple("preprocess", "img mask")
+    #return PREPROCESS(img_tmp, mask)
+    return img_tmp
+
+
+def sum_in_windows(img, window_size: int=80):
+    """ returns the sum inside a square os size=window_size with center located at (i,j) """
+    w, h = img.shape[-2:]
+    img_pad = np.pad(img, pad_width=window_size//2, mode='constant', constant_values=0)
+    assert (img == img_pad[window_size//2:window_size//2+w,window_size//2:window_size//2+h]).all()
+
+    cum = np.cumsum(np.cumsum(img_pad, axis=0), axis=1)
+    
+    # roll
+    px = np.roll(cum, +window_size//2, axis=0)
+    mx = np.roll(cum, -window_size//2, axis=0)
+    px_py = np.roll(px, +window_size//2, axis=1)
+    px_my = np.roll(px, -window_size//2, axis=1)
+    mx_py = np.roll(mx, +window_size//2, axis=1)
+    mx_my = np.roll(mx, -window_size//2, axis=1)
+    
+    # compute sum in square
+    tmp = (px_py - px_my - mx_py + mx_my)
+    return tmp[window_size//2: window_size//2+w, window_size//2: window_size//2+h]
 
 
 def estimate_noise(img: torch.Tensor, radius_nn: int=2):

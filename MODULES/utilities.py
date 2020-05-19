@@ -336,11 +336,12 @@ def normalize_tensor(input, scale_each_image=False, scale_each_channel=False, in
 class ManyRandomCropsTensor(object):
     """Crop a torch Tensor at random locations to obtain output of given size """
 
-    def __init__(self, desired_w, desired_h, n_crops=1, mask=None):
+    def __init__(self, desired_w, desired_h, n_crops=1, fg_mask=None, fg_fraction_threshold=None):
         self.desired_w = desired_w
         self.desired_h = desired_h
-        self.mask = mask
+        self.fg_mask = fg_mask.float()
         self.augmentation_factor = n_crops
+        self.fg_fraction_threshold = 0.01 if fg_fraction_threshold is None else fg_fraction_threshold
 
     @staticmethod
     def get_params(w_raw, h_raw, w_desired, h_desired):
@@ -363,9 +364,9 @@ class ManyRandomCropsTensor(object):
                                    w_desired=self.desired_w,
                                    h_desired=self.desired_h)
 
-            if self.mask is None or (self.mask[..., i, j] and self.mask[..., i+self.desired_w, j] and
-                                     self.mask[..., i, j+self.desired_h] and
-                                     self.mask[..., i+self.desired_w, j+self.desired_h]):
+            if self.fg_mask is None or torch.mean(self.fg_mask[...,i:(i+self.desired_w), 
+                                                               j:(j+self.desired_h)], 
+                                                  dim=(-1,-2)) > self.fg_fraction_threshold:
                 crops.append(img[..., i:(i+self.desired_w), j:(j+self.desired_h)])
 
         return torch.cat([crop for crop in crops], dim=0)

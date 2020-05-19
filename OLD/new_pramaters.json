@@ -1,0 +1,154 @@
+{
+ "wdl.alias" : "disk_shading_yes_bg",
+ "wdl.memo" : "gaussian zwhere, nll_factor=5, sparstiy_factor=1",
+
+ "wdl.file_train" : "gs://ld-data-bucket/disk_shading/multi_disk_train_shading.pkl",
+ "wdl.file_test" : "gs://ld-data-bucket/disk_shading/multi_disk_test_shading.pkl",
+ "wdl.file_ckpt" : "gs://ld-results-bucket/ckpt/dummy.pkl",
+
+ "wdl.bucket_output" : "gs://ld-results-bucket",
+ "wdl.dir_output" : "trial_v4",
+
+ "wdl.notebook_name": "MAIN.ipynb",
+ "wdl.git_repo": "https://github.com/spacetx/spacetx-research.git",
+ "wdl.commit_or_branch": "41_no_sparsity_kl_zwhere_gaussian",
+
+ "simulation" : {
+   "__comment" : "there are 3 types of runs: scratch, resume, pre_trained",
+   "type" : "scratch",
+   "MAX_EPOCHS" : 301,
+   "TEST_FREQUENCY" : 5,
+   "CHECKPOINT_FREQUENCY" : 5,
+   "batch_size" : 128
+ },
+
+ "architecture" : {
+   "__comment" : "architecture parameters, level_zwhere_output is between 0 and n_max_pool included",
+   "dim_zwhat" : 25,
+   "dim_zmask" : 25,
+   "dim_zwhere" : 4,
+   "dim_logit" : 1,
+   "cropped_size" : 28,
+   "n_max_pool" : 4,
+   "level_zwhere_output" : 2,
+   "level_background_output" : 4,
+   "n_ch_output_features" : 32,
+   "n_ch_after_first_two_conv" : 32
+ },
+
+ "input_image" : {
+   "__comment" : "parameters describing the input images",
+   "n_objects_max" : 6,
+   "size_object_min" : 10,
+   "size_object_max" : 35,
+   "size_object_expected" : 20,
+   "lenght_scale_prob_map" : 20,
+   "size_raw_image" : 80,
+   "ch_in" : 1
+ },
+
+ "nms" : {
+   "__comment" : "parameters for the non-max-suppression",
+   "score_threshold_test" : -1,
+   "score_threshold_train" : -1,
+   "overlap_threshold_test" : 0.3,
+   "overlap_threshold_train" : 0.3,
+   "randomize_nms_factor_test" :  0.2,
+   "randomize_nms_factor_train" :  0.2
+ },
+
+ "loss" : {
+   "__comment" : "parameter of the observation model",
+   "bg_std" : 0.1,
+   "fg_std" : 0.1
+ },
+
+ "optimizer" : {
+   "__comment" : "which optimizer to use",
+   "type" : "adam",
+   "lr" : 0.001,
+   "betas" : [0.9, 0.999],
+   "eps" : 1E-8,
+   "scheduler_is_active" : false,
+   "scheduler_type" : "step_LR",
+   "scheduler_step_size" : 100,
+   "scheduler_gamma" : 0.75
+ },
+
+ "shortcut_prob_corr_factor" : {
+   "__comment" : "parameters for the shortcut for porb_corr_factor",
+   "values" : [0.5, 0.0],
+   "times" : [20, 50]
+ },
+
+ "GECO" : {
+   "__comment" : "if active=false use ELBO, else use GECO with Log-Likelihood threshold = n_pixels * n_channel * threshold",
+   "is_active" : true,
+   "factor_kl_range" : [0.01, 0.1, 10.0],
+   "factor_sparsity_range" : [0.1, 1.0, 10.0],
+   "target_n_obj" : [2.5, 4.5],
+   "target_nll" : [0.35, 1.0]
+ },
+
+ "soft_constraint" : {
+   "__comment": "all the parameters about the soft constraints",
+
+   "prob_map_integral": {
+     "__comment": "the probability map integral needs to be in a specific range",
+     "upper_bound_value": 19,
+     "upper_bound_width": 1,
+     "upper_bound_strength": 0,
+     "upper_bound_exponent": 1
+   },
+   
+   "prob_map_Total_Variation" : {
+     "__comment": "cost which discourages probability map to be pixellated",
+     "strength": 0,
+     "exponent": 1
+   },
+   
+   "prob_map_fraction": {
+     "__comment": "cost which discourages probability map to be one",
+     "upper_bound_value": 0.06,
+     "upper_bound_width": 0.01,
+     "upper_bound_strength": 1.0,
+     "upper_bound_exponent": 1
+   },
+
+   "volume_mask_fraction": {
+     "__comment": "the mask volume fraction should be between 25% and 90%",
+     "lower_bound_value": 0.20,
+     "lower_bound_width": 0.05,
+     "lower_bound_strength": 1E-1,
+     "lower_bound_exponent": 2,
+     "upper_bound_value": 0.95,
+     "upper_bound_width": 0.05,
+     "upper_bound_strength": 1E-1,
+     "upper_bound_exponent": 2
+   },
+
+   "fg_pixel_fraction": {
+     "__comment": "Fraction of fg_pixel needs to be in a specific range",
+     "lower_bound_value": 0.03,
+     "lower_bound_width": 0.02,
+     "lower_bound_strength": 1E-1,
+     "lower_bound_exponent": 2,
+     "upper_bound_value": 0.65,
+     "upper_bound_width": 0.02,
+     "upper_bound_strength": 1E-1,
+     "upper_bound_exponent": 2
+   },
+   
+   "overlap": {
+     "__comment": "cost which discourages masks from overlapping",
+     "strength": 1E-3,
+     "exponent": 1
+   }
+ }
+}
+
+
+
+
+
+  
