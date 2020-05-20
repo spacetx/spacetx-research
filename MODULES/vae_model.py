@@ -8,9 +8,9 @@ def pretty_print_metrics(epoch: int,
                          metric: tuple,
                          is_train: bool = True) -> str:
     if is_train:
-        s = 'Train [epoch {0:4d}] loss={1[loss]:.3f}, nll={1[nll]:.3f}, reg={1[reg]:.3f}, kl_tot={1[kl_tot]:.3f}, sparsity={1[sparsity]:.3f}, acc={1[accuracy]:.3f}, n_obj={1[n_obj]:.3f}, geco_sp={1[geco_sparsity]:.3f}, geco_nll={1[geco_nll]:.3f}'.format(epoch, metric)
+        s = 'Train [epoch {0:4d}] loss={1[loss]:.3f}, nll={1[nll]:.3f}, reg={1[reg]:.3f}, kl_tot={1[kl_tot]:.3f}, sparsity={1[sparsity]:.3f}, acc={1[accuracy]:.3f}, fg_fraction={1[fg_fraction]:.3f}, geco_sp={1[geco_sparsity]:.3f}, geco_bal={1[geco_balance]:.3f}'.format(epoch, metric)
     else:
-        s = 'Test  [epoch {0:4d}] loss={1[loss]:.3f}, nll={1[nll]:.3f}, reg={1[reg]:.3f}, kl_tot={1[kl_tot]:.3f}, sparsity={1[sparsity]:.3f}, acc={1[accuracy]:.3f}, n_obj={1[n_obj]:.3f}, geco_sp={1[geco_sparsity]:.3f}, geco_nll={1[geco_nll]:.3f}'.format(epoch, metric)
+        s = 'Test  [epoch {0:4d}] loss={1[loss]:.3f}, nll={1[nll]:.3f}, reg={1[reg]:.3f}, kl_tot={1[kl_tot]:.3f}, sparsity={1[sparsity]:.3f}, acc={1[accuracy]:.3f}, fg_fraction={1[fg_fraction]:.3f}, geco_sp={1[geco_sparsity]:.3f}, geco_bal={1[geco_balance]:.3f}'.format(epoch, metric)
     return s
     
 
@@ -139,13 +139,17 @@ class CompositionalVae(torch.nn.Module):
         self.geco_dict = params["GECO"]
         self.input_img_dict = params["input_image"]
 
-        self.geco_factor_sparsity = ConstrainedParam(initial_data=
-                                                     torch.tensor(np.median(self.geco_dict["factor_sparsity_range"])),
-                                                     transformation=ConstraintBase())
-        
-        self.geco_factor_nll = ConstrainedParam(initial_data=torch.tensor(np.median(self.geco_dict["factor_nll_range"])),
-                                                transformation=ConstraintLarger(
-                                                    lower_bound=np.min(self.geco_dict["factor_nll_range"])))
+        self.geco_sparsity_factor = ConstrainedParam(initial_data=
+                                                     torch.tensor(self.geco_dict["factor_sparsity_range"][1]),
+                                                     transformation=Constraint.define(
+                                                         lower_bound=self.geco_dict["factor_sparsity_range"][0],
+                                                         upper_bound=self.geco_dict["factor_sparsity_range"][2]))
+
+        self.geco_balance_factor = ConstrainedParam(initial_data=
+                                                    torch.tensor(self.geco_dict["factor_balance_range"][1]),
+                                                    transformation=Constraint.define(
+                                                        lower_bound=self.geco_dict["factor_balance_range"][0],
+                                                        upper_bound=self.geco_dict["factor_balance_range"][2]))
 
         # Put everything on the cude if necessary
         self.use_cuda = torch.cuda.is_available()
@@ -181,21 +185,21 @@ class CompositionalVae(torch.nn.Module):
         # (i.e. where description based on background is bad)
         # Note that prob is attached so that, if you are in the empty solution,
         # this regularization helps the object to turn themselves on
-        fg_pixel = torch.sum(inference.prob[..., None, None, None] * inference.big_mask, dim=-5) # singleton ch,w,h
-        fraction_fg_pixels = torch.mean(fg_pixel, dim=(-1, -2, -3))  # mean over: ch,w,h
-        cost_fg_pixel_fraction = sample_from_constraints_dict(dict_soft_constraints=self.dict_soft_constraints,
-                                                              var_name="fg_pixel_fraction",
-                                                              var_value=fraction_fg_pixels,
-                                                              verbose=verbose,
-                                                              chosen=chosen)
+        # fg_pixel = torch.sum(inference.prob[..., None, None, None] * inference.big_mask, dim=-5) # singleton ch,w,h
+        # fraction_fg_pixels = torch.mean(fg_pixel, dim=(-1, -2, -3))  # mean over: ch,w,h
+        # cost_fg_pixel_fraction = sample_from_constraints_dict(dict_soft_constraints=self.dict_soft_constraints,
+        #                                                       var_name="fg_pixel_fraction",
+        #                                                       var_value=fraction_fg_pixels,
+        #                                                       verbose=verbose,
+        #                                                       chosen=chosen)
         
         # 2. Masks should not overlap:
         # This should change the mask but NOT the probabilities therefore prob are DETACHED.
         # cost_i = 0.5 * sum_{x,y} \sum_{i \ne j} (p_i M_i * p_j M_j)
         #        = 0.5 * sum_{x,y} (\sum_i p_i M_i)^2  - \sum_i (p_i M_i)^2
-        p_detached_times_mask = inference.prob[..., None, None, None].detach() * inference.big_mask  # singleton ch,w,h
-        weighted_fg_mask = torch.sum(p_detached_times_mask, dim=-5)  # sum over boxes
-        square_first_sum_later = torch.sum(p_detached_times_mask * p_detached_times_mask, dim=-5)  # sum over boxes
+        p_times_mask = inference.prob[..., None, None, None] * inference.big_mask  # singleton ch,w,h
+        weighted_fg_mask = torch.sum(p_times_mask, dim=-5)  # sum over boxes
+        square_first_sum_later = torch.sum(p_times_mask * p_times_mask, dim=-5)  # sum over boxes
         sum_first_square_later = weighted_fg_mask * weighted_fg_mask
         # Now I sum over ch,w,h and make sure that the min value is > 0 (due to rounding error I might get <0)
         overlap = 0.5 * torch.sum((sum_first_square_later - square_first_sum_later), dim=(-1, -2, -3)).clamp(min=0)
@@ -206,9 +210,8 @@ class CompositionalVae(torch.nn.Module):
                                                     chosen=chosen)
 
         # Note that before returning I am computing the mean over the batch_size (which is the only dimension left)
-        assert cost_fg_pixel_fraction.shape == cost_overlap.shape 
-        return RegMiniBatch(cost_fg_pixel_fraction=cost_fg_pixel_fraction.mean(),
-                            cost_overlap=cost_overlap.mean())
+        # assert cost_fg_pixel_fraction.shape == cost_overlap.shape
+        return RegMiniBatch(cost_overlap=cost_overlap.mean())
     
     def NLL_MSE(self, output: torch.tensor, target: torch.tensor, sigma: torch.tensor) -> torch.Tensor:
         return ((output-target)/sigma).pow(2)
@@ -221,7 +224,9 @@ class CompositionalVae(torch.nn.Module):
         # preparation
         typical_box_size = self.input_img_dict["size_object_expected"] * self.input_img_dict["size_object_expected"]
         n_obj_counts = (inference.prob > 0.5).float().sum(-2)  # sum over boxes dimension
-        n_obj_av = n_obj_counts.mean()  # mean over batch_size. This will be used as a label
+        fg_mask = torch.sum(inference.big_mask * inference.prob[...,None,None,None], dim=-5)
+        assert len(fg_mask.shape) == 4
+        fg_fraction_av = fg_mask.mean()  # mean over batch_size, channel=1, width, height
 
         # Sum together all the regularization
         reg_av: torch.Tensor = torch.zeros(1, device=imgs_in.device, dtype=imgs_in.dtype)  # shape: 1
@@ -245,10 +250,7 @@ class CompositionalVae(torch.nn.Module):
         small_w, small_h = inference.kl_zwhere_map.shape[-2:]
         kl_zwhere_av = torch.mean(inference.kl_zwhere_map)  # mean over: batch_size, latent_zwhere, width, height
         kl_logit_av = torch.mean(inference.kl_logit_map)/(small_w * small_h)  # mean over: batch_size. Division by area
-        
-        kl_zwhat_and_mask = 2 * torch.mean(torch.max(inference.kl_zwhat_each_obj,
-                                                     inference.kl_zmask_each_obj))  # encourage even split
-        kl_total_av = kl_zwhat_and_mask + kl_zwhere_av  #+ kl_logit_av  # one kl MIGHT be much bigger than others
+        kl_total_av = kl_zwhat_av + kl_zmask_av + kl_zwhere_av + kl_logit_av
 
         # compute the sparsity term: (sum over batch, ch=1, w, h and divide by n_instances * typical_size)
         n_box, batch_size, latent_zwhat = inference.kl_zwhat_each_obj.shape
@@ -266,39 +268,47 @@ class CompositionalVae(torch.nn.Module):
         # print("reg_av.shape", reg_av.shape, reg_av)
 
         # Compute the moving averages
-#        with torch.no_grad():
-#            # here I am computing additional average over batch_size
-#            input_dict = { "n_obj_av": n_obj_av.item(), "nll_av": nll_av.item()}
-#            ma_dict = self.ma_calculator.accumulate(input_dict)
-#            print("input_dict", input_dict)
-#            print("ma_dict", ma_dict)
-            
+        with torch.no_grad():
+            # here I am computing additional average over batch_size
+            input_dict = {"kl_total_av": kl_total_av.item(), "nll_av": nll_av.item()}
+
+            # Only if in training mode I accumulate the moving average
+            if self.training:
+                ma_dict = self.ma_calculator.accumulate(input_dict)
+            else:
+                ma_dict = input_dict
+
         # Now I have to make the loss using GECO or not
         assert nll_av.shape == reg_av.shape == kl_total_av.shape == sparsity_av.shape
 
-        fspar_c = self.geco_factor_sparsity.forward()
-        fnll_c = self.geco_factor_nll.forward()
-
-        loss_vae = kl_total_av + fspar_c.detach() * sparsity_av + fnll_c.detach() * (nll_av + reg_av)
+        #fspar_c = self.geco_factor_sparsity.forward()
+        #fnll_c = self.geco_factor_nll.forward()
+        #loss_vae = kl_total_av + fspar_c.detach() * sparsity_av + fnll_c.detach() * (nll_av + reg_av)
         #loss_vae = kl_total_av + reg_av + fspar_c.detach() * sparsity_av + fnll_c.detach() * nll_av
 
+        f_balance = self.geco_balance_factor.forward()
+        f_sparsity = self.geco_sparsity_factor.forward()
+        with torch.no_grad():
+            f_norm = (kl_total_av / (kl_total_av + nll_av + reg_av)).clamp(min=0.1, max=0.9)
+
+        loss_vae = f_sparsity.detach() * sparsity_av + \
+                   f_balance.detach() * f_norm * (nll_av + reg_av) + \
+                   (1.0-f_balance).detach() * (1.0-f_norm) * kl_total_av
+
         if self.geco_dict["is_active"]:
-
-            # If n_obj_av > max(target_n_obj) -> tmp1 > 0 -> too many objects 
-            # If n_obj_av < min(target_n_obj) -> tmp2 > 0 -> too few objects
-            tmp1 = (n_obj_av - max(self.geco_dict["target_n_obj"])).clamp(min=0.0)
-            tmp2 = (min(self.geco_dict["target_n_obj"]) - n_obj_av).clamp(min=0.0)
-            #delta_1 = torch.sign(tmp2 - tmp1).detach()
+            # If fg_fraction_av > max(target) -> tmp1 > 0 -> delta_1 < 0 -> too much foreground -> increase sparsity
+            # If fg_fraction_av < min(target) -> tmp2 > 0 -> delta_1 > 0 -> too little foreground -> decrease sparsity
+            tmp1 = (fg_fraction_av - max(self.geco_dict["target_fg_fraction"])).clamp(min=0.0)
+            tmp2 = (min(self.geco_dict["target_fg_fraction"]) - fg_fraction_av).clamp(min=0.0)
             delta_1 = (tmp2 - tmp1).detach()
-            loss_1 = (fspar_c - fnll_c) * delta_1
+            loss_1 = f_sparsity * delta_1
 
-            # If nll_av > max(target_nll) -> tmp3 > 0 -> bad reconstruction
-            # If nll_av < min(target_nll) -> tmp4 > 0 -> too good reconstruction
+            # If nll_av > max(target) -> tmp3 > 0 -> delta_2 < 0 -> bad reconstruction -> increase f_balance
+            # If nll_av < min(target) -> tmp4 > 0 -> delta_2 > 0 -> too good reconstruction -> decrease f_balance
             tmp3 = (nll_av - max(self.geco_dict["target_nll"])).clamp(min=0.0)
             tmp4 = (min(self.geco_dict["target_nll"]) - nll_av).clamp(min=0.0)
-            # delta_2 = torch.sign(tmp4 - tmp3).detach()
             delta_2 = (tmp4 - tmp3).detach()
-            loss_2 = fnll_c * delta_2
+            loss_2 = f_balance * delta_2
 
             loss_av = loss_vae + loss_1 + loss_2 - (loss_1 + loss_2).detach()     
         else:
@@ -316,9 +326,9 @@ class CompositionalVae(torch.nn.Module):
                                kl_where=kl_zwhere_av,
                                kl_logit=kl_logit_av,
                                sparsity=sparsity_av,
-                               n_obj=n_obj_av,
-                               geco_sparsity=fspar_c,
-                               geco_nll=fnll_c,
+                               fg_fraction=fg_fraction_av,
+                               geco_sparsity=f_sparsity,
+                               geco_balance=f_balance,
                                delta_1=delta_1,
                                delta_2=delta_2,
                                n_obj_counts=n_obj_counts)

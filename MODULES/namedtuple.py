@@ -77,16 +77,16 @@ class MetricMiniBatch(NamedTuple):
     kl_where: torch.Tensor
     kl_logit: torch.Tensor
     sparsity: torch.Tensor
-    n_obj: torch.Tensor
+    fg_fraction: torch.Tensor
     geco_sparsity: torch.Tensor
-    geco_nll: torch.Tensor
+    geco_balance: torch.Tensor
     delta_1: torch.Tensor
     delta_2: torch.Tensor
     n_obj_counts: torch.Tensor
 
 
 class RegMiniBatch(NamedTuple):
-    cost_fg_pixel_fraction: torch.Tensor
+    # cost_fg_pixel_fraction: torch.Tensor
     cost_overlap: torch.Tensor
     # cost_volume_mask_fraction: torch.Tensor
     # cost_prob_map_integral: torch.Tensor
@@ -105,14 +105,14 @@ class Metric_and_Reg(NamedTuple):
     kl_where: torch.Tensor
     kl_logit: torch.Tensor
     sparsity: torch.Tensor
-    n_obj: torch.Tensor
+    fg_fraction: torch.Tensor
     geco_sparsity: torch.Tensor
-    geco_nll: torch.Tensor
+    geco_balance: torch.Tensor
     delta_1: torch.Tensor
     delta_2: torch.Tensor
     n_obj_counts: torch.Tensor
     # RegMiniBatch (in the same order as underlying class)
-    cost_fg_pixel_fraction: torch.Tensor
+    # cost_fg_pixel_fraction: torch.Tensor
     cost_overlap: torch.Tensor
     # cost_volume_mask_fraction: torch.Tensor
     # cost_prob_map_integral: torch.Tensor

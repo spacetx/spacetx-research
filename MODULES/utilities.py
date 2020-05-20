@@ -3,11 +3,9 @@ import json
 import PIL.Image 
 import PIL.ImageDraw 
 import pickle
-import random
 import numpy as np
 from torchvision import utils
 from matplotlib import pyplot as plt
-from torch.utils.data.dataset import Dataset
 from torch.distributions.utils import broadcast_all
 from typing import Union, Callable, Optional, List, Tuple
 from .namedtuple import BB, DIST
@@ -18,7 +16,13 @@ import skimage.filters
 def foreground_mask(image_):
     image_thresh = skimage.filters.threshold_otsu(image_)
     fg_mask = (image_ > image_thresh).float()  # True = bright, False = dark
-    return fg_mask 
+    return fg_mask
+
+
+def downsample_and_upsample(x: torch.Tensor, low_resolution: tuple, high_resolution: tuple):
+    low_res_x = F.interpolate(x, size=low_resolution, mode='bilinear', align_corners=True)
+    high_res_x = F.interpolate(low_res_x, size=high_resolution, mode='bilinear', align_corners=True)
+    return high_res_x
 
 
 def save_obj(obj, path):
@@ -682,9 +686,29 @@ def sample_from_constraints_dict(dict_soft_constraints: dict,
     return cost
 
 
-class ConstraintBase(object):
+class Constraint(object):
+    @staticmethod
+    def define(lower_bound, upper_bound):
+        if (lower_bound is not None) and (upper_bound is not None):
+            return ConstraintRange(lower_bound=lower_bound, upper_bound=upper_bound)
+        elif lower_bound is not None:
+            return ConstraintLarger(lower_bound=lower_bound)
+        elif upper_bound is not None:
+            return ConstraintSmaller(upper_bound=upper_bound)
+        else:
+            # both lower_bound and upper_bound are None
+            return ConstraintIdentity()
+
+    def to_unconstrained(self, value):
+        raise NotImplementedError
+
+    def to_constrained(self, value):
+        raise NotImplementedError
+
+
+class ConstraintIdentity(Constraint):
     """ Base Constraints which implement the identity """
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
 
     def to_unconstrained(self, value):
@@ -694,26 +718,56 @@ class ConstraintBase(object):
         return value
 
 
-class ConstraintLarger(ConstraintBase):
-    def __init__(self, lower_bound: Union[float, torch.Tensor]) -> None:
+class ConstraintLarger(Constraint):
+    def __init__(self, lower_bound):
         super().__init__()
         self.lower_bound = lower_bound
+        self.beta = 1.0
+        self.threshold = 10.0
+
+    def inverse_softplus(self, x):
+        """ takes value in (0, +Infinity) and returns in (-Infinity, Infinity) """
+        assert (x >= 0.0).all()
+        tmp = torch.log(torch.exp(x) - self.beta)
+        result = torch.where(x > self.threshold, x, tmp)
+        return torch.where(torch.isinf(-result), -14.0 * torch.ones_like(result), result)
 
     def to_unconstrained(self, value):
         """ takes value in (lower_bound, +Infinity) and returns in (-Infinity, Infinity) """
-        assert (self.lower_bound <= value).all()
-        delta = value - self.lower_bound
-        tmp = torch.log(torch.exp(delta)-1.0)
-        result = torch.where(delta > 10.0, delta, tmp)
-        return torch.where(torch.isinf(-result), -14.0*torch.ones_like(result), result) 
+        delta = value - self.lower_bound  # is >= 0
+        return self.inverse_softplus(delta)
 
     def to_constrained(self, value):
         """ takes value in (-Infinity, Infinity) and returns in (lower_bound, +Infinity) """
-        return F.softplus(value, beta=1, threshold=10.0) + self.lower_bound
+        return F.softplus(value, beta=self.beta, threshold=self.threshold) + self.lower_bound
 
 
-class ConstraintRange(ConstraintBase):
-    def __init__(self, lower_bound: Union[float, torch.Tensor], upper_bound: Union[float, torch.Tensor]) -> None:
+class ConstraintSmaller(Constraint):
+    def __init__(self, upper_bound):
+        super().__init__()
+        self.upper_bound = upper_bound
+        self.beta = 1.0
+        self.threshold = 10.0
+
+    def inverse_softplus(self, x):
+        """ takes value in (0, +Infinity) and returns in (-Infinity, Infinity) """
+        assert (x >= 0.0).all()
+        tmp = torch.log(torch.exp(x) - self.beta)
+        result = torch.where(x > self.threshold, x, tmp)
+        return torch.where(torch.isinf(-result), -14.0 * torch.ones_like(result), result)
+
+    def to_unconstrained(self, value):
+        """ takes value in (-Infinity, upper_bound) and returns in (-Infinity, Infinity) """
+        delta = self.upper_bound - value  # >= 0
+        return - self.inverse_softplus(delta)
+
+    def to_constrained(self, value):
+        """ takes value in (-Infinity, Infinity) and returns in (-Infinity, upper_bound) """
+        return self.upper_bound - F.softplus(-value, beta=1, threshold=10.0)
+
+
+class ConstraintRange(Constraint):
+    def __init__(self, lower_bound, upper_bound):
         super().__init__()
         self.lower_bound = lower_bound
         self.upper_bound = upper_bound
@@ -732,7 +786,7 @@ class ConstraintRange(ConstraintBase):
 
 
 class ConstrainedParam(torch.nn.Module):
-    def __init__(self, initial_data: torch.Tensor, transformation: ConstraintBase = ConstraintBase):
+    def __init__(self, initial_data: torch.Tensor, transformation: Constraint):
         super().__init__()
         self.transformation = transformation
         with torch.no_grad():

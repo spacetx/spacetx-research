@@ -16,10 +16,10 @@
  "simulation" : {
    "__comment" : "there are 3 types of runs: scratch, resume, pre_trained",
    "type" : "scratch",
-   "MAX_EPOCHS" : 7,
+   "MAX_EPOCHS" : 501,
    "TEST_FREQUENCY" : 5,
    "CHECKPOINT_FREQUENCY" : 50,
-   "batch_size" : 16
+   "batch_size" : 128
  },
 
  "architecture" : {
@@ -58,17 +58,8 @@
 
  "loss" : {
    "__comment" : "parameter of the observation model",
-   "bg_std" : 0.05,
-   "fg_std" : 0.05
- },
-
- "GECO" : {
-   "__comment" : "if active=false use ELBO, else use GECO with Log-Likelihood threshold = n_pixels * n_channel * threshold",
-   "is_active" : true,
-   "factor_balance_range" : [0.01, 0.5, 0.99],
-   "factor_sparsity_range" : [-1, 1.0, null],
-   "target_fg_fraction" : [0.05, 0.20],
-   "target_nll" : [0.5, 1.0]
+   "bg_std" : 0.02,
+   "fg_std" : 0.02
  },
 
  "optimizer" : {
@@ -87,14 +78,35 @@
  },
 
  "shortcut_prob_corr_factor" : {
-  "__comment" : "parameters for the shortcut for porb_corr_factor",
-  "values" : [0.5, 0.0],
-  "times" : [100, 200]
+   "__comment" : "parameters for the shortcut for porb_corr_factor",
+   "values" : [0.5, 0.0],
+   "times" : [100, 200]
+ },
+
+ "GECO" : {
+   "__comment" : "if active=false use ELBO, else use GECO with Log-Likelihood threshold = n_pixels * n_channel * threshold",
+   "is_active" : true,
+   "factor_nll_range" : [0.0, 1.0, 40.0],
+   "factor_sparsity_range" : [0.0, 1.0, 40.0],
+   "target_n_obj" : [5.2, 12.5],
+   "target_nll" : [2.0, 5.0]
  },
 
  "soft_constraint" : {
    "__comment": "all the parameters about the soft constraints",
 
+   "fg_pixel_fraction": {
+     "__comment": "Fraction of fg_pixel needs to be in a specific range",
+     "lower_bound_value": 0.05,
+     "lower_bound_width": 0.02,
+     "lower_bound_strength": 1E-1,
+     "lower_bound_exponent": 2,
+     "upper_bound_value": 0.25,
+     "upper_bound_width": 0.05,
+     "upper_bound_strength": 1E-1,
+     "upper_bound_exponent": 2
+   },
+   
    "overlap": {
      "__comment": "cost which discourages masks from overlapping",
      "strength": 1E-3,

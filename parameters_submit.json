@@ -11,15 +11,15 @@
 
  "wdl.notebook_name": "MAIN.ipynb",
  "wdl.git_repo": "https://github.com/spacetx/spacetx-research.git",
- "wdl.commit_or_branch": "44_merfish",
+ "wdl.commit_or_branch": "45_new_GECO",
 
  "simulation" : {
    "__comment" : "there are 3 types of runs: scratch, resume, pre_trained",
    "type" : "scratch",
-   "MAX_EPOCHS" : 7,
+   "MAX_EPOCHS" : 3000,
    "TEST_FREQUENCY" : 5,
    "CHECKPOINT_FREQUENCY" : 50,
-   "batch_size" : 16
+   "batch_size" : 128
  },
 
  "architecture" : {
