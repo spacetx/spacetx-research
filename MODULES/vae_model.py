@@ -252,9 +252,20 @@ class CompositionalVae(torch.nn.Module):
         kl_logit_av = torch.mean(inference.kl_logit_map)/(small_w * small_h)  # mean over: batch_size. Division by area
         kl_total_av = kl_zwhat_av + kl_zmask_av + kl_zwhere_av + kl_logit_av
 
+        # Sparsity should encourage:
+        # 1. thight bounding boxes
+        # 2. small probabilities
+        # 3. small masks 
+        # Old solution: sparsity = p * area_box -> leads to square masks b/c they have no cost and lead to lower kl_mask
+        # New solution: sparsity = p * area_box + p_chosen * area_mask
+        n_box, batch_size = inference.prob.shape
+        sparsity_av = (torch.sum(inference.p_map * inference.area_map) + 
+                       torch.sum(inference.prob[...,None, None, None] * inference.big_mask))/(batch_size * typical_box_size * n_box)
+        # Solution: 
+        # sparsity = p * area_box * mask_occupation_fraction (if mask_is_not_decoded set mask_occupation_fraction = 1)
         # compute the sparsity term: (sum over batch, ch=1, w, h and divide by n_instances * typical_size)
-        n_box, batch_size, latent_zwhat = inference.kl_zwhat_each_obj.shape
-        sparsity_av = torch.sum(inference.p_map * inference.area_map)/(batch_size * typical_box_size * n_box)
+        # n_box, batch_size, latent_zwhat = inference.kl_zwhat_each_obj.shape
+        # sparsity_av = torch.sum(inference.p_map * inference.area_map)/(batch_size * typical_box_size * n_box)
         # sparsity_av = torch.sum(inference.p_map)/(batch_size * n_box)
 
         # For debug I print the metrics
