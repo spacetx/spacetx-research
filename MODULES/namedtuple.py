@@ -55,6 +55,7 @@ class Inference(NamedTuple):
     bounding_box: BB
     kl_zwhat_each_obj: torch.Tensor
     kl_zmask_each_obj: torch.Tensor
+    kl_zwhere_each_obj: torch.Tensor
     kl_zwhere_map: torch.Tensor
     kl_logit_map: torch.Tensor
 ##     zmask: torch.Tensor

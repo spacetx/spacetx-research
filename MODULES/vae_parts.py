@@ -124,7 +124,7 @@ class Inference_and_Generation(torch.nn.Module):
         self.size_max: int = params["input_image"]["size_object_max"]
         self.size_min: int = params["input_image"]["size_object_min"]
         self.cropped_size: int = params["architecture"]["cropped_size"]
-        self.lenght_scale_prior: float = params["input_image"]["sigma_squared_exp_kernel_porb_map"]
+        self.lenght_scale_prior: float = params["input_image"]["sigma_squared_exp_kernel_prob_map"]
         self.prior_L_cov = None
 
         # modules
@@ -209,6 +209,9 @@ class Inference_and_Generation(torch.nn.Module):
                                   by=convert_to_box_list(by_map).squeeze(-1),
                                   bw=convert_to_box_list(bw_map).squeeze(-1),
                                   bh=convert_to_box_list(bh_map).squeeze(-1))
+        kl_zwhere_all = convert_to_box_list(zwhere_map.kl).squeeze(-1)
+        print("bounding_box_all.bx.shape", bounding_box_all.bx.shape)
+        print("kl_zwhere_all.shape", kl_zwhere_all.shape)  # box, batch_size, latent_dim
 
         # ---------------------------#
         # 3. LOGIT to Probabilities #
@@ -273,6 +276,12 @@ class Inference_and_Generation(torch.nn.Module):
                                   by=torch.gather(bounding_box_all.by, dim=0, index=nms_output.index_top_k),
                                   bw=torch.gather(bounding_box_all.bw, dim=0, index=nms_output.index_top_k),
                                   bh=torch.gather(bounding_box_all.bh, dim=0, index=nms_output.index_top_k))
+
+        # duplicate the index along the latent_dimension
+        index = nms_output.index_top_k.unsqueeze(-1).expand(-1, -1, kl_zwhere_all.shape[-1])
+        kl_zwhere_few: torch.Tensor = torch.gather(kl_zwhere_all, dim=0, index=index)
+        print("index.shape", index.shape)
+        print("kl_zwhere_few.shape", kl_zwhere_few.shape)
 
         # ------------------------------------------------------------------#
         # 5. Crop the unet_features according to the selected boxes
@@ -339,5 +348,6 @@ class Inference_and_Generation(torch.nn.Module):
                          bounding_box=bounding_box_few,
                          kl_logit_map=logit_map.kl,
                          kl_zwhere_map=zwhere_map.kl,
+                         kl_zwhere_each_obj=kl_zwhere_few,
                          kl_zwhat_each_obj=zwhat_few.kl,
                          kl_zmask_each_obj=zmask_few.kl)

@@ -222,11 +222,12 @@ class CompositionalVae(torch.nn.Module):
                         reg: RegMiniBatch) -> MetricMiniBatch:
 
         # preparation
-        typical_box_size = self.input_img_dict["size_object_expected"] * self.input_img_dict["size_object_expected"]
-        n_obj_counts = (inference.prob > 0.5).float().sum(-2)  # sum over boxes dimension
-        fg_mask = torch.sum(inference.big_mask * inference.prob[...,None,None,None], dim=-5)
-        assert len(fg_mask.shape) == 4
-        fg_fraction_av = fg_mask.mean()  # mean over batch_size, channel=1, width, height
+        with torch.no_grad():
+            typical_box_size = 0.5 * (self.input_img_dict["size_object_max"] + self.input_img_dict["size_object_min"])
+            n_obj_counts = (inference.prob > 0.5).float().sum(-2)  # sum over boxes dimension
+            fg_mask = torch.sum(inference.big_mask * inference.prob[..., None, None, None], dim=-5)
+            assert len(fg_mask.shape) == 4
+            fg_fraction_av = fg_mask.mean()  # mean over batch_size, channel=1, width, height
 
         # Sum together all the regularization
         reg_av: torch.Tensor = torch.zeros(1, device=imgs_in.device, dtype=imgs_in.dtype)  # shape: 1
@@ -247,80 +248,60 @@ class CompositionalVae(torch.nn.Module):
         # compute the KL for each image
         kl_zmask_av = torch.mean(inference.kl_zmask_each_obj)  # mean over: boxes, batch_size, latent_zmask
         kl_zwhat_av = torch.mean(inference.kl_zwhat_each_obj)  # mean over: boxes, batch_size, latent_zwhat
-        small_w, small_h = inference.kl_zwhere_map.shape[-2:]
-        kl_zwhere_av = torch.mean(inference.kl_zwhere_map)  # mean over: batch_size, latent_zwhere, width, height
+        kl_zwhere_av = torch.mean(inference.kl_zwhere_each_obj) # mean over: boxes, batch_size, latent_zwhat
+        #small_w, small_h = inference.kl_zwhere_map.shape[-2:]
+        #kl_zwhere_av = torch.mean(inference.kl_zwhere_map)  # mean over: batch_size, latent_zwhere, width, height
         kl_logit_av = torch.mean(inference.kl_logit_map)/(small_w * small_h)  # mean over: batch_size. Division by area
         kl_total_av = kl_zwhat_av + kl_zmask_av + kl_zwhere_av + kl_logit_av
 
         # Sparsity should encourage:
-        # 1. thight bounding boxes
-        # 2. small probabilities
-        # 3. small masks 
+        # 1. small probabilities
+        # 2. tight bounding boxes
+        # 3. tight masks
         # Old solution: sparsity = p * area_box -> leads to square masks b/c they have no cost and lead to lower kl_mask
-        # New solution: sparsity = p * area_box + p_chosen * area_mask
+        # New solution: sparsity = \sum_{i,j} (p * area_box) + \sum_k (p_chosen * area_mask_chosen)
         n_box, batch_size = inference.prob.shape
         sparsity_av = (torch.sum(inference.p_map * inference.area_map) + 
-                       torch.sum(inference.prob[...,None, None, None] * inference.big_mask))/(batch_size * typical_box_size * n_box)
-        # Solution: 
-        # sparsity = p * area_box * mask_occupation_fraction (if mask_is_not_decoded set mask_occupation_fraction = 1)
-        # compute the sparsity term: (sum over batch, ch=1, w, h and divide by n_instances * typical_size)
-        # n_box, batch_size, latent_zwhat = inference.kl_zwhat_each_obj.shape
-        # sparsity_av = torch.sum(inference.p_map * inference.area_map)/(batch_size * typical_box_size * n_box)
-        # sparsity_av = torch.sum(inference.p_map)/(batch_size * n_box)
+                       torch.sum(inference.prob[..., None, None, None] * inference.big_mask))/(batch_size * typical_box_size * n_box)
 
-        # For debug I print the metrics
-        # print("nll_av.shape", nll_av.shape, nll_av)
-        # print("kl_zmask_av.shape", kl_zmask_av.shape, kl_zmask_av)
-        # print("kl_zwhat_av.shape", kl_zwhat_av.shape, kl_zwhat_av)
-        # print("kl_zwhere_av.shape", kl_zwhere_av.shape, kl_zwhere_av)
-        # print("kl_logit_av.shape", kl_logit_av.shape, kl_logit_av)
-        # print("kl_total_av.shape", kl_total_av.shape, kl_total_av)
-        # print("sparsity_av.shape", sparsity_av.shape, sparsity_av)
-        # print("reg_av.shape", reg_av.shape, reg_av)
+        assert nll_av.shape == reg_av.shape == kl_total_av.shape == sparsity_av.shape
 
         # Compute the moving averages
         with torch.no_grad():
             # here I am computing additional average over batch_size
-            input_dict = {"kl_total_av": kl_total_av.item(), "nll_av": nll_av.item()}
-
+            input_dict = {"kl_total_av": kl_total_av.item(), "nll_av": nll_av.item(), "reg_av": reg_av.item()}
             # Only if in training mode I accumulate the moving average
             if self.training:
                 ma_dict = self.ma_calculator.accumulate(input_dict)
             else:
                 ma_dict = input_dict
-
-        # Now I have to make the loss using GECO or not
-        assert nll_av.shape == reg_av.shape == kl_total_av.shape == sparsity_av.shape
-
-        #fspar_c = self.geco_factor_sparsity.forward()
-        #fnll_c = self.geco_factor_nll.forward()
-        #loss_vae = kl_total_av + fspar_c.detach() * sparsity_av + fnll_c.detach() * (nll_av + reg_av)
-        #loss_vae = kl_total_av + reg_av + fspar_c.detach() * sparsity_av + fnll_c.detach() * nll_av
+            f_norm = ma_dict["kl_total_av"] / (ma_dict["kl_total_av"] + ma_dict["nll_av"] + ma_dict["reg_av"])
+            f_norm = np.clip(f_norm, a_min=0.1, a_max=0.9)
 
         f_balance = self.geco_balance_factor.forward()
         f_sparsity = self.geco_sparsity_factor.forward()
-        with torch.no_grad():
-            f_norm = (kl_total_av / (kl_total_av + nll_av + reg_av)).clamp(min=0.1, max=0.9)
 
         loss_vae = f_sparsity.detach() * sparsity_av + \
                    f_balance.detach() * f_norm * (nll_av + reg_av) + \
                    (1.0-f_balance).detach() * (1.0-f_norm) * kl_total_av
 
         if self.geco_dict["is_active"]:
-            # If fg_fraction_av > max(target) -> tmp1 > 0 -> delta_1 < 0 -> too much foreground -> increase sparsity
-            # If fg_fraction_av < min(target) -> tmp2 > 0 -> delta_1 > 0 -> too little foreground -> decrease sparsity
-            tmp1 = (fg_fraction_av - max(self.geco_dict["target_fg_fraction"])).clamp(min=0.0)
-            tmp2 = (min(self.geco_dict["target_fg_fraction"]) - fg_fraction_av).clamp(min=0.0)
-            delta_1 = (tmp2 - tmp1).detach()
+
+            with torch.no_grad():
+                # If fg_fraction_av > max(target) -> tmp1 > 0 -> delta_1 < 0 -> too much foreground -> increase sparsity
+                # If fg_fraction_av < min(target) -> tmp2 > 0 -> delta_1 > 0 -> too little foreground -> decrease spars
+                tmp1 = (fg_fraction_av - max(self.geco_dict["target_fg_fraction"])).clamp(min=0.0)
+                tmp2 = (min(self.geco_dict["target_fg_fraction"]) - fg_fraction_av).clamp(min=0.0)
+                delta_1 = (tmp2 - tmp1)
+
+                # If nll_av > max(target) -> tmp3 > 0 -> delta_2 < 0 -> bad reconstruction -> increase f_balance
+                # If nll_av < min(target) -> tmp4 > 0 -> delta_2 > 0 -> too good reconstruction -> decrease f_balance
+                tmp3 = (nll_av - max(self.geco_dict["target_nll"])).clamp(min=0.0)
+                tmp4 = (min(self.geco_dict["target_nll"]) - nll_av).clamp(min=0.0)
+                delta_2 = (tmp4 - tmp3).detach()
+
             loss_1 = f_sparsity * delta_1
-
-            # If nll_av > max(target) -> tmp3 > 0 -> delta_2 < 0 -> bad reconstruction -> increase f_balance
-            # If nll_av < min(target) -> tmp4 > 0 -> delta_2 > 0 -> too good reconstruction -> decrease f_balance
-            tmp3 = (nll_av - max(self.geco_dict["target_nll"])).clamp(min=0.0)
-            tmp4 = (min(self.geco_dict["target_nll"]) - nll_av).clamp(min=0.0)
-            delta_2 = (tmp4 - tmp3).detach()
             loss_2 = f_balance * delta_2
-
             loss_av = loss_vae + loss_1 + loss_2 - (loss_1 + loss_2).detach()     
         else:
             loss_av = loss_vae
