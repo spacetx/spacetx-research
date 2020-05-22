@@ -7,7 +7,7 @@
  "wdl.file_ckpt" : "gs://ld-results-bucket/ckpt/dummy_2.pkl",
 
  "wdl.bucket_output" : "gs://ld-results-bucket",
- "wdl.dir_output" : "merfish",
+ "wdl.dir_output" : "merfish_v04",
 
  "wdl.notebook_name": "MAIN.ipynb",
  "wdl.git_repo": "https://github.com/spacetx/spacetx-research.git",
@@ -16,16 +16,16 @@
  "simulation" : {
    "__comment" : "there are 3 types of runs: scratch, resume, pre_trained",
    "type" : "scratch",
-   "MAX_EPOCHS" : 3000,
-   "TEST_FREQUENCY" : 5,
-   "CHECKPOINT_FREQUENCY" : 50,
+   "MAX_EPOCHS" : 50000,
+   "TEST_FREQUENCY" : 100,
+   "CHECKPOINT_FREQUENCY" : 200,
    "batch_size" : 128
  },
 
  "architecture" : {
    "__comment" : "architecture parameters, level_zwhere_output is between 0 and n_max_pool included",
-   "dim_zwhat" : 10,
-   "dim_zmask" : 10,
+   "dim_zwhat" : 20,
+   "dim_zmask" : 20,
    "dim_zwhere" : 4,
    "dim_logit" : 1,
    "cropped_size" : 28,
@@ -64,10 +64,10 @@
  "GECO" : {
    "__comment" : "if active=false use ELBO, else use GECO with Log-Likelihood threshold = n_pixels * n_channel * threshold",
    "is_active" : true,
-   "factor_balance_range" : [0.01, 0.9, 0.99],
+   "factor_balance_range" : [0.1, 0.8, 0.9],
    "factor_sparsity_range" : [-1, 1.0, null],
    "target_fg_fraction" : [0.05, 0.20],
-   "target_nll" : [0.5, 1.0]
+   "target_nll" : [1.0, 1.0]
  },
 
  "optimizer" : {
@@ -81,7 +81,7 @@
    "eps" : 1E-8,
    "scheduler_is_active" : true,
    "scheduler_type" : "step_LR",
-   "scheduler_step_size" : 500,
+   "scheduler_step_size" : 1000,
    "scheduler_gamma" : 0.75
  },
 

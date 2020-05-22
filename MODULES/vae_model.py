@@ -279,7 +279,7 @@ class CompositionalVae(torch.nn.Module):
             else:
                 ma_dict = input_dict
             f_norm = ma_dict["kl_total_av"] / (ma_dict["kl_total_av"] + ma_dict["nll_av"] + ma_dict["reg_av"])
-            f_norm = np.clip(f_norm, a_min=0.1, a_max=0.9)
+            f_norm = np.clip(f_norm, a_min=0.001, a_max=0.999)
 
         f_balance = self.geco_balance_factor.forward()
         f_sparsity = self.geco_sparsity_factor.forward()
