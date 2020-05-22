@@ -248,13 +248,11 @@ class CompositionalVae(torch.nn.Module):
         # compute the KL for each image
         kl_zmask_av = torch.mean(inference.kl_zmask_each_obj)  # mean over: boxes, batch_size, latent_zmask
         kl_zwhat_av = torch.mean(inference.kl_zwhat_each_obj)  # mean over: boxes, batch_size, latent_zwhat
+
+        # There are two options for kl_zwhere. All boxes or only the selected ones.
         # kl_zwhere_av = torch.mean(inference.kl_zwhere_each_obj) # mean over: boxes, batch_size, latent_zwhat
         kl_zwhere_av = torch.mean(inference.kl_zwhere_map)  # mean over: batch_size, ch=4, small_width, small_height
 
-        FROM HERE
-
-        print(inference.kl_zwhere_map.shape)
-        assert 1==2
         small_w, small_h = inference.kl_zwhere_map.shape[-2:]
         kl_logit_av = torch.mean(inference.kl_logit_map)/(small_w * small_h)  # mean over: batch_size. Division by area
         kl_total_av = kl_zwhat_av + kl_zmask_av + kl_zwhere_av + kl_logit_av

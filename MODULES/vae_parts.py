@@ -146,10 +146,12 @@ class Inference_and_Generation(torch.nn.Module):
 
         # Decoders
         self.decoder_zwhere: Decoder1by1Linear = Decoder1by1Linear(dim_z=params["architecture"]["dim_zwhere"],
-                                                                   ch_out=4)
+                                                                   ch_out=4,
+                                                                   groups=params["architecture"]["dim_zwhere"])
 
         self.decoder_logit: Decoder1by1Linear = Decoder1by1Linear(dim_z=params["architecture"]["dim_logit"],
-                                                                  ch_out=1)
+                                                                  ch_out=1,
+                                                                  groups=1)
 
         self.decoder_mask: DecoderConv = DecoderConv(size=params["architecture"]["cropped_size"],
                                                      dim_z=params["architecture"]["dim_zmask"],
@@ -284,8 +286,6 @@ class Inference_and_Generation(torch.nn.Module):
         # duplicate the index along the latent_dimension
         index = nms_output.index_top_k.unsqueeze(-1).expand(-1, -1, kl_zwhere_all.shape[-1])
         kl_zwhere_few: torch.Tensor = torch.gather(kl_zwhere_all, dim=0, index=index)
-        print("index.shape", index.shape)
-        print("kl_zwhere_few.shape", kl_zwhere_few.shape)
 
         # ------------------------------------------------------------------#
         # 5. Crop the unet_features according to the selected boxes

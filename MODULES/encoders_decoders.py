@@ -46,17 +46,20 @@ class Encoder1by1(nn.Module):
 
 
 class Decoder1by1Linear(nn.Module):
-    def __init__(self, dim_z: int, ch_out: int):
+    def __init__(self, dim_z: int, ch_out: int, groups: int):
         super().__init__()
         self.dim_z: int = dim_z
         self.ch_out: int = ch_out
+        self.groups: int = groups
+        # if groups=1 all inputs convolved to produce all outputs
+        # if groups=in_channels each channel is convolved with its set of filters
         self.predict = nn.Conv2d(self.dim_z,
                                  self.ch_out,
                                  kernel_size=1,
                                  stride=1,
                                  padding=0,
                                  bias=True,
-                                 groups=self.ch_out)  # each output channel sees different input channels
+                                 groups=self.groups)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.predict(x)
