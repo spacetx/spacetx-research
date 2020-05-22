@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from .cropper_uncropper import Uncropper, Cropper
 from .non_max_suppression import NonMaxSuppression
 from .unet_model import UNet
-from .encoders_decoders import EncoderConv, DecoderConv, Decoder1by1Linear # DecoderZwhere # Encoder1by1, Decoder1by1
+from .encoders_decoders import MLP_to_ZZ, EncoderConv, DecoderConv, Decoder1by1Linear # DecoderZwhere # Encoder1by1, Decoder1by1
 from .utilities import compute_average_intensity_in_box, compute_ranking
 from .utilities import sample_and_kl_diagonal_normal, sample_and_kl_multivariate_normal
 from .utilities import downsample_and_upsample
@@ -129,6 +129,10 @@ class Inference_and_Generation(torch.nn.Module):
 
         # modules
         self.unet: UNet = UNet(params)
+
+        # trtansform zmask into mu,std to sample zwhat
+        self.encoder_zwhat_prior: MLP_to_ZZ = MLP_to_ZZ(in_features=params["architecture"]["dim_zmask"],
+                                                        dim_z=params["architecture"]["dim_zwhat"])
 
         # encoder z_what (takes the raw image)
         self.encoder_zwhat: EncoderConv = EncoderConv(size=params["architecture"]["cropped_size"],
@@ -325,11 +329,14 @@ class Inference_and_Generation(torch.nn.Module):
         # ------------------------------------------------#
         # 8. Encode, sample z_what and decode to BIG IMGS
         # ------------------------------------------------#
-        zwhat: ZZ = self.encoder_zwhat.forward(cropped_img)
-        zwhat_few: DIST = sample_and_kl_diagonal_normal(posterior_mu=zwhat.mu,
-                                                        posterior_std=zwhat.std,
-                                                        prior_mu=torch.zeros_like(zwhat.mu),
-                                                        prior_std=torch.ones_like(zwhat.std),
+        zwhat_prior: ZZ = self.encoder_zwhat_prior(zmask_few.sample)
+        zwhat_posterior: ZZ = self.encoder_zwhat.forward(cropped_img)
+        assert zwhat_prior.mu.shape == zwhat_posterior.mu.shape
+        assert zwhat_prior.std.shape == zwhat_posterior.std.shape
+        zwhat_few: DIST = sample_and_kl_diagonal_normal(posterior_mu=zwhat_posterior.mu,
+                                                        posterior_std=zwhat_posterior.std,
+                                                        prior_mu=zwhat_prior.mu,
+                                                        prior_std=zwhat_prior.std,
                                                         noisy_sampling=noisy_sampling,
                                                         sample_from_prior=generate_synthetic_data)
         small_img = torch.sigmoid(self.decoder_imgs.forward(zwhat_few.sample))
