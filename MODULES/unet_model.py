@@ -53,9 +53,6 @@ class UNet(torch.nn.Module):
             self.s_p_k = module.__add_to_spk_list__(self.s_p_k)
 
         # Prediction maps
-        self.pred_background = PredictBackground(ch_in=self.ch_list[-self.level_background_output - 1],
-                                                 ch_out=self.ch_raw_image)
-
         self.pred_features = MLP_1by1(ch_in=self.ch_list[-1],
                                       ch_out=self.n_ch_output_features)
 
@@ -64,6 +61,11 @@ class UNet(torch.nn.Module):
 
         self.encode_logit = Encoder1by1(ch_in=self.ch_list[-self.level_zwhere_and_logit_output - 1],
                                         dim_z=self.dim_logit)
+
+        # I don't need all the channels to predict the background. Few channels are enough
+        self.ch_in_bg = min(5, self.ch_list[-self.level_background_output - 1])
+        self.pred_background = PredictBackground(ch_in=self.ch_in_bg,
+                                                 ch_out=self.ch_raw_image)
 
     def forward(self, x: torch.Tensor, verbose: bool):
         input_w, input_h = x.shape[-2:]
@@ -90,7 +92,7 @@ class UNet(torch.nn.Module):
                 zwhere = self.encode_zwhere(x)
                 logit = self.encode_logit(x)
             if dist_to_end_of_net == self.level_background_output:
-                bg_mu = self.pred_background(x)
+                bg_mu = self.pred_background(x[..., :self.ch_in_bg, :, :])
 
             x = up(to_be_concatenated.pop(), x, verbose)
             if verbose:

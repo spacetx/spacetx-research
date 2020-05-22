@@ -8,6 +8,25 @@ from typing import List, Optional
 EPS_STD = 1E-3  # standard_deviation = F.softplus(x) + EPS_STD >= EPS_STD
 
 
+class MLP_to_ZZ(nn.Module):
+    def __init__(self, in_features: int, dim_z: int):
+        super().__init__()
+        self.ch_in: int = in_features
+        self.dim_z: int = dim_z
+        self.ch_hidden = (self.ch_in + self.dim_z) // 2
+        self.predict = nn.Sequential(
+            nn.Linear(in_features=self.ch_in, out_features=self.ch_hidden, bias=True),
+            nn.ReLU(),
+            nn.Linear(in_features=self.ch_hidden, out_features=2 * self.dim_z, bias=True)
+        )
+
+    def forward(self, x: torch.Tensor) -> ZZ:
+        mu, std = torch.split(self.predict(x), self.dim_z, dim=-1)
+        # Apply non-linearity and return
+        return ZZ(mu=mu, std=F.softplus(std) + EPS_STD)
+
+
+
 class Encoder1by1(nn.Module):
     def __init__(self, ch_in: int, dim_z: int):
         super().__init__()
