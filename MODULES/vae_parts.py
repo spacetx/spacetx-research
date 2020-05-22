@@ -216,8 +216,6 @@ class Inference_and_Generation(torch.nn.Module):
                                   bw=convert_to_box_list(bw_map).squeeze(-1),
                                   bh=convert_to_box_list(bh_map).squeeze(-1))
         kl_zwhere_all = convert_to_box_list(zwhere_map.kl).squeeze(-1)
-        print("bounding_box_all.bx.shape", bounding_box_all.bx.shape)
-        print("kl_zwhere_all.shape", kl_zwhere_all.shape)  # box, batch_size, latent_dim
 
         # ---------------------------#
         # 3. LOGIT to Probabilities #
