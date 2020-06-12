@@ -358,7 +358,7 @@ def process_one_epoch(model: torch.nn.Module,
                       weight_clipper: Optional[Callable[[None], None]] = None,
                       verbose: bool = False) -> dict:
     """ return a dictionary with all the metrics """
-    n_term: int = 0
+    n_terms_in_batch: int = 0
     dict_accumulate_accuracy: dict = {}
     dict_metric_av: dict = {}
 
@@ -382,8 +382,9 @@ def process_one_epoch(model: torch.nn.Module,
         with torch.no_grad():
 
             # Accumulate metrics
-            n_term += len(index)
+            n_terms_in_batch += len(index)
             for key in metrics._fields:
+                # print(key, getattr(metrics, key))
                 if key == 'n_obj_counts':
                     counts = getattr(metrics, 'n_obj_counts').view_as(y)
                 else:
@@ -404,7 +405,7 @@ def process_one_epoch(model: torch.nn.Module,
 
         # compute the average of the metrics
         for k, v in dict_metric_av.items():
-            dict_metric_av[k] = v / n_term
+            dict_metric_av[k] = v / n_terms_in_batch
 
         # compute the accuracy
         n_right = len(dict_accumulate_accuracy["right_examples"])

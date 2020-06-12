@@ -1,34 +1,5 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-
-
-class MLP_1by1(nn.Module):
-    def __init__(self, ch_in: int, ch_out: int):
-        super().__init__()
-        self.ch_in = ch_in
-        self.ch_out = ch_out
-        self.ch_hidden = (self.ch_in + self.ch_out) // 2
-        self.mlp_1by1 = nn.Sequential(
-            nn.Conv2d(self.ch_in, self.ch_hidden, kernel_size=1, stride=1, padding=0, bias=True),
-            nn.ReLU(),
-            nn.Conv2d(self.ch_hidden, self.ch_out, kernel_size=1, stride=1, padding=0, bias=True)
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.mlp_1by1(x)
-
-
-class PredictBackground(nn.Module):
-    """ Predict the bg_mu in (0,1) by applying sigmoid"""
-    def __init__(self, ch_in: int, ch_out: int):
-        super().__init__()
-        self.predict = MLP_1by1(ch_in=ch_in, ch_out=ch_out)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        bg_mu = torch.sigmoid(self.predict(x))
-        return bg_mu
-
 
 
 class DoubleConvolutionBlock(nn.Module):

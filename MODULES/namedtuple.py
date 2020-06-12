@@ -2,6 +2,7 @@ import torch
 import collections
 from typing import NamedTuple
 
+EPS_STD = 1E-3  # standard_deviation = F.softplus(x) + EPS_STD >= EPS_STD
 
 #  ----------------------------------------------------------------  #
 #  ------- Stuff defined in terms of native types -----------------  #
@@ -41,7 +42,7 @@ class Checkpoint(NamedTuple):
 class UNEToutput(NamedTuple):
     zwhere: ZZ
     logit: ZZ
-    bg_mu: torch.Tensor
+    zbg: ZZ
     features: torch.Tensor
 
 
@@ -50,6 +51,7 @@ class Inference(NamedTuple):
     p_map: torch.Tensor
     area_map: torch.Tensor
     big_mask: torch.Tensor
+    big_mask_NON_interacting: torch.Tensor
     big_img: torch.Tensor
     prob: torch.Tensor
     bounding_box: BB

@@ -1,11 +1,36 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from .namedtuple import ZZ
+from .namedtuple import ZZ, EPS_STD
 from typing import List, Optional
 
 
-EPS_STD = 1E-3  # standard_deviation = F.softplus(x) + EPS_STD >= EPS_STD
+class MLP_1by1(nn.Module):
+    def __init__(self, ch_in: int, ch_out: int, ch_hidden: Optional[int] = None):
+        super().__init__()
+        self.ch_in = ch_in
+        self.ch_out = ch_out
+        self.ch_hidden = (self.ch_in + self.ch_out) // 2 if ch_hidden is None else ch_hidden
+        self.mlp_1by1 = nn.Sequential(
+            nn.Conv2d(self.ch_in, self.ch_hidden, kernel_size=1, stride=1, padding=0, bias=True),
+            nn.ReLU(),
+            nn.Conv2d(self.ch_hidden, self.ch_out, kernel_size=1, stride=1, padding=0, bias=True)
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.mlp_1by1(x)
+
+
+class PredictBackground(nn.Module):
+    """ Predict the bg_mu in (0,1) by applying sigmoid"""
+    def __init__(self, ch_in: int, ch_out: int, ch_hidden: Optional[int] = None):
+        super().__init__()
+        self.ch_out = ch_out
+        self.predict = MLP_1by1(ch_in=ch_in, ch_out=2*ch_out, ch_hidden=ch_hidden)
+
+    def forward(self, x: torch.Tensor) -> ZZ:
+        mu, std = torch.split(self.predict(x), self.ch_out, dim=-3)
+        return ZZ(mu=mu, std=F.softplus(std) + EPS_STD)
 
 
 class MLP_to_ZZ(nn.Module):
