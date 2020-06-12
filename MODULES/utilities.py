@@ -368,16 +368,6 @@ def process_one_epoch(model: torch.nn.Module,
         if verbose:
             print("i = %3d train_loss=%.5f" % (i, metrics.loss))
 
-        # Only if training I apply backward
-        if model.training:
-            optimizer.zero_grad()
-            metrics.loss.backward()  # do back_prop and compute all the gradients
-            optimizer.step()  # update the parameters
-
-            # apply the weight clipper
-            if weight_clipper is not None:
-                model.__self__.apply(weight_clipper)
-
         # Accumulate over an epoch
         with torch.no_grad():
 
@@ -388,7 +378,7 @@ def process_one_epoch(model: torch.nn.Module,
                 if key == 'n_obj_counts':
                     counts = getattr(metrics, 'n_obj_counts').view_as(y)
                 else:
-                    value = getattr(metrics, key).item() * len(y)
+                    value = getattr(metrics, key).item() * len(index)
                     dict_metric_av[key] = value + dict_metric_av.get(key, 0.0)
 
             # Accumulate counting accuracy
@@ -399,6 +389,16 @@ def process_one_epoch(model: torch.nn.Module,
             dict_accumulate_accuracy = accumulate_counting_accuracy(indices_wrong_examples=indices_wrong_examples,
                                                                     indices_right_examples=indices_right_examples,
                                                                     dict_accuracy=dict_accumulate_accuracy)
+
+        # Only if training I apply backward
+        if model.training:
+            optimizer.zero_grad()
+            metrics.loss.backward()  # do back_prop and compute all the gradients
+            optimizer.step()  # update the parameters
+
+            # apply the weight clipper
+            if weight_clipper is not None:
+                model.__self__.apply(weight_clipper)
 
     # At the end of the loop compute the average of the metrics
     with torch.no_grad():

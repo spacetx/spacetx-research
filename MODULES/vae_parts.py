@@ -361,6 +361,7 @@ class Inference_and_Generation(torch.nn.Module):
                          prob=prob_few,
                          bounding_box=bounding_box_few,
                          kl_logit_map=logit_map.kl,
+
                          kl_zwhere_map=zwhere_map.kl,
                          kl_zwhere_each_obj=kl_zwhere_few,
                          kl_zwhat_each_obj=zwhat_few.kl,

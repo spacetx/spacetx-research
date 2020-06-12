@@ -50,6 +50,7 @@ def load_info(path: str,
 
     return Checkpoint(history_dict=history_dict, epoch=epoch, hyperparams_dict=hyperparams_dict)
 
+
 def load_ckpt(path: str, device: Optional[str]=None):
     if device is None:
         resumed = torch.load(path)
@@ -61,22 +62,24 @@ def load_ckpt(path: str, device: Optional[str]=None):
         device = torch.device('cpu')
         resumed = torch.load(path, map_location=device)
     else:
-        raise Expection("device is not recongnized")
+        raise Exception("device is not recognized")
 
     return resumed
 
+
 def load_model_optimizer(ckpt,
                          model: Union[None, torch.nn.Module] = None,
-                         optimizer: Union[None, torch.optim.Optimizer] = None):
+                         optimizer: Union[None, torch.optim.Optimizer] = None,
+                         overwrite_member_var: bool = False):
 
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
     if model is not None:
 
         # load member variables
-        member_var = ckpt['model_member_var']
-        for key, value in member_var.items():
-            setattr(model, key, value)
+        if overwrite_member_var:
+            for key, value in ckpt['model_member_var'].items():
+                setattr(model, key, value)
 
         # load the modules
         model.load_state_dict(ckpt['model_state_dict'])
@@ -89,13 +92,6 @@ def load_model_optimizer(ckpt,
 def instantiate_optimizer(model: torch.nn.Module,
                           dict_params_optimizer: dict) -> torch.optim.Optimizer:
     
-    #optimizer = torch.optim.SGD(model.parameters(), lr=0.001)
-    # optimizer = torch.optim.Adam(params=model.parameters(),
-    #                              lr=dict_params_optimizer["base_lr"],
-    #                              betas=dict_params_optimizer["betas"],
-    #                              eps=dict_params_optimizer["eps"])
-    #return optimizer
-    
     # split the parameters between GECO and NOT_GECO
     geco_params, other_params = [], []
     for name, param in model.named_parameters():
@@ -105,8 +101,10 @@ def instantiate_optimizer(model: torch.nn.Module,
             other_params.append(param)
 
     if dict_params_optimizer["type"] == "adam":
-        optimizer = torch.optim.Adam([{'params': geco_params, 'lr': dict_params_optimizer["base_lr_geco"], 'betas' : dict_params_optimizer["betas_geco"]},
-                                      {'params': other_params, 'lr': dict_params_optimizer["base_lr"], 'betas' : dict_params_optimizer["betas"]}],
+        optimizer = torch.optim.Adam([{'params': geco_params, 'lr': dict_params_optimizer["base_lr_geco"],
+                                       'betas': dict_params_optimizer["betas_geco"]},
+                                      {'params': other_params, 'lr': dict_params_optimizer["base_lr"],
+                                       'betas': dict_params_optimizer["betas"]}],
                                      eps=dict_params_optimizer["eps"],
                                      weight_decay=dict_params_optimizer["weight_decay"])
         
@@ -149,17 +147,10 @@ class CompositionalVae(torch.nn.Module):
         self.geco_dict = params["GECO"]
         self.input_img_dict = params["input_image"]
 
-        self.geco_sparsity_factor = ConstrainedParam(initial_data=
-                                                     torch.tensor(self.geco_dict["factor_sparsity_range"][1]),
-                                                     transformation=Constraint.define(
-                                                         lower_bound=self.geco_dict["factor_sparsity_range"][0],
-                                                         upper_bound=self.geco_dict["factor_sparsity_range"][2]))
-
-        self.geco_balance_factor = ConstrainedParam(initial_data=
-                                                    torch.tensor(self.geco_dict["factor_balance_range"][1]),
-                                                    transformation=Constraint.define(
-                                                        lower_bound=self.geco_dict["factor_balance_range"][0],
-                                                        upper_bound=self.geco_dict["factor_balance_range"][2]))
+        self.geco_sparsity_factor = torch.nn.Parameter(data=torch.tensor(self.geco_dict["factor_sparsity_range"][1]),
+                                                       requires_grad=True)
+        self.geco_balance_factor = torch.nn.Parameter(data=torch.tensor(self.geco_dict["factor_balance_range"][1]),
+                                                      requires_grad=True)
 
         # Put everything on the cude if necessary
         self.use_cuda = torch.cuda.is_available()
@@ -272,51 +263,50 @@ class CompositionalVae(torch.nn.Module):
         # 5. compute the moving averages
         with torch.no_grad():
 
-            # Compute the moving averages
-            input_dict = {"fg_fraction_av": fg_fraction_av.item(), 
-                          "nll_av": nll_av.item(), 
-                          "kl_logit_tot" : kl_logit_tot.item()}
+            # Compute the moving averages to normalize kl_logit
+            input_dict = {"kl_logit_tot" : kl_logit_tot.item()}
             # Only if in training mode I accumulate the moving average
             if self.training:
                 ma_dict = self.ma_calculator.accumulate(input_dict)
             else:
                 ma_dict = input_dict
 
-        # 6. Lossi_VAE
+        # 6. Loss_VAE
         kl_av = kl_zwhat_av + kl_zmask_av + kl_zwhere_av + kl_logit_tot/ma_dict["kl_logit_tot"]
         assert nll_av.shape == reg_av.shape == kl_av.shape == sparsity_av.shape
         # print(nll_av, reg_av, kl_av, sparsity_av)
 
-        f_balance = self.geco_balance_factor.forward()
-        f_sparsity = self.geco_sparsity_factor.forward()
-
-        loss_vae = f_sparsity.detach() * sparsity_av + \
-                   f_balance.detach() * (nll_av + reg_av) + \
-                   (1.0-f_balance).detach() * kl_av
+        # Note that I clamp in_place
+        with torch.no_grad():
+            f_balance = self.geco_balance_factor.data.clamp_(min=min(self.geco_dict["factor_balance_range"]),
+                                                             max=max(self.geco_dict["factor_balance_range"]))
+            f_sparsity = self.geco_sparsity_factor.data.clamp_(min=min(self.geco_dict["factor_sparsity_range"]),
+                                                               max=max(self.geco_dict["factor_sparsity_range"]))
+        loss_vae = f_sparsity * sparsity_av + \
+                   f_balance * (nll_av + reg_av) + (1.0-f_balance) * kl_av
 
 
         # GECO BUSINESS
         if self.geco_dict["is_active"]:
             with torch.no_grad():
-                # If fg_fraction_av > max(target) -> tmp1 > 0 -> delta_1 < 0 -> too much foreground -> increase sparsity
-                # If fg_fraction_av < min(target) -> tmp2 > 0 -> delta_1 > 0 -> too little foreground -> decrease spars
-                #tmp1 = max(0, ma_dict["fg_fraction_av"] - max(self.geco_dict["target_fg_fraction"]))
-                #tmp2 = max(0, min(self.geco_dict["target_fg_fraction"]) - ma_dict["fg_fraction_av"])
+                # If fg_fraction_av > max(target) -> tmp1 > 0 -> delta_1 < 0 -> too much fg -> increase sparsity
+                # If fg_fraction_av < min(target) -> tmp2 > 0 -> delta_1 > 0 -> too little fg -> decrease sparsity
                 tmp1 = max(0, fg_fraction_av - max(self.geco_dict["target_fg_fraction"]))
                 tmp2 = max(0, min(self.geco_dict["target_fg_fraction"]) - fg_fraction_av)
-                delta_1 = torch.tensor((tmp2 - tmp1), dtype=loss_vae.dtype, device=loss_vae.device)
+                delta_1 = torch.tensor(tmp2 - tmp1, dtype=loss_vae.dtype, device=loss_vae.device, requires_grad=False)
 
                 # If nll_av > max(target) -> tmp3 > 0 -> delta_2 < 0 -> bad reconstruction -> increase f_balance
                 # If nll_av < min(target) -> tmp4 > 0 -> delta_2 > 0 -> too good reconstruction -> decrease f_balance
-                #tmp3 = max(0, ma_dict["nll_av"] - max(self.geco_dict["target_nll"]))
-                #tmp4 = max(0, min(self.geco_dict["target_nll"]) - ma_dict["nll_av"])
                 tmp3 = max(0, nll_av - max(self.geco_dict["target_nll"]))
                 tmp4 = max(0, min(self.geco_dict["target_nll"]) - nll_av)
-                delta_2 = torch.tensor((tmp4 - tmp3), dtype=loss_vae.dtype, device=loss_vae.device)
+                delta_2 = torch.tensor(tmp4 - tmp3, dtype=loss_vae.dtype, device=loss_vae.device, requires_grad=False)
 
-            loss_1 = f_sparsity * delta_1
-            loss_2 = f_balance * delta_2
-            loss_av = loss_vae + loss_1 + loss_2 - (loss_1 + loss_2).detach()     
+            #print("delta_1, f_sparsity", delta_1, f_sparsity, self.geco_sparsity_factor.data.item())
+            #print("delta_2, f_balance", delta_2, f_balance, self.geco_balance_factor.data.item())
+
+            loss_1 = self.geco_sparsity_factor * delta_1
+            loss_2 = self.geco_balance_factor * delta_2
+            loss_av = loss_vae + loss_1 + loss_2 - (loss_1 + loss_2).detach()
         else:
             delta_1 = torch.tensor(0.0, dtype=loss_vae.dtype, device=loss_vae.device)
             delta_2 = torch.tensor(0.0, dtype=loss_vae.dtype, device=loss_vae.device)
@@ -324,15 +314,15 @@ class CompositionalVae(torch.nn.Module):
 
         # add everything you want as long as there is one loss
         return MetricMiniBatch(loss=loss_av,
-                               nll=nll_av,
-                               reg=reg_av,
-                               kl_tot=kl_av,
-                               kl_what=kl_zwhat_av,
-                               kl_mask=kl_zmask_av,
-                               kl_where=kl_zwhere_av,
-                               kl_logit=kl_logit_tot,
-                               sparsity=sparsity_av,
-                               fg_fraction=fg_fraction_av,
+                               nll=nll_av.detach(),
+                               reg=reg_av.detach(),
+                               kl_tot=kl_av.detach(),
+                               kl_what=kl_zwhat_av.detach(),
+                               kl_mask=kl_zmask_av.detach(),
+                               kl_where=kl_zwhere_av.detach(),
+                               kl_logit=kl_logit_tot.detach(),
+                               sparsity=sparsity_av.detach(),
+                               fg_fraction=fg_fraction_av.detach(),
                                geco_sparsity=f_sparsity,
                                geco_balance=f_balance,
                                delta_1=delta_1,
