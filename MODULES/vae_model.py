@@ -50,30 +50,40 @@ def load_info(path: str,
 
     return Checkpoint(history_dict=history_dict, epoch=epoch, hyperparams_dict=hyperparams_dict)
 
-
-def load_model_optimizer(path: str,
-                         model: Union[None, torch.nn.Module] = None,
-                         optimizer: Union[None, torch.optim.Optimizer] = None):
-    if torch.cuda.is_available():
-        device = torch.device("cuda")
+def load_ckpt(path: str, device: Optional[str]=None):
+    if device is None:
+        resumed = torch.load(path)
+    elif device == 'cuda':
         resumed = torch.load(path, map_location="cuda:0")
-    else:
+        #device = torch.device("cuda")
+        #resumed = torch.load(path, map_location=device)
+    elif device == 'cpu':
         device = torch.device('cpu')
         resumed = torch.load(path, map_location=device)
+    else:
+        raise Expection("device is not recongnized")
+
+    return resumed
+
+def load_model_optimizer(ckpt,
+                         model: Union[None, torch.nn.Module] = None,
+                         optimizer: Union[None, torch.optim.Optimizer] = None):
+
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
     if model is not None:
 
         # load member variables
-        member_var = resumed['model_member_var']
+        member_var = ckpt['model_member_var']
         for key, value in member_var.items():
             setattr(model, key, value)
 
         # load the modules
-        model.load_state_dict(resumed['model_state_dict'])
+        model.load_state_dict(ckpt['model_state_dict'])
         model.to(device)
 
     if optimizer is not None:
-        optimizer.load_state_dict(resumed['optimizer_state_dict'])
+        optimizer.load_state_dict(ckpt['optimizer_state_dict'])
 
 
 def instantiate_optimizer(model: torch.nn.Module,
@@ -128,7 +138,7 @@ class CompositionalVae(torch.nn.Module):
 
         # Instantiate all the modules
         self.inference_and_generator = Inference_and_Generation(params)
-        self.ma_calculator = Moving_Average_Calculator(beta=0.99)  # i.e. average over the last 100 mini-batches
+        self.ma_calculator = Moving_Average_Calculator(beta=0.999)  # i.e. average over the last 100 mini-batches
 
         # Raw image parameters
         self.dict_soft_constraints = params["soft_constraint"]
@@ -255,64 +265,72 @@ class CompositionalVae(torch.nn.Module):
         # 4. compute the KL for each image
         kl_zmask_av = torch.mean(inference.kl_zmask_each_obj)  # mean over: boxes, batch_size, latent_zmask
         kl_zwhat_av = torch.mean(inference.kl_zwhat_each_obj)  # mean over: boxes, batch_size, latent_zwhat
-        kl_zwhere_av = torch.mean(inference.kl_zwhere_map)  # mean over: batch_size, ch=4, small_width, small_height
-        kl_logit_av = torch.sum(inference.kl_logit_map)/(0.25*torch.numel(kl_zwhere_av))  # divide by: batch * ch=1 * w * h
-        kl_total_av = kl_zwhat_av + kl_zmask_av + kl_zwhere_av + kl_logit_av
-        # print("AAA ->",kl_zmask_av, kl_zwhat_av, kl_zwhere_av, kl_logit_av)
+        kl_zwhere_av = torch.mean(inference.kl_zwhere_map)  # imean over: batch_size, ch=4, w, h
+        kl_logit_tot = torch.sum(inference.kl_logit_map)  # will be normalized by its moving average
+        
+        
+        # 5. compute the moving averages
+        with torch.no_grad():
 
-        assert nll_av.shape == reg_av.shape == kl_total_av.shape == sparsity_av.shape
-        # print(nll_av, reg_av, kl_total_av, sparsity_av)
+            # Compute the moving averages
+            input_dict = {"fg_fraction_av": fg_fraction_av.item(), 
+                          "nll_av": nll_av.item(), 
+                          "kl_logit_tot" : kl_logit_tot.item()}
+            # Only if in training mode I accumulate the moving average
+            if self.training:
+                ma_dict = self.ma_calculator.accumulate(input_dict)
+            else:
+                ma_dict = input_dict
 
-        # 5. Loss function
+        # 6. Lossi_VAE
+        kl_av = kl_zwhat_av + kl_zmask_av + kl_zwhere_av + kl_logit_tot/ma_dict["kl_logit_tot"]
+        assert nll_av.shape == reg_av.shape == kl_av.shape == sparsity_av.shape
+        # print(nll_av, reg_av, kl_av, sparsity_av)
+
         f_balance = self.geco_balance_factor.forward()
         f_sparsity = self.geco_sparsity_factor.forward()
 
         loss_vae = f_sparsity.detach() * sparsity_av + \
                    f_balance.detach() * (nll_av + reg_av) + \
-                   (1.0-f_balance).detach() * kl_total_av
+                   (1.0-f_balance).detach() * kl_av
+
 
         # GECO BUSINESS
         if self.geco_dict["is_active"]:
-
             with torch.no_grad():
-
-                # Compute the moving averages
-                input_dict = {"fg_fraction_av": fg_fraction_av.item(), "nll_av": nll_av.item()}
-                # Only if in training mode I accumulate the moving average
-                if self.training:
-                    ma_dict = self.ma_calculator.accumulate(input_dict)
-                else:
-                    ma_dict = input_dict
-
                 # If fg_fraction_av > max(target) -> tmp1 > 0 -> delta_1 < 0 -> too much foreground -> increase sparsity
                 # If fg_fraction_av < min(target) -> tmp2 > 0 -> delta_1 > 0 -> too little foreground -> decrease spars
-                tmp1 = max(0, ma_dict["fg_fraction_av"] - max(self.geco_dict["target_fg_fraction"]))
-                tmp2 = max(0, min(self.geco_dict["target_fg_fraction"]) - ma_dict["fg_fraction_av"])
+                #tmp1 = max(0, ma_dict["fg_fraction_av"] - max(self.geco_dict["target_fg_fraction"]))
+                #tmp2 = max(0, min(self.geco_dict["target_fg_fraction"]) - ma_dict["fg_fraction_av"])
+                tmp1 = max(0, fg_fraction_av - max(self.geco_dict["target_fg_fraction"]))
+                tmp2 = max(0, min(self.geco_dict["target_fg_fraction"]) - fg_fraction_av)
                 delta_1 = torch.tensor((tmp2 - tmp1), dtype=loss_vae.dtype, device=loss_vae.device)
 
                 # If nll_av > max(target) -> tmp3 > 0 -> delta_2 < 0 -> bad reconstruction -> increase f_balance
                 # If nll_av < min(target) -> tmp4 > 0 -> delta_2 > 0 -> too good reconstruction -> decrease f_balance
-                tmp3 = max(0, ma_dict["nll_av"] - max(self.geco_dict["target_nll"]))
-                tmp4 = max(0, min(self.geco_dict["target_nll"]) - ma_dict["nll_av"])
+                #tmp3 = max(0, ma_dict["nll_av"] - max(self.geco_dict["target_nll"]))
+                #tmp4 = max(0, min(self.geco_dict["target_nll"]) - ma_dict["nll_av"])
+                tmp3 = max(0, nll_av - max(self.geco_dict["target_nll"]))
+                tmp4 = max(0, min(self.geco_dict["target_nll"]) - nll_av)
                 delta_2 = torch.tensor((tmp4 - tmp3), dtype=loss_vae.dtype, device=loss_vae.device)
 
             loss_1 = f_sparsity * delta_1
             loss_2 = f_balance * delta_2
             loss_av = loss_vae + loss_1 + loss_2 - (loss_1 + loss_2).detach()     
         else:
-            loss_av = loss_vae
             delta_1 = torch.tensor(0.0, dtype=loss_vae.dtype, device=loss_vae.device)
             delta_2 = torch.tensor(0.0, dtype=loss_vae.dtype, device=loss_vae.device)
+            loss_av = loss_vae
 
         # add everything you want as long as there is one loss
         return MetricMiniBatch(loss=loss_av,
                                nll=nll_av,
                                reg=reg_av,
-                               kl_tot=kl_total_av,
+                               kl_tot=kl_av,
                                kl_what=kl_zwhat_av,
                                kl_mask=kl_zmask_av,
                                kl_where=kl_zwhere_av,
-                               kl_logit=kl_logit_av,
+                               kl_logit=kl_logit_tot,
                                sparsity=sparsity_av,
                                fg_fraction=fg_fraction_av,
                                geco_sparsity=f_sparsity,
