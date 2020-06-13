@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from .cropper_uncropper import Uncropper, Cropper
 from .non_max_suppression import NonMaxSuppression
 from .unet_model import UNet
-from .encoders_decoders import MLP_to_ZZ, EncoderConv, DecoderConv, Decoder1by1Linear # DecoderZwhere # Encoder1by1, Decoder1by1
+from .encoders_decoders import EncoderConv, DecoderConv, Decoder1by1Linear # DecoderZwhere # Encoder1by1, Decoder1by1
 from .utilities import compute_average_intensity_in_box, compute_ranking
 from .utilities import sample_and_kl_diagonal_normal, sample_and_kl_multivariate_normal
 from .utilities import downsample_and_upsample
@@ -361,7 +361,6 @@ class Inference_and_Generation(torch.nn.Module):
                          prob=prob_few,
                          bounding_box=bounding_box_few,
                          kl_logit_map=logit_map.kl,
-
                          kl_zwhere_map=zwhere_map.kl,
                          kl_zwhere_each_obj=kl_zwhere_few,
                          kl_zwhat_each_obj=zwhat_few.kl,

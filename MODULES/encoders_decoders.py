@@ -6,16 +6,20 @@ from typing import List, Optional
 
 
 class MLP_1by1(nn.Module):
+    """ Use 1x1 convolution, if ch_hidden <= 0 there is hidden layer, if ch_hidden = None automatic choice"""
     def __init__(self, ch_in: int, ch_out: int, ch_hidden: Optional[int] = None):
         super().__init__()
         self.ch_in = ch_in
         self.ch_out = ch_out
         self.ch_hidden = (self.ch_in + self.ch_out) // 2 if ch_hidden is None else ch_hidden
-        self.mlp_1by1 = nn.Sequential(
-            nn.Conv2d(self.ch_in, self.ch_hidden, kernel_size=1, stride=1, padding=0, bias=True),
-            nn.ReLU(),
-            nn.Conv2d(self.ch_hidden, self.ch_out, kernel_size=1, stride=1, padding=0, bias=True)
-        )
+        if self.ch_hidden <= 0:
+            self.mlp_1by1 = nn.Conv2d(self.ch_in, self.ch_out, kernel_size=1, stride=1, padding=0, bias=True)
+        else:
+            self.mlp_1by1 = nn.Sequential(
+                nn.Conv2d(self.ch_in, self.ch_hidden, kernel_size=1, stride=1, padding=0, bias=True),
+                nn.ReLU(),
+                nn.Conv2d(self.ch_hidden, self.ch_out, kernel_size=1, stride=1, padding=0, bias=True)
+            )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.mlp_1by1(x)
@@ -33,41 +37,6 @@ class PredictBackground(nn.Module):
         return ZZ(mu=mu, std=F.softplus(std) + EPS_STD)
 
 
-class MLP_to_ZZ(nn.Module):
-    def __init__(self, in_features: int, dim_z: int):
-        super().__init__()
-        self.ch_in: int = in_features
-        self.dim_z: int = dim_z
-        self.ch_hidden = (self.ch_in + self.dim_z) // 2
-        self.predict = nn.Sequential(
-            nn.Linear(in_features=self.ch_in, out_features=self.ch_hidden, bias=True),
-            nn.ReLU(),
-            nn.Linear(in_features=self.ch_hidden, out_features=2 * self.dim_z, bias=True)
-        )
-
-    def forward(self, x: torch.Tensor) -> ZZ:
-        mu, std = torch.split(self.predict(x), self.dim_z, dim=-1)
-        # Apply non-linearity and return
-        return ZZ(mu=mu, std=F.softplus(std) + EPS_STD)
-
-
-
-class Encoder1by1(nn.Module):
-    def __init__(self, ch_in: int, dim_z: int):
-        super().__init__()
-        self.ch_in: int = ch_in
-        self.dim_z: int = dim_z
-        self.ch_hidden = (self.ch_in + self.dim_z) // 2
-        self.predict = nn.Sequential(
-            nn.Conv2d(self.ch_in, self.ch_hidden, kernel_size=1, stride=1, padding=0, bias=True),
-            nn.ReLU(),
-            nn.Conv2d(self.ch_hidden, 2 * self.dim_z, kernel_size=1, stride=1, padding=0, bias=True)
-        )
-
-    def forward(self, x: torch.Tensor) -> ZZ:
-        mu, std = torch.split(self.predict(x), self.dim_z, dim=-3)
-        # Apply non-linearity and return
-        return ZZ(mu=mu, std=F.softplus(std) + EPS_STD)
 
 
 class Decoder1by1Linear(nn.Module):
@@ -151,3 +120,37 @@ class EncoderConv(nn.Module):
         mu = self.compute_mu(x2).view(independent_dim + [self.dim_z])
         std = F.softplus(self.compute_std(x2)).view(independent_dim + [self.dim_z])
         return ZZ(mu=mu, std=std + EPS_STD)
+
+# class Encoder1by1(nn.Module):
+#     def __init__(self, ch_in: int, dim_z: int):
+#         super().__init__()
+#         self.ch_in: int = ch_in
+#         self.dim_z: int = dim_z
+#         self.ch_hidden = (self.ch_in + self.dim_z) // 2
+#         self.predict = nn.Sequential(
+#             nn.Conv2d(self.ch_in, self.ch_hidden, kernel_size=1, stride=1, padding=0, bias=True),
+#             nn.ReLU(),
+#             nn.Conv2d(self.ch_hidden, 2 * self.dim_z, kernel_size=1, stride=1, padding=0, bias=True)
+#         )
+#
+#     def forward(self, x: torch.Tensor) -> ZZ:
+#         mu, std = torch.split(self.predict(x), self.dim_z, dim=-3)
+#         # Apply non-linearity and return
+#         return ZZ(mu=mu, std=F.softplus(std) + EPS_STD)
+#
+# class MLP_to_ZZ(nn.Module):
+#     def __init__(self, in_features: int, dim_z: int):
+#         super().__init__()
+#         self.ch_in: int = in_features
+#         self.dim_z: int = dim_z
+#         self.ch_hidden = (self.ch_in + self.dim_z) // 2
+#         self.predict = nn.Sequential(
+#             nn.Linear(in_features=self.ch_in, out_features=self.ch_hidden, bias=True),
+#             nn.ReLU(),
+#             nn.Linear(in_features=self.ch_hidden, out_features=2 * self.dim_z, bias=True)
+#         )
+#
+#     def forward(self, x: torch.Tensor) -> ZZ:
+#         mu, std = torch.split(self.predict(x), self.dim_z, dim=-1)
+#         # Apply non-linearity and return
+#         return ZZ(mu=mu, std=F.softplus(std) + EPS_STD)
