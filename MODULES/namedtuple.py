@@ -2,8 +2,6 @@ import torch
 import collections
 from typing import NamedTuple
 
-EPS_STD = 1E-3  # standard_deviation = F.softplus(x) + EPS_STD >= EPS_STD
-
 #  ----------------------------------------------------------------  #
 #  ------- Stuff defined in terms of native types -----------------  #
 #  ----------------------------------------------------------------  #

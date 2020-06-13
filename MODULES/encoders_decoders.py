@@ -1,9 +1,10 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from .namedtuple import ZZ, EPS_STD
+from .namedtuple import ZZ
 from typing import List, Optional
 
+EPS_STD = 1E-3  # standard_deviation = F.softplus(x) + EPS_STD >= EPS_STD
 
 class MLP_1by1(nn.Module):
     """ Use 1x1 convolution, if ch_hidden <= 0 there is NO hidden layer """
