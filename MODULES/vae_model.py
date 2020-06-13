@@ -8,9 +8,9 @@ def pretty_print_metrics(epoch: int,
                          metric: tuple,
                          is_train: bool = True) -> str:
     if is_train:
-        s = 'Train [epoch {0:4d}] loss={1[loss]:.3f}, nll={1[nll]:.3f}, reg={1[reg]:.3f}, kl_tot={1[kl_tot]:.3f}, sparsity={1[sparsity]:.3f}, acc={1[accuracy]:.3f}, n_obj={1[n_obj]:.3f}, geco_sp={1[geco_sparsity]:.3f}, geco_nll={1[geco_nll]:.3f}'.format(epoch, metric)
+        s = 'Train [epoch {0:4d}] loss={1[loss]:.3f}, nll={1[nll]:.3f}, reg={1[reg]:.3f}, kl_tot={1[kl_tot]:.3f}, sparsity={1[sparsity]:.3f}, acc={1[accuracy]:.3f}, fg_fraction={1[fg_fraction]:.3f}, geco_sp={1[geco_sparsity]:.3f}, geco_bal={1[geco_balance]:.3f}'.format(epoch, metric)
     else:
-        s = 'Test  [epoch {0:4d}] loss={1[loss]:.3f}, nll={1[nll]:.3f}, reg={1[reg]:.3f}, kl_tot={1[kl_tot]:.3f}, sparsity={1[sparsity]:.3f}, acc={1[accuracy]:.3f}, n_obj={1[n_obj]:.3f}, geco_sp={1[geco_sparsity]:.3f}, geco_nll={1[geco_nll]:.3f}'.format(epoch, metric)
+        s = 'Test  [epoch {0:4d}] loss={1[loss]:.3f}, nll={1[nll]:.3f}, reg={1[reg]:.3f}, kl_tot={1[kl_tot]:.3f}, sparsity={1[sparsity]:.3f}, acc={1[accuracy]:.3f}, fg_fraction={1[fg_fraction]:.3f}, geco_sp={1[geco_sparsity]:.3f}, geco_bal={1[geco_balance]:.3f}'.format(epoch, metric)
     return s
     
 
@@ -51,40 +51,46 @@ def load_info(path: str,
     return Checkpoint(history_dict=history_dict, epoch=epoch, hyperparams_dict=hyperparams_dict)
 
 
-def load_model_optimizer(path: str,
-                         model: Union[None, torch.nn.Module] = None,
-                         optimizer: Union[None, torch.optim.Optimizer] = None):
-    if torch.cuda.is_available():
-        device = torch.device("cuda")
+def load_ckpt(path: str, device: Optional[str]=None):
+    if device is None:
+        resumed = torch.load(path)
+    elif device == 'cuda':
         resumed = torch.load(path, map_location="cuda:0")
-    else:
+        #device = torch.device("cuda")
+        #resumed = torch.load(path, map_location=device)
+    elif device == 'cpu':
         device = torch.device('cpu')
         resumed = torch.load(path, map_location=device)
+    else:
+        raise Exception("device is not recognized")
+
+    return resumed
+
+
+def load_model_optimizer(ckpt,
+                         model: Union[None, torch.nn.Module] = None,
+                         optimizer: Union[None, torch.optim.Optimizer] = None,
+                         overwrite_member_var: bool = False):
+
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
     if model is not None:
 
         # load member variables
-        member_var = resumed['model_member_var']
-        for key, value in member_var.items():
-            setattr(model, key, value)
+        if overwrite_member_var:
+            for key, value in ckpt['model_member_var'].items():
+                setattr(model, key, value)
 
         # load the modules
-        model.load_state_dict(resumed['model_state_dict'])
+        model.load_state_dict(ckpt['model_state_dict'])
         model.to(device)
 
     if optimizer is not None:
-        optimizer.load_state_dict(resumed['optimizer_state_dict'])
+        optimizer.load_state_dict(ckpt['optimizer_state_dict'])
 
 
 def instantiate_optimizer(model: torch.nn.Module,
                           dict_params_optimizer: dict) -> torch.optim.Optimizer:
-    
-    #optimizer = torch.optim.SGD(model.parameters(), lr=0.001)
-    # optimizer = torch.optim.Adam(params=model.parameters(),
-    #                              lr=dict_params_optimizer["base_lr"],
-    #                              betas=dict_params_optimizer["betas"],
-    #                              eps=dict_params_optimizer["eps"])
-    #return optimizer
     
     # split the parameters between GECO and NOT_GECO
     geco_params, other_params = [], []
@@ -95,8 +101,10 @@ def instantiate_optimizer(model: torch.nn.Module,
             other_params.append(param)
 
     if dict_params_optimizer["type"] == "adam":
-        optimizer = torch.optim.Adam([{'params': geco_params, 'lr': dict_params_optimizer["base_lr_geco"], 'betas' : dict_params_optimizer["betas_geco"]},
-                                      {'params': other_params, 'lr': dict_params_optimizer["base_lr"], 'betas' : dict_params_optimizer["betas"]}],
+        optimizer = torch.optim.Adam([{'params': geco_params, 'lr': dict_params_optimizer["base_lr_geco"],
+                                       'betas': dict_params_optimizer["betas_geco"]},
+                                      {'params': other_params, 'lr': dict_params_optimizer["base_lr"],
+                                       'betas': dict_params_optimizer["betas"]}],
                                      eps=dict_params_optimizer["eps"],
                                      weight_decay=dict_params_optimizer["weight_decay"])
         
@@ -128,7 +136,7 @@ class CompositionalVae(torch.nn.Module):
 
         # Instantiate all the modules
         self.inference_and_generator = Inference_and_Generation(params)
-        self.ma_calculator = Moving_Average_Calculator(beta=0.99)  # i.e. average over the last 100 mini-batches
+        self.ma_calculator = Moving_Average_Calculator(beta=0.999)  # i.e. average over the last 100 mini-batches
 
         # Raw image parameters
         self.dict_soft_constraints = params["soft_constraint"]
@@ -139,13 +147,10 @@ class CompositionalVae(torch.nn.Module):
         self.geco_dict = params["GECO"]
         self.input_img_dict = params["input_image"]
 
-        self.geco_factor_sparsity = ConstrainedParam(initial_data=
-                                                     torch.tensor(np.median(self.geco_dict["factor_sparsity_range"])),
-                                                     transformation=ConstraintBase())
-        
-        self.geco_factor_nll = ConstrainedParam(initial_data=torch.tensor(np.median(self.geco_dict["factor_nll_range"])),
-                                                transformation=ConstraintLarger(
-                                                    lower_bound=np.min(self.geco_dict["factor_nll_range"])))
+        self.geco_sparsity_factor = torch.nn.Parameter(data=torch.tensor(self.geco_dict["factor_sparsity_range"][1]),
+                                                       requires_grad=True)
+        self.geco_balance_factor = torch.nn.Parameter(data=torch.tensor(self.geco_dict["factor_balance_range"][1]),
+                                                      requires_grad=True)
 
         # Put everything on the cude if necessary
         self.use_cuda = torch.cuda.is_available()
@@ -176,29 +181,14 @@ class CompositionalVae(torch.nn.Module):
             2. overlap make sure that mask do not overlap
         """
         
-        # 1. fg_pixel_fraction should be in a range. This is a foreground budget.
-        # The model should allocate the foreground pixel where most necessary
-        # (i.e. where description based on background is bad)
-        # Note that prob is attached so that, if you are in the empty solution,
-        # this regularization helps the object to turn themselves on
-        fg_pixel = torch.sum(inference.prob[..., None, None, None] * inference.big_mask, dim=-5) # singleton ch,w,h
-        fraction_fg_pixels = torch.mean(fg_pixel, dim=(-1, -2, -3))  # mean over: ch,w,h
-        cost_fg_pixel_fraction = sample_from_constraints_dict(dict_soft_constraints=self.dict_soft_constraints,
-                                                              var_name="fg_pixel_fraction",
-                                                              var_value=fraction_fg_pixels,
-                                                              verbose=verbose,
-                                                              chosen=chosen)
-        
-        # 2. Masks should not overlap:
-        # This should change the mask but NOT the probabilities therefore prob are DETACHED.
-        # cost_i = 0.5 * sum_{x,y} \sum_{i \ne j} (p_i M_i * p_j M_j)
-        #        = 0.5 * sum_{x,y} (\sum_i p_i M_i)^2  - \sum_i (p_i M_i)^2
-        p_detached_times_mask = inference.prob[..., None, None, None].detach() * inference.big_mask  # singleton ch,w,h
-        weighted_fg_mask = torch.sum(p_detached_times_mask, dim=-5)  # sum over boxes
-        square_first_sum_later = torch.sum(p_detached_times_mask * p_detached_times_mask, dim=-5)  # sum over boxes
-        sum_first_square_later = weighted_fg_mask * weighted_fg_mask
-        # Now I sum over ch,w,h and make sure that the min value is > 0 (due to rounding error I might get <0)
-        overlap = 0.5 * torch.sum((sum_first_square_later - square_first_sum_later), dim=(-1, -2, -3)).clamp(min=0)
+        # 1. Masks should not overlap:
+        # A = (x1+x2+x3)^2 = x1^2 + x2^2 + x3^2 + 2 x1*x2 + 2 x1*x3 + 2 x2*x3
+        # Therefore sum_{i \ne j} x_i x_j = x1*x2 + x1*x3 + x2*x3 = 0.5 * [(sum xi)^2 - (sum xi^2)]
+        x = inference.prob[..., None, None, None] * inference.big_mask_NON_interacting
+        sum_x = torch.sum(x, dim=-5)  # sum over boxes
+        sum_x_squared = torch.sum(x * x, dim=-5)
+        tmp_value = (sum_x * sum_x - sum_x_squared).clamp(min=0)
+        overlap = 0.5 * torch.sum(tmp_value, dim=(-1, -2, -3))  # sum over ch, w, h
         cost_overlap = sample_from_constraints_dict(dict_soft_constraints=self.dict_soft_constraints,
                                                     var_name="overlap",
                                                     var_value=overlap,
@@ -206,9 +196,8 @@ class CompositionalVae(torch.nn.Module):
                                                     chosen=chosen)
 
         # Note that before returning I am computing the mean over the batch_size (which is the only dimension left)
-        assert cost_fg_pixel_fraction.shape == cost_overlap.shape 
-        return RegMiniBatch(cost_fg_pixel_fraction=cost_fg_pixel_fraction.mean(),
-                            cost_overlap=cost_overlap.mean())
+        # assert cost_fg_pixel_fraction.shape == cost_overlap.shape
+        return RegMiniBatch(cost_overlap=cost_overlap.mean())
     
     def NLL_MSE(self, output: torch.tensor, target: torch.tensor, sigma: torch.tensor) -> torch.Tensor:
         return ((output-target)/sigma).pow(2)
@@ -218,107 +207,111 @@ class CompositionalVae(torch.nn.Module):
                         inference: Inference,
                         reg: RegMiniBatch) -> MetricMiniBatch:
 
-        # preparation
-        typical_box_size = self.input_img_dict["size_object_expected"] * self.input_img_dict["size_object_expected"]
-        n_obj_counts = (inference.prob > 0.5).float().sum(-2)  # sum over boxes dimension
-        n_obj_av = n_obj_counts.mean()  # mean over batch_size. This will be used as a label
+        # Preparation
+        n_obj_counts = (inference.prob > 0.5).float().sum(-2).detach()  # sum over boxes dimension
+        p_times_area_map = inference.p_map * inference.area_map
+        mixing_k = inference.big_mask * inference.prob[..., None, None, None]
+        mixing_fg = torch.sum(mixing_k, dim=-5)
+        mixing_bg = 1.0 - mixing_fg
+        assert len(mixing_fg.shape) == 4  # batch, ch=1, w, h
 
-        # Sum together all the regularization
-        reg_av: torch.Tensor = torch.zeros(1, device=imgs_in.device, dtype=imgs_in.dtype)  # shape: 1
-        for f in reg._fields:
-            reg_av += getattr(reg, f)
-        reg_av = reg_av.mean()  # shape []
+        # 1. Regularizations
+        reg_av = reg.cost_overlap
 
+        # 2. Sparsity should encourage:
+        # 1. small probabilities
+        # 2. tight bounding boxes
+        # 3. tight masks
+        # Old solution: sparsity = p * area_box -> leads to square masks b/c they have no cost and lead to lower kl_mask
+        # New solution: sparsity = \sum_{i,j} (p * area_box) + \sum_k (p_chosen * area_mask_chosen)
+        #                        = fg_fraction_box + fg_fraction_box
+        fg_fraction_av = torch.sum(mixing_fg)/torch.numel(mixing_fg)  # equivalent to torch.mean
+        fg_fraction_box = torch.sum(p_times_area_map)/torch.numel(mixing_fg)  # division by the same as above
+        sparsity_av = fg_fraction_box + fg_fraction_av
+        #print("fg_fraction_av vs fg_fraction_box", fg_fraction_av, fg_fraction_box)
+
+        # 3. Observation model
         # if the observation_std is fixed then normalization 1.0/sqrt(2*pi*sigma^2) is irrelevant.
         # We are better off using MeanSquareError metric
         # Note that nll_off_bg is detached when appears with the minus sign. 
         # This is b/c we want the best possible background on top of which to add FOREGROUD objects
-        nll_on = self.NLL_MSE(output=inference.big_img, target=imgs_in, sigma=self.sigma_fg)
-        nll_off = self.NLL_MSE(output=inference.bg_mu, target=imgs_in, sigma=self.sigma_bg)  # batch_size, ch, w, h
-        delta_nll_obj = torch.mean(inference.big_mask * (nll_on - nll_off), dim=(-1, -2, -3))  # average over: ch, w, h
-        delta_nll = torch.sum(inference.prob * delta_nll_obj, dim=0)  # sum over boxes -> batch_size
-        nll_av = nll_off.mean() + delta_nll.mean()  # first term has means over batch_size, ch, w, h. Second term meand over batch_size
+        nll_k = self.NLL_MSE(output=inference.big_img, target=imgs_in, sigma=self.sigma_fg)
+        nll_bg = self.NLL_MSE(output=inference.bg_mu, target=imgs_in, sigma=self.sigma_bg)  # batch_size, ch, w, h
+        nll_av = (torch.sum(mixing_k * nll_k, dim=-5) + mixing_bg * nll_bg).mean()
 
-        # compute the KL for each image
+        # 4. compute the KL for each image
+        # TODO: NORMALIZE EVERYTHING BY THEIR RUNNING AVERAGE?
         kl_zmask_av = torch.mean(inference.kl_zmask_each_obj)  # mean over: boxes, batch_size, latent_zmask
         kl_zwhat_av = torch.mean(inference.kl_zwhat_each_obj)  # mean over: boxes, batch_size, latent_zwhat
-        small_w, small_h = inference.kl_zwhere_map.shape[-2:]
-        kl_zwhere_av = torch.mean(inference.kl_zwhere_map)  # mean over: batch_size, latent_zwhere, width, height
-        kl_logit_av = torch.mean(inference.kl_logit_map)/(small_w * small_h)  # mean over: batch_size. Division by area
+        kl_zwhere_av = torch.mean(inference.kl_zwhere_map)  # imean over: batch_size, ch=4, w, h
+        kl_logit_tot = torch.sum(inference.kl_logit_map)  # will be normalized by its moving average
         
-        kl_zwhat_and_mask = 2 * torch.mean(torch.max(inference.kl_zwhat_each_obj,
-                                                     inference.kl_zmask_each_obj))  # encourage even split
-        kl_total_av = kl_zwhat_and_mask + kl_zwhere_av  #+ kl_logit_av  # one kl MIGHT be much bigger than others
+        
+        # 5. compute the moving averages
+        with torch.no_grad():
 
-        # compute the sparsity term: (sum over batch, ch=1, w, h and divide by n_instances * typical_size)
-        n_box, batch_size, latent_zwhat = inference.kl_zwhat_each_obj.shape
-        sparsity_av = torch.sum(inference.p_map * inference.area_map)/(batch_size * typical_box_size * n_box)
-        # sparsity_av = torch.sum(inference.p_map)/(batch_size * n_box)
+            # Compute the moving averages to normalize kl_logit
+            input_dict = {"kl_logit_tot": kl_logit_tot.item()}
+            # Only if in training mode I accumulate the moving average
+            if self.training:
+                ma_dict = self.ma_calculator.accumulate(input_dict)
+            else:
+                ma_dict = input_dict
 
-        # For debug I print the metrics
-        # print("nll_av.shape", nll_av.shape, nll_av)
-        # print("kl_zmask_av.shape", kl_zmask_av.shape, kl_zmask_av)
-        # print("kl_zwhat_av.shape", kl_zwhat_av.shape, kl_zwhat_av)
-        # print("kl_zwhere_av.shape", kl_zwhere_av.shape, kl_zwhere_av)
-        # print("kl_logit_av.shape", kl_logit_av.shape, kl_logit_av)
-        # print("kl_total_av.shape", kl_total_av.shape, kl_total_av)
-        # print("sparsity_av.shape", sparsity_av.shape, sparsity_av)
-        # print("reg_av.shape", reg_av.shape, reg_av)
+        # 6. Loss_VAE
+        kl_av = kl_zwhat_av + kl_zmask_av + kl_zwhere_av + kl_logit_tot/ma_dict["kl_logit_tot"]
+        assert nll_av.shape == reg_av.shape == kl_av.shape == sparsity_av.shape
+        # print(nll_av, reg_av, kl_av, sparsity_av)
 
-        # Compute the moving averages
-#        with torch.no_grad():
-#            # here I am computing additional average over batch_size
-#            input_dict = { "n_obj_av": n_obj_av.item(), "nll_av": nll_av.item()}
-#            ma_dict = self.ma_calculator.accumulate(input_dict)
-#            print("input_dict", input_dict)
-#            print("ma_dict", ma_dict)
-            
-        # Now I have to make the loss using GECO or not
-        assert nll_av.shape == reg_av.shape == kl_total_av.shape == sparsity_av.shape
+        # Note that I clamp in_place
+        with torch.no_grad():
+            f_balance = self.geco_balance_factor.data.clamp_(min=min(self.geco_dict["factor_balance_range"]),
+                                                             max=max(self.geco_dict["factor_balance_range"]))
+            f_sparsity = self.geco_sparsity_factor.data.clamp_(min=min(self.geco_dict["factor_sparsity_range"]),
+                                                               max=max(self.geco_dict["factor_sparsity_range"]))
+        loss_vae = f_sparsity * sparsity_av + \
+                   f_balance * (nll_av + reg_av) + (1.0-f_balance) * kl_av
 
-        fspar_c = self.geco_factor_sparsity.forward()
-        fnll_c = self.geco_factor_nll.forward()
 
-        loss_vae = kl_total_av + fspar_c.detach() * sparsity_av + fnll_c.detach() * (nll_av + reg_av)
-        #loss_vae = kl_total_av + reg_av + fspar_c.detach() * sparsity_av + fnll_c.detach() * nll_av
-
+        # GECO BUSINESS
         if self.geco_dict["is_active"]:
+            with torch.no_grad():
+                # If fg_fraction_av > max(target) -> tmp1 > 0 -> delta_1 < 0 -> too much fg -> increase sparsity
+                # If fg_fraction_av < min(target) -> tmp2 > 0 -> delta_1 > 0 -> too little fg -> decrease sparsity
+                tmp1 = max(0, fg_fraction_av - max(self.geco_dict["target_fg_fraction"]))
+                tmp2 = max(0, min(self.geco_dict["target_fg_fraction"]) - fg_fraction_av)
+                delta_1 = torch.tensor(tmp2 - tmp1, dtype=loss_vae.dtype, device=loss_vae.device, requires_grad=False)
 
-            # If n_obj_av > max(target_n_obj) -> tmp1 > 0 -> too many objects 
-            # If n_obj_av < min(target_n_obj) -> tmp2 > 0 -> too few objects
-            tmp1 = (n_obj_av - max(self.geco_dict["target_n_obj"])).clamp(min=0.0)
-            tmp2 = (min(self.geco_dict["target_n_obj"]) - n_obj_av).clamp(min=0.0)
-            #delta_1 = torch.sign(tmp2 - tmp1).detach()
-            delta_1 = (tmp2 - tmp1).detach()
-            loss_1 = (fspar_c - fnll_c) * delta_1
+                # If nll_av > max(target) -> tmp3 > 0 -> delta_2 < 0 -> bad reconstruction -> increase f_balance
+                # If nll_av < min(target) -> tmp4 > 0 -> delta_2 > 0 -> too good reconstruction -> decrease f_balance
+                tmp3 = max(0, nll_av - max(self.geco_dict["target_nll"]))
+                tmp4 = max(0, min(self.geco_dict["target_nll"]) - nll_av)
+                delta_2 = torch.tensor(tmp4 - tmp3, dtype=loss_vae.dtype, device=loss_vae.device, requires_grad=False)
 
-            # If nll_av > max(target_nll) -> tmp3 > 0 -> bad reconstruction
-            # If nll_av < min(target_nll) -> tmp4 > 0 -> too good reconstruction
-            tmp3 = (nll_av - max(self.geco_dict["target_nll"])).clamp(min=0.0)
-            tmp4 = (min(self.geco_dict["target_nll"]) - nll_av).clamp(min=0.0)
-            # delta_2 = torch.sign(tmp4 - tmp3).detach()
-            delta_2 = (tmp4 - tmp3).detach()
-            loss_2 = fnll_c * delta_2
+            #print("delta_1, f_sparsity", delta_1, f_sparsity, self.geco_sparsity_factor.data.item())
+            #print("delta_2, f_balance", delta_2, f_balance, self.geco_balance_factor.data.item())
 
-            loss_av = loss_vae + loss_1 + loss_2 - (loss_1 + loss_2).detach()     
+            loss_1 = self.geco_sparsity_factor * delta_1
+            loss_2 = self.geco_balance_factor * delta_2
+            loss_av = loss_vae + loss_1 + loss_2 - (loss_1 + loss_2).detach()
         else:
+            delta_1 = torch.tensor(0.0, dtype=loss_vae.dtype, device=loss_vae.device)
+            delta_2 = torch.tensor(0.0, dtype=loss_vae.dtype, device=loss_vae.device)
             loss_av = loss_vae
-            delta_1 = 0
-            delta_2 = 0
 
         # add everything you want as long as there is one loss
         return MetricMiniBatch(loss=loss_av,
-                               nll=nll_av,
-                               reg=reg_av,
-                               kl_tot=kl_total_av,
-                               kl_what=kl_zwhat_av,
-                               kl_mask=kl_zmask_av,
-                               kl_where=kl_zwhere_av,
-                               kl_logit=kl_logit_av,
-                               sparsity=sparsity_av,
-                               n_obj=n_obj_av,
-                               geco_sparsity=fspar_c,
-                               geco_nll=fnll_c,
+                               nll=nll_av.detach(),
+                               reg=reg_av.detach(),
+                               kl_tot=kl_av.detach(),
+                               kl_what=kl_zwhat_av.detach(),
+                               kl_mask=kl_zmask_av.detach(),
+                               kl_where=kl_zwhere_av.detach(),
+                               kl_logit=kl_logit_tot.detach(),
+                               sparsity=sparsity_av.detach(),
+                               fg_fraction=fg_fraction_av.detach(),
+                               geco_sparsity=f_sparsity,
+                               geco_balance=f_balance,
                                delta_1=delta_1,
                                delta_2=delta_2,
                                n_obj_counts=n_obj_counts)

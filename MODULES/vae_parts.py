@@ -3,9 +3,10 @@ import torch.nn.functional as F
 from .cropper_uncropper import Uncropper, Cropper
 from .non_max_suppression import NonMaxSuppression
 from .unet_model import UNet
-from .encoders_decoders import EncoderConv, DecoderConv, Decoder1by1Linear # DecoderZwhere # Encoder1by1, Decoder1by1
+from .encoders_decoders import EncoderConv, DecoderConv, Decoder1by1Linear
 from .utilities import compute_average_intensity_in_box, compute_ranking
 from .utilities import sample_and_kl_diagonal_normal, sample_and_kl_multivariate_normal
+from .utilities import downsample_and_upsample
 from .namedtuple import Inference, BB, NMSoutput, UNEToutput, ZZ, DIST
 
 
@@ -70,7 +71,7 @@ def from_weights_to_masks(weight: torch.Tensor, dim: int):
 
 
 def downsample_and_upsample(x: torch.Tensor, low_resolution: tuple, high_resolution: tuple):
-    low_res_x = F.interpolate(x, size=low_resolution, mode='bilinear', align_corners=True)
+    low_res_x = F.adaptive_avg_pool2d(x, output_size=low_resolution)
     high_res_x = F.interpolate(low_res_x, size=high_resolution, mode='bilinear', align_corners=True)
     return high_res_x
 
@@ -97,10 +98,12 @@ class Moving_Average_Calculator:
         self._beta = beta
         self._dict_accumulate = {}
         self._dict_MA = {}
+        # print("initialization empty. Step ->", self._steps)
 
     def accumulate(self, input_dict):
         self._steps += 1
         self._bias = 1 - self._beta ** self._steps
+        # print("Mopving_Average_Calculator step", self._steps)
 
         for key, value in input_dict.items():
             try:
@@ -121,11 +124,16 @@ class Inference_and_Generation(torch.nn.Module):
         self.size_max: int = params["input_image"]["size_object_max"]
         self.size_min: int = params["input_image"]["size_object_min"]
         self.cropped_size: int = params["architecture"]["cropped_size"]
-        self.lenght_scale_prior: float = params["input_image"]["sigma_squared_exp_kernel_porb_map"]
+        self.lenght_scale_prior: float = params["input_image"]["sigma_squared_exp_kernel_prob_map"]
         self.prior_L_cov = None
 
         # modules
         self.unet: UNet = UNet(params)
+
+        # transform the mask to mu,std to sample zwhat
+        self.encoder_zwhat_prior: EncoderConv = EncoderConv(size=params["architecture"]["cropped_size"],
+                                                            ch_in=1,
+                                                            dim_z=params["architecture"]["dim_zwhat"])
 
         # encoder z_what (takes the raw image)
         self.encoder_zwhat: EncoderConv = EncoderConv(size=params["architecture"]["cropped_size"],
@@ -139,10 +147,12 @@ class Inference_and_Generation(torch.nn.Module):
 
         # Decoders
         self.decoder_zwhere: Decoder1by1Linear = Decoder1by1Linear(dim_z=params["architecture"]["dim_zwhere"],
-                                                                   ch_out=4)
+                                                                   ch_out=4,
+                                                                   groups=params["architecture"]["dim_zwhere"])
 
         self.decoder_logit: Decoder1by1Linear = Decoder1by1Linear(dim_z=params["architecture"]["dim_logit"],
-                                                                  ch_out=1)
+                                                                  ch_out=1,
+                                                                  groups=1)
 
         self.decoder_mask: DecoderConv = DecoderConv(size=params["architecture"]["cropped_size"],
                                                      dim_z=params["architecture"]["dim_zmask"],
@@ -171,11 +181,15 @@ class Inference_and_Generation(torch.nn.Module):
         # ---------------------------#
         unet_output: UNEToutput = self.unet.forward(imgs_in, verbose=False)
         if bg_is_zero:
+
             bg_mu = torch.zeros_like(imgs_in)
         else:
-            bg_mu = downsample_and_upsample(unet_output.bg_mu,
-                                            low_resolution=bg_resolution,
-                                            high_resolution=(imgs_in.shape[-2], imgs_in.shape[-1]))
+            # I could also sample
+            # bg = unet_output.zbg.mu + eps * unet_output.zbg.std
+            bg_map = downsample_and_upsample(unet_output.zbg.mu,
+                                             low_resolution=bg_resolution,
+                                             high_resolution=(imgs_in.shape[-2], imgs_in.shape[-1]))
+            bg_mu = torch.sigmoid(bg_map)
 
         # ---------------------------#
         # 2. ZWHERE to BoundingBoxes
@@ -206,6 +220,7 @@ class Inference_and_Generation(torch.nn.Module):
                                   by=convert_to_box_list(by_map).squeeze(-1),
                                   bw=convert_to_box_list(bw_map).squeeze(-1),
                                   bh=convert_to_box_list(bh_map).squeeze(-1))
+        kl_zwhere_all = convert_to_box_list(zwhere_map.kl).squeeze(-1)
 
         # ---------------------------#
         # 3. LOGIT to Probabilities #
@@ -271,6 +286,10 @@ class Inference_and_Generation(torch.nn.Module):
                                   bw=torch.gather(bounding_box_all.bw, dim=0, index=nms_output.index_top_k),
                                   bh=torch.gather(bounding_box_all.bh, dim=0, index=nms_output.index_top_k))
 
+        # duplicate the index along the latent_dimension
+        index = nms_output.index_top_k.unsqueeze(-1).expand(-1, -1, kl_zwhere_all.shape[-1])
+        kl_zwhere_few: torch.Tensor = torch.gather(kl_zwhere_all, dim=0, index=index)
+
         # ------------------------------------------------------------------#
         # 5. Crop the unet_features according to the selected boxes
         # ------------------------------------------------------------------#
@@ -284,40 +303,46 @@ class Inference_and_Generation(torch.nn.Module):
         # ------------------------------------------------------------------#
         # 6. Encode, sample zmask and decode to BIG MASKS
         # ------------------------------------------------------------------#
-        zmask: ZZ = self.encoder_zmask.forward(cropped_feature_map)
-        zmask_few: DIST = sample_and_kl_diagonal_normal(posterior_mu=zmask.mu,
-                                                        posterior_std=zmask.std,
-                                                        prior_mu=torch.zeros_like(zmask.mu),
-                                                        prior_std=torch.ones_like(zmask.std),
+        zmask_posterior: ZZ = self.encoder_zmask.forward(cropped_feature_map)
+        zmask_few: DIST = sample_and_kl_diagonal_normal(posterior_mu=zmask_posterior.mu,
+                                                        posterior_std=zmask_posterior.std,
+                                                        prior_mu=torch.zeros_like(zmask_posterior.mu),
+                                                        prior_std=torch.ones_like(zmask_posterior.std),
                                                         noisy_sampling=noisy_sampling,
                                                         sample_from_prior=generate_synthetic_data)
 
-        # multiply by prob? prob_detached?
         small_weight = F.softplus(self.decoder_mask.forward(zmask_few.sample))
         big_weight = Uncropper.uncrop(bounding_box=bounding_box_few,
                                       small_stuff=small_weight,
                                       width_big=width_raw_image,
-                                      height_big=height_raw_image)
-        # big_mask = from_weights_to_masks(weight=prob_times_big_weight, dim=-5)
+                                      height_big=height_raw_image)  # shape: n_box, batch, ch, w, h
+        # print("big_weight_shape ->",big_weight.shape)  # shape: n_box, batch, ch, w, h
         big_mask = from_weights_to_masks(weight=big_weight, dim=-5)
+        big_mask_NON_interacting = torch.tanh(big_weight)
 
         # ------------------------------------------------------------------#
         # 7. mask the raw image and crop it
-        # should mask be detached here?
         # ------------------------------------------------------------------#
-        cropped_img = Cropper.crop(bounding_box=bounding_box_few,
-                                   big_stuff=imgs_in * big_mask,  # should mask be detached here?
-                                   width_small=self.cropped_size,
-                                   height_small=self.cropped_size)
+        mixing = prob_few[..., None, None, None] * big_mask
+        stuff_to_crop = torch.cat((imgs_in * mixing, mixing), dim=-3)
+        ch_sizes = (stuff_to_crop.shape[-3]-mixing.shape[-3], mixing.shape[-3])
+        cropped_stuff = Cropper.crop(bounding_box=bounding_box_few,
+                                     big_stuff=stuff_to_crop,
+                                     width_small=self.cropped_size,
+                                     height_small=self.cropped_size)
+        cropped_img, cropped_mask = torch.split(cropped_stuff, dim=-3, split_size_or_sections=ch_sizes)
 
         # ------------------------------------------------#
         # 8. Encode, sample z_what and decode to BIG IMGS
         # ------------------------------------------------#
-        zwhat: ZZ = self.encoder_zwhat.forward(cropped_img)
-        zwhat_few: DIST = sample_and_kl_diagonal_normal(posterior_mu=zwhat.mu,
-                                                        posterior_std=zwhat.std,
-                                                        prior_mu=torch.zeros_like(zwhat.mu),
-                                                        prior_std=torch.ones_like(zwhat.std),
+        zwhat_prior: ZZ = self.encoder_zwhat_prior(cropped_mask)
+        zwhat_posterior: ZZ = self.encoder_zwhat.forward(cropped_img)
+        assert zwhat_prior.mu.shape == zwhat_posterior.mu.shape
+        assert zwhat_prior.std.shape == zwhat_posterior.std.shape
+        zwhat_few: DIST = sample_and_kl_diagonal_normal(posterior_mu=zwhat_posterior.mu,
+                                                        posterior_std=zwhat_posterior.std,
+                                                        prior_mu=zwhat_prior.mu,
+                                                        prior_std=zwhat_prior.std,
                                                         noisy_sampling=noisy_sampling,
                                                         sample_from_prior=generate_synthetic_data)
         small_img = torch.sigmoid(self.decoder_imgs.forward(zwhat_few.sample))
@@ -331,10 +356,12 @@ class Inference_and_Generation(torch.nn.Module):
                          p_map=p_map_cor,
                          area_map=area_map,
                          big_mask=big_mask,
+                         big_mask_NON_interacting=big_mask_NON_interacting,
                          big_img=big_img,
                          prob=prob_few,
                          bounding_box=bounding_box_few,
                          kl_logit_map=logit_map.kl,
                          kl_zwhere_map=zwhere_map.kl,
+                         kl_zwhere_each_obj=kl_zwhere_few,
                          kl_zwhat_each_obj=zwhat_few.kl,
                          kl_zmask_each_obj=zmask_few.kl)

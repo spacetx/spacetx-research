@@ -1,7 +1,6 @@
 import torch
 from .unet_parts import DownBlock, DoubleConvolutionBlock, UpBlock
-from .unet_parts import PredictBackground, MLP_1by1
-from .encoders_decoders import Encoder1by1
+from .encoders_decoders import Encoder1by1, MLP_1by1, PredictBackground
 import numpy as np
 from collections import deque
 from .namedtuple import UNEToutput
@@ -53,17 +52,23 @@ class UNet(torch.nn.Module):
             self.s_p_k = module.__add_to_spk_list__(self.s_p_k)
 
         # Prediction maps
-        self.pred_background = PredictBackground(ch_in=self.ch_list[-self.level_background_output - 1],
-                                                 ch_out=self.ch_raw_image)
-
-        self.pred_features = MLP_1by1(ch_in=self.ch_list[-1],
-                                      ch_out=self.n_ch_output_features)
+        self.pred_features = torch.nn.Sequential(torch.nn.ReLU(),
+                                                 MLP_1by1(ch_in=self.ch_list[-1],
+                                                          ch_out=self.n_ch_output_features,
+                                                          ch_hidden=-1))
 
         self.encode_zwhere = Encoder1by1(ch_in=self.ch_list[-self.level_zwhere_and_logit_output - 1],
                                          dim_z=self.dim_zwhere)
 
         self.encode_logit = Encoder1by1(ch_in=self.ch_list[-self.level_zwhere_and_logit_output - 1],
                                         dim_z=self.dim_logit)
+
+        # I don't need all the channels to predict the background. Few channels are enough
+        self.ch_in_bg = min(5, self.ch_list[-self.level_background_output - 1])
+        self.pred_background = torch.nn.Sequential(torch.nn.ReLU(),
+                                                   PredictBackground(ch_in=self.ch_in_bg,
+                                                                     ch_out=self.ch_raw_image,
+                                                                     ch_hidden=-1))
 
     def forward(self, x: torch.Tensor, verbose: bool):
         input_w, input_h = x.shape[-2:]
@@ -83,14 +88,14 @@ class UNet(torch.nn.Module):
 
         # During up path I need to concatenate with the tensor obtained during the down path
         # If distance is < self.n_prediction_maps I need to export a prediction map
-        zwhere, logit, bg_mu, stuff_to_encode_zwhere = None, None, None, None
+        zwhere, logit, zbg = None, None, None
         for i, up in enumerate(self.up_path):
             dist_to_end_of_net = self.n_max_pool - i
             if dist_to_end_of_net == self.level_zwhere_and_logit_output:
                 zwhere = self.encode_zwhere(x)
                 logit = self.encode_logit(x)
             if dist_to_end_of_net == self.level_background_output:
-                bg_mu = self.pred_background(x)
+                zbg = self.pred_background(x[..., :self.ch_in_bg, :, :])  # only few channels needed for predicting bg
 
             x = up(to_be_concatenated.pop(), x, verbose)
             if verbose:
@@ -101,7 +106,7 @@ class UNet(torch.nn.Module):
 
         return UNEToutput(zwhere=zwhere,
                           logit=logit,
-                          bg_mu=bg_mu,
+                          zbg=zbg,
                           features=features)
 
     def show_grid(self, ref_image):

@@ -1,0 +1,6 @@
+{
+  "final_workflow_outputs_dir": "gs://ld-results-bucket",
+  "use_relative_output_paths": "false",
+  "final_workflow_log_dir": "gs://ld-results-bucket",
+  "final_call_logs_dir": "gs://ld-results-bucket"
+}

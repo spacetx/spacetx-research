@@ -3,22 +3,19 @@ import json
 import PIL.Image 
 import PIL.ImageDraw 
 import pickle
-import random
 import numpy as np
 from torchvision import utils
 from matplotlib import pyplot as plt
-from torch.utils.data.dataset import Dataset
 from torch.distributions.utils import broadcast_all
 from typing import Union, Callable, Optional, List, Tuple
 from .namedtuple import BB, DIST
 import torch.nn.functional as F
-import skimage.filters
 
 
-def foreground_mask(image_):
-    image_thresh = skimage.filters.threshold_otsu(image_)
-    fg_mask = (image_ > image_thresh).float()  # True = bright, False = dark
-    return fg_mask 
+def downsample_and_upsample(x: torch.Tensor, low_resolution: tuple, high_resolution: tuple):
+    low_res_x = F.interpolate(x, size=low_resolution, mode='bilinear', align_corners=True)
+    high_res_x = F.interpolate(low_res_x, size=high_resolution, mode='bilinear', align_corners=True)
+    return high_res_x
 
 
 def save_obj(obj, path):
@@ -118,8 +115,8 @@ def sample_and_kl_multivariate_normal(posterior_mu: torch.Tensor,
 
     post_L, prior_L = broadcast_all(posterior_L_cov, prior_L_cov)  # (*, n, n)
     post_mu, prior_mu = broadcast_all(posterior_mu, prior_mu)  # (*, n)
-    assert post_L.shape[-1] == post_L.shape[-2] == post_mu.shape[-1]
-    assert post_L.shape[:-2] == post_mu.shape[:-1]
+    assert post_L.shape[-1] == post_L.shape[-2] == post_mu.shape[-1]  # number of grid points are the same
+    assert post_L.shape[:-2] == post_mu.shape[:-1]  # batch_size is the same
 
     if sample_from_prior:
         # working with the prior
@@ -132,24 +129,6 @@ def sample_and_kl_multivariate_normal(posterior_mu: torch.Tensor,
         sample = post_mu + _batch_mv(post_L, eps) if noisy_sampling else post_mu
         kl = kl_multivariate_normal0_normal1(mu0=post_mu, mu1=prior_mu, L_cov0=post_L, L_cov1=prior_L)
     return DIST(sample=sample, kl=kl)
-
-
-# def sample_normal(mu: Union[float, torch.Tensor],
-#                   std: Union[float, torch.Tensor],
-#                   noisy_sampling: bool) -> Union[float, torch.Tensor]:
-#     new_mu, new_std = broadcast_all(mu, std)
-#     if noisy_sampling:
-#         return new_mu + new_std * torch.randn_like(new_mu)
-#     else:
-#         return new_mu
-#
-#
-# def kl_normal0_normal1(mu0: Union[float, torch.Tensor],
-#                        mu1: Union[float, torch.Tensor],
-#                        std0: Union[float, torch.Tensor],
-#                        std1: Union[float, torch.Tensor]) -> Union[float, torch.Tensor]:
-#     tmp = (std0 + std1) * (std0 - std1) + (mu0 - mu1).pow(2)
-#     return tmp / (2 * std1 * std1) - torch.log(std0 / std1)
 
 
 def kl_multivariate_normal0_normal1(mu0: torch.Tensor,
@@ -235,84 +214,6 @@ def flatten_list(my_list: List[List]) -> list:
         for item in sublist:
             flat_list.append(item)
     return flat_list
-
-
-def estimate_noise(img: torch.Tensor, radius_nn: int=2):
-    # Compute average first
-    avg = torch.zeros_like(img)
-    n = 0
-    for dx in range(-radius_nn,radius_nn+1):
-        y_tmp = torch.roll(img, dx, dims=-2)
-        for dy in range(-radius_nn,radius_nn+1):
-            y = torch.roll(y_tmp, dy, dims=-1)
-            avg += y
-            n +=1
-    avg = avg.float()/n
-    # print("avg ->",torch.min(avg), torch.max(avg))
-                    
-    # Compute variance later
-    var = torch.zeros_like(avg)
-    n = 0
-    for dx in range(-radius_nn,radius_nn+1):
-        y_tmp = torch.roll(img, dx, dims=-2)
-        for dy in range(-radius_nn,radius_nn+1):
-            y = torch.roll(y_tmp, dy, dims=-1)
-            var += (y-avg)**2
-            n +=1
-    var = var / (n-1)
-    # print("var ->",torch.min(var), torch.max(var))
-                        
-    # remove boundaries
-    avg = avg[...,radius_nn+1:-radius_nn-1] 
-    var = var[...,radius_nn+1:-radius_nn-1] 
-                    
-    y = torch.sqrt(var[avg>0]).view(-1)
-    x = avg[avg>0].view(-1)
-    return x,y
-
-
-def index_for_binning(input, bins=100, min=0, max=0):
-    if (min == 0) and (max == 0):
-        min = torch.min(input)
-        max = torch.max(input)
-    index = (bins * (input - min).float()/(max-min)).int()
-    return index
-
-
-def compute_average_in_each_bin(x,y,bins=100, x_min=0, x_max=0):
-    assert x.shape == y.shape
-    index = index_for_binning(x, bins=bins, min=x_min, max=x_max)
-    x_stratified = torch.zeros(bins, dtype=x.dtype, device=x.device)
-    y_stratified = torch.zeros(bins, dtype=x.dtype, device=x.device)
-    for i in range(0,bins):
-        x_stratified[i] = x[index==i].mean()
-        y_stratified[i] = y[index==i].mean()
-    return x_stratified, y_stratified
-
-
-def normalize_tensor(input, scale_each_image=False, scale_each_channel=False, in_place=False):
-    """ Normalize a batch of images to the range 0,1 """
-            
-    assert len(input.shape) == 4  # batch, ch, w,h 
-    
-    if (not scale_each_image) and (not scale_each_channel):
-        max = torch.max(input)
-        min = torch.min(input)
-    elif scale_each_image and (not scale_each_channel):
-        max = torch.max(input, dim=-4, keepdim=True)
-        min = torch.min(input, dim=-4, keepdim=True)
-    elif not(scale_each_image) and scale_each_channel:
-        max = torch.max(input, dim=-3, keepdim=True)
-        min = torch.min(input, dim=-3, keepdim=True)
-    elif scale_each_image and scale_each_channel:
-        max = torch.max(input, dim=(-4,-3), keepdim=True)
-        min = torch.min(input, dim=(-4,-3), keepdim=True)
-            
-    if in_place:
-        data = input.clone().clamp_(min=min, max=max) # avoid modifying tensor in-place
-    else:
-        data = input.clamp_(min=min, max=max)
-    return data.add_(-min).div_(max - min + 1e-5)
 
 
 ##class MyBatchSampler(Sampler):
@@ -457,7 +358,7 @@ def process_one_epoch(model: torch.nn.Module,
                       weight_clipper: Optional[Callable[[None], None]] = None,
                       verbose: bool = False) -> dict:
     """ return a dictionary with all the metrics """
-    n_term: int = 0
+    n_terms_in_batch: int = 0
     dict_accumulate_accuracy: dict = {}
     dict_metric_av: dict = {}
 
@@ -467,26 +368,17 @@ def process_one_epoch(model: torch.nn.Module,
         if verbose:
             print("i = %3d train_loss=%.5f" % (i, metrics.loss))
 
-        # Only if training I apply backward
-        if model.training:
-            optimizer.zero_grad()
-            metrics.loss.backward()  # do back_prop and compute all the gradients
-            optimizer.step()  # update the parameters
-
-            # apply the weight clipper
-            if weight_clipper is not None:
-                model.__self__.apply(weight_clipper)
-
         # Accumulate over an epoch
         with torch.no_grad():
 
             # Accumulate metrics
-            n_term += len(index)
+            n_terms_in_batch += len(index)
             for key in metrics._fields:
+                # print(key, getattr(metrics, key))
                 if key == 'n_obj_counts':
                     counts = getattr(metrics, 'n_obj_counts').view_as(y)
                 else:
-                    value = getattr(metrics, key).item() * len(y)
+                    value = getattr(metrics, key).item() * len(index)
                     dict_metric_av[key] = value + dict_metric_av.get(key, 0.0)
 
             # Accumulate counting accuracy
@@ -498,12 +390,22 @@ def process_one_epoch(model: torch.nn.Module,
                                                                     indices_right_examples=indices_right_examples,
                                                                     dict_accuracy=dict_accumulate_accuracy)
 
+        # Only if training I apply backward
+        if model.training:
+            optimizer.zero_grad()
+            metrics.loss.backward()  # do back_prop and compute all the gradients
+            optimizer.step()  # update the parameters
+
+            # apply the weight clipper
+            if weight_clipper is not None:
+                model.__self__.apply(weight_clipper)
+
     # At the end of the loop compute the average of the metrics
     with torch.no_grad():
 
         # compute the average of the metrics
         for k, v in dict_metric_av.items():
-            dict_metric_av[k] = v / n_term
+            dict_metric_av[k] = v / n_terms_in_batch
 
         # compute the accuracy
         n_right = len(dict_accumulate_accuracy["right_examples"])
@@ -682,69 +584,119 @@ def sample_from_constraints_dict(dict_soft_constraints: dict,
     return cost
 
 
-class ConstraintBase(object):
-    """ Base Constraints which implement the identity """
-    def __init__(self):
-        super().__init__()
-
-    def to_unconstrained(self, value):
-        return value
-
-    def to_constrained(self, value):
-        return value
-
-
-class ConstraintLarger(ConstraintBase):
-    def __init__(self, lower_bound: Union[float, torch.Tensor]) -> None:
-        super().__init__()
-        self.lower_bound = lower_bound
-
-    def to_unconstrained(self, value):
-        """ takes value in (lower_bound, +Infinity) and returns in (-Infinity, Infinity) """
-        assert (self.lower_bound <= value).all()
-        delta = value - self.lower_bound
-        tmp = torch.log(torch.exp(delta)-1.0)
-        result = torch.where(delta > 10.0, delta, tmp)
-        return torch.where(torch.isinf(-result), -14.0*torch.ones_like(result), result) 
-
-    def to_constrained(self, value):
-        """ takes value in (-Infinity, Infinity) and returns in (lower_bound, +Infinity) """
-        return F.softplus(value, beta=1, threshold=10.0) + self.lower_bound
-
-
-class ConstraintRange(ConstraintBase):
-    def __init__(self, lower_bound: Union[float, torch.Tensor], upper_bound: Union[float, torch.Tensor]) -> None:
-        super().__init__()
-        self.lower_bound = lower_bound
-        self.upper_bound = upper_bound
-        self.delta = self.upper_bound - self.lower_bound
-
-    def to_unconstrained(self, value):
-        """ takes value in (lower_bound, upper_bound) and returns in (-Infinity, Infinity) """
-        assert ((self.lower_bound <= value) & (value <= self.upper_bound)).all()
-        x0 = (value - self.lower_bound) / self.delta  # this is in (0,1)
-        x1 = 2 * x0 - 1  # this is in (-1,1)
-        return torch.log1p(x1) - torch.log1p(-x1)  # when x1=+/- 1 result is +/- Infinity
-
-    def to_constrained(self, value):
-        """ takes value in (-Infinity, Infinity) and returns in (lower_bound, upper_bound) """
-        return torch.sigmoid(value) * self.delta + self.lower_bound
-
-
-class ConstrainedParam(torch.nn.Module):
-    def __init__(self, initial_data: torch.Tensor, transformation: ConstraintBase = ConstraintBase):
-        super().__init__()
-        self.transformation = transformation
-        with torch.no_grad():
-            init_unconstrained = self.transformation.to_unconstrained(initial_data.detach())
-        self.unconstrained = torch.nn.Parameter(init_unconstrained, requires_grad=True)
-
-    def forward(self):
-        # return constrained parameter
-        return self.transformation.to_constrained(self.unconstrained)
-
-
-
+##### class Constraint(object):
+#####     @staticmethod
+#####     def define(lower_bound, upper_bound):
+#####         if (lower_bound is not None) and (upper_bound is not None):
+#####             return ConstraintRange(lower_bound=lower_bound, upper_bound=upper_bound)
+#####         elif lower_bound is not None:
+#####             return ConstraintLarger(lower_bound=lower_bound)
+#####         elif upper_bound is not None:
+#####             return ConstraintSmaller(upper_bound=upper_bound)
+#####         else:
+#####             # both lower_bound and upper_bound are None
+#####             return ConstraintIdentity()
+#####
+#####     def to_unconstrained(self, value):
+#####         raise NotImplementedError
+#####
+#####     def to_constrained(self, value):
+#####         raise NotImplementedError
+#####
+#####
+##### class ConstraintIdentity(Constraint):
+#####     """ Base Constraints which implement the identity """
+#####     def __init__(self) -> None:
+#####         super().__init__()
+#####
+#####     def to_unconstrained(self, value):
+#####         return value
+#####
+#####     def to_constrained(self, value):
+#####         return value
+#####
+#####
+##### class ConstraintLarger(Constraint):
+#####     def __init__(self, lower_bound):
+#####         super().__init__()
+#####         self.lower_bound = lower_bound
+#####         self.beta = 1.0
+#####         self.threshold = 10.0
+#####
+#####     def inverse_softplus(self, x):
+#####         """ takes value in (0, +Infinity) and returns in (-Infinity, Infinity) """
+#####         assert (x >= 0.0).all()
+#####         tmp = torch.log(torch.exp(x) - self.beta)
+#####         result = torch.where(x > self.threshold, x, tmp)
+#####         return torch.where(torch.isinf(-result), -14.0 * torch.ones_like(result), result)
+#####
+#####     def to_unconstrained(self, value):
+#####         """ takes value in (lower_bound, +Infinity) and returns in (-Infinity, Infinity) """
+#####         delta = value - self.lower_bound  # is >= 0
+#####         return self.inverse_softplus(delta)
+#####
+#####     def to_constrained(self, value):
+#####         """ takes value in (-Infinity, Infinity) and returns in (lower_bound, +Infinity) """
+#####         return F.softplus(value, beta=self.beta, threshold=self.threshold) + self.lower_bound
+#####
+#####
+##### class ConstraintSmaller(Constraint):
+#####     def __init__(self, upper_bound):
+#####         super().__init__()
+#####         self.upper_bound = upper_bound
+#####         self.beta = 1.0
+#####         self.threshold = 10.0
+#####
+#####     def inverse_softplus(self, x):
+#####         """ takes value in (0, +Infinity) and returns in (-Infinity, Infinity) """
+#####         assert (x >= 0.0).all()
+#####         tmp = torch.log(torch.exp(x) - self.beta)
+#####         result = torch.where(x > self.threshold, x, tmp)
+#####         return torch.where(torch.isinf(-result), -14.0 * torch.ones_like(result), result)
+#####
+#####     def to_unconstrained(self, value):
+#####         """ takes value in (-Infinity, upper_bound) and returns in (-Infinity, Infinity) """
+#####         delta = self.upper_bound - value  # >= 0
+#####         return - self.inverse_softplus(delta)
+#####
+#####     def to_constrained(self, value):
+#####         """ takes value in (-Infinity, Infinity) and returns in (-Infinity, upper_bound) """
+#####         return self.upper_bound - F.softplus(-value, beta=1, threshold=10.0)
+#####
+#####
+##### class ConstraintRange(Constraint):
+#####     def __init__(self, lower_bound, upper_bound):
+#####         super().__init__()
+#####         self.lower_bound = lower_bound
+#####         self.upper_bound = upper_bound
+#####         self.delta = self.upper_bound - self.lower_bound
+#####
+#####     def to_unconstrained(self, value):
+#####         """ takes value in (lower_bound, upper_bound) and returns in (-Infinity, Infinity) """
+#####         assert ((self.lower_bound <= value) & (value <= self.upper_bound)).all()
+#####         x0 = (value - self.lower_bound) / self.delta  # this is in (0,1)
+#####         x1 = 2 * x0 - 1  # this is in (-1,1)
+#####         return torch.log1p(x1) - torch.log1p(-x1)  # when x1=+/- 1 result is +/- Infinity
+#####
+#####     def to_constrained(self, value):
+#####         """ takes value in (-Infinity, Infinity) and returns in (lower_bound, upper_bound) """
+#####         return torch.sigmoid(value) * self.delta + self.lower_bound
+#####
+#####
+##### class ConstrainedParam(torch.nn.Module):
+#####     def __init__(self, initial_data: torch.Tensor, transformation: Constraint):
+#####         super().__init__()
+#####         self.transformation = transformation
+#####         with torch.no_grad():
+#####             init_unconstrained = self.transformation.to_unconstrained(initial_data.detach())
+#####         self.unconstrained = torch.nn.Parameter(init_unconstrained, requires_grad=True)
+#####
+#####     def forward(self):
+#####         # return constrained parameter
+#####         return self.transformation.to_constrained(self.unconstrained)
+#####
+#####
+#####
 #####def param_constraint(module: torch.nn.Module,
 #####                     name: str,
 #####                     data: torch.Tensor,

@@ -2,7 +2,6 @@ import torch
 import collections
 from typing import NamedTuple
 
-
 #  ----------------------------------------------------------------  #
 #  ------- Stuff defined in terms of native types -----------------  #
 #  ----------------------------------------------------------------  #
@@ -41,7 +40,7 @@ class Checkpoint(NamedTuple):
 class UNEToutput(NamedTuple):
     zwhere: ZZ
     logit: ZZ
-    bg_mu: torch.Tensor
+    zbg: ZZ
     features: torch.Tensor
 
 
@@ -50,11 +49,13 @@ class Inference(NamedTuple):
     p_map: torch.Tensor
     area_map: torch.Tensor
     big_mask: torch.Tensor
+    big_mask_NON_interacting: torch.Tensor
     big_img: torch.Tensor
     prob: torch.Tensor
     bounding_box: BB
     kl_zwhat_each_obj: torch.Tensor
     kl_zmask_each_obj: torch.Tensor
+    kl_zwhere_each_obj: torch.Tensor
     kl_zwhere_map: torch.Tensor
     kl_logit_map: torch.Tensor
 ##     zmask: torch.Tensor
@@ -77,16 +78,16 @@ class MetricMiniBatch(NamedTuple):
     kl_where: torch.Tensor
     kl_logit: torch.Tensor
     sparsity: torch.Tensor
-    n_obj: torch.Tensor
+    fg_fraction: torch.Tensor
     geco_sparsity: torch.Tensor
-    geco_nll: torch.Tensor
+    geco_balance: torch.Tensor
     delta_1: torch.Tensor
     delta_2: torch.Tensor
     n_obj_counts: torch.Tensor
 
 
 class RegMiniBatch(NamedTuple):
-    cost_fg_pixel_fraction: torch.Tensor
+    # cost_fg_pixel_fraction: torch.Tensor
     cost_overlap: torch.Tensor
     # cost_volume_mask_fraction: torch.Tensor
     # cost_prob_map_integral: torch.Tensor
@@ -105,14 +106,14 @@ class Metric_and_Reg(NamedTuple):
     kl_where: torch.Tensor
     kl_logit: torch.Tensor
     sparsity: torch.Tensor
-    n_obj: torch.Tensor
+    fg_fraction: torch.Tensor
     geco_sparsity: torch.Tensor
-    geco_nll: torch.Tensor
+    geco_balance: torch.Tensor
     delta_1: torch.Tensor
     delta_2: torch.Tensor
     n_obj_counts: torch.Tensor
     # RegMiniBatch (in the same order as underlying class)
-    cost_fg_pixel_fraction: torch.Tensor
+    # cost_fg_pixel_fraction: torch.Tensor
     cost_overlap: torch.Tensor
     # cost_volume_mask_fraction: torch.Tensor
     # cost_prob_map_integral: torch.Tensor
