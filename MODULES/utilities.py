@@ -584,119 +584,119 @@ def sample_from_constraints_dict(dict_soft_constraints: dict,
     return cost
 
 
-class Constraint(object):
-    @staticmethod
-    def define(lower_bound, upper_bound):
-        if (lower_bound is not None) and (upper_bound is not None):
-            return ConstraintRange(lower_bound=lower_bound, upper_bound=upper_bound)
-        elif lower_bound is not None:
-            return ConstraintLarger(lower_bound=lower_bound)
-        elif upper_bound is not None:
-            return ConstraintSmaller(upper_bound=upper_bound)
-        else:
-            # both lower_bound and upper_bound are None
-            return ConstraintIdentity()
-
-    def to_unconstrained(self, value):
-        raise NotImplementedError
-
-    def to_constrained(self, value):
-        raise NotImplementedError
-
-
-class ConstraintIdentity(Constraint):
-    """ Base Constraints which implement the identity """
-    def __init__(self) -> None:
-        super().__init__()
-
-    def to_unconstrained(self, value):
-        return value
-
-    def to_constrained(self, value):
-        return value
-
-
-class ConstraintLarger(Constraint):
-    def __init__(self, lower_bound):
-        super().__init__()
-        self.lower_bound = lower_bound
-        self.beta = 1.0
-        self.threshold = 10.0
-
-    def inverse_softplus(self, x):
-        """ takes value in (0, +Infinity) and returns in (-Infinity, Infinity) """
-        assert (x >= 0.0).all()
-        tmp = torch.log(torch.exp(x) - self.beta)
-        result = torch.where(x > self.threshold, x, tmp)
-        return torch.where(torch.isinf(-result), -14.0 * torch.ones_like(result), result)
-
-    def to_unconstrained(self, value):
-        """ takes value in (lower_bound, +Infinity) and returns in (-Infinity, Infinity) """
-        delta = value - self.lower_bound  # is >= 0
-        return self.inverse_softplus(delta)
-
-    def to_constrained(self, value):
-        """ takes value in (-Infinity, Infinity) and returns in (lower_bound, +Infinity) """
-        return F.softplus(value, beta=self.beta, threshold=self.threshold) + self.lower_bound
-
-
-class ConstraintSmaller(Constraint):
-    def __init__(self, upper_bound):
-        super().__init__()
-        self.upper_bound = upper_bound
-        self.beta = 1.0
-        self.threshold = 10.0
-
-    def inverse_softplus(self, x):
-        """ takes value in (0, +Infinity) and returns in (-Infinity, Infinity) """
-        assert (x >= 0.0).all()
-        tmp = torch.log(torch.exp(x) - self.beta)
-        result = torch.where(x > self.threshold, x, tmp)
-        return torch.where(torch.isinf(-result), -14.0 * torch.ones_like(result), result)
-
-    def to_unconstrained(self, value):
-        """ takes value in (-Infinity, upper_bound) and returns in (-Infinity, Infinity) """
-        delta = self.upper_bound - value  # >= 0
-        return - self.inverse_softplus(delta)
-
-    def to_constrained(self, value):
-        """ takes value in (-Infinity, Infinity) and returns in (-Infinity, upper_bound) """
-        return self.upper_bound - F.softplus(-value, beta=1, threshold=10.0)
-
-
-class ConstraintRange(Constraint):
-    def __init__(self, lower_bound, upper_bound):
-        super().__init__()
-        self.lower_bound = lower_bound
-        self.upper_bound = upper_bound
-        self.delta = self.upper_bound - self.lower_bound
-
-    def to_unconstrained(self, value):
-        """ takes value in (lower_bound, upper_bound) and returns in (-Infinity, Infinity) """
-        assert ((self.lower_bound <= value) & (value <= self.upper_bound)).all()
-        x0 = (value - self.lower_bound) / self.delta  # this is in (0,1)
-        x1 = 2 * x0 - 1  # this is in (-1,1)
-        return torch.log1p(x1) - torch.log1p(-x1)  # when x1=+/- 1 result is +/- Infinity
-
-    def to_constrained(self, value):
-        """ takes value in (-Infinity, Infinity) and returns in (lower_bound, upper_bound) """
-        return torch.sigmoid(value) * self.delta + self.lower_bound
-
-
-class ConstrainedParam(torch.nn.Module):
-    def __init__(self, initial_data: torch.Tensor, transformation: Constraint):
-        super().__init__()
-        self.transformation = transformation
-        with torch.no_grad():
-            init_unconstrained = self.transformation.to_unconstrained(initial_data.detach())
-        self.unconstrained = torch.nn.Parameter(init_unconstrained, requires_grad=True)
-
-    def forward(self):
-        # return constrained parameter
-        return self.transformation.to_constrained(self.unconstrained)
-
-
-
+##### class Constraint(object):
+#####     @staticmethod
+#####     def define(lower_bound, upper_bound):
+#####         if (lower_bound is not None) and (upper_bound is not None):
+#####             return ConstraintRange(lower_bound=lower_bound, upper_bound=upper_bound)
+#####         elif lower_bound is not None:
+#####             return ConstraintLarger(lower_bound=lower_bound)
+#####         elif upper_bound is not None:
+#####             return ConstraintSmaller(upper_bound=upper_bound)
+#####         else:
+#####             # both lower_bound and upper_bound are None
+#####             return ConstraintIdentity()
+#####
+#####     def to_unconstrained(self, value):
+#####         raise NotImplementedError
+#####
+#####     def to_constrained(self, value):
+#####         raise NotImplementedError
+#####
+#####
+##### class ConstraintIdentity(Constraint):
+#####     """ Base Constraints which implement the identity """
+#####     def __init__(self) -> None:
+#####         super().__init__()
+#####
+#####     def to_unconstrained(self, value):
+#####         return value
+#####
+#####     def to_constrained(self, value):
+#####         return value
+#####
+#####
+##### class ConstraintLarger(Constraint):
+#####     def __init__(self, lower_bound):
+#####         super().__init__()
+#####         self.lower_bound = lower_bound
+#####         self.beta = 1.0
+#####         self.threshold = 10.0
+#####
+#####     def inverse_softplus(self, x):
+#####         """ takes value in (0, +Infinity) and returns in (-Infinity, Infinity) """
+#####         assert (x >= 0.0).all()
+#####         tmp = torch.log(torch.exp(x) - self.beta)
+#####         result = torch.where(x > self.threshold, x, tmp)
+#####         return torch.where(torch.isinf(-result), -14.0 * torch.ones_like(result), result)
+#####
+#####     def to_unconstrained(self, value):
+#####         """ takes value in (lower_bound, +Infinity) and returns in (-Infinity, Infinity) """
+#####         delta = value - self.lower_bound  # is >= 0
+#####         return self.inverse_softplus(delta)
+#####
+#####     def to_constrained(self, value):
+#####         """ takes value in (-Infinity, Infinity) and returns in (lower_bound, +Infinity) """
+#####         return F.softplus(value, beta=self.beta, threshold=self.threshold) + self.lower_bound
+#####
+#####
+##### class ConstraintSmaller(Constraint):
+#####     def __init__(self, upper_bound):
+#####         super().__init__()
+#####         self.upper_bound = upper_bound
+#####         self.beta = 1.0
+#####         self.threshold = 10.0
+#####
+#####     def inverse_softplus(self, x):
+#####         """ takes value in (0, +Infinity) and returns in (-Infinity, Infinity) """
+#####         assert (x >= 0.0).all()
+#####         tmp = torch.log(torch.exp(x) - self.beta)
+#####         result = torch.where(x > self.threshold, x, tmp)
+#####         return torch.where(torch.isinf(-result), -14.0 * torch.ones_like(result), result)
+#####
+#####     def to_unconstrained(self, value):
+#####         """ takes value in (-Infinity, upper_bound) and returns in (-Infinity, Infinity) """
+#####         delta = self.upper_bound - value  # >= 0
+#####         return - self.inverse_softplus(delta)
+#####
+#####     def to_constrained(self, value):
+#####         """ takes value in (-Infinity, Infinity) and returns in (-Infinity, upper_bound) """
+#####         return self.upper_bound - F.softplus(-value, beta=1, threshold=10.0)
+#####
+#####
+##### class ConstraintRange(Constraint):
+#####     def __init__(self, lower_bound, upper_bound):
+#####         super().__init__()
+#####         self.lower_bound = lower_bound
+#####         self.upper_bound = upper_bound
+#####         self.delta = self.upper_bound - self.lower_bound
+#####
+#####     def to_unconstrained(self, value):
+#####         """ takes value in (lower_bound, upper_bound) and returns in (-Infinity, Infinity) """
+#####         assert ((self.lower_bound <= value) & (value <= self.upper_bound)).all()
+#####         x0 = (value - self.lower_bound) / self.delta  # this is in (0,1)
+#####         x1 = 2 * x0 - 1  # this is in (-1,1)
+#####         return torch.log1p(x1) - torch.log1p(-x1)  # when x1=+/- 1 result is +/- Infinity
+#####
+#####     def to_constrained(self, value):
+#####         """ takes value in (-Infinity, Infinity) and returns in (lower_bound, upper_bound) """
+#####         return torch.sigmoid(value) * self.delta + self.lower_bound
+#####
+#####
+##### class ConstrainedParam(torch.nn.Module):
+#####     def __init__(self, initial_data: torch.Tensor, transformation: Constraint):
+#####         super().__init__()
+#####         self.transformation = transformation
+#####         with torch.no_grad():
+#####             init_unconstrained = self.transformation.to_unconstrained(initial_data.detach())
+#####         self.unconstrained = torch.nn.Parameter(init_unconstrained, requires_grad=True)
+#####
+#####     def forward(self):
+#####         # return constrained parameter
+#####         return self.transformation.to_constrained(self.unconstrained)
+#####
+#####
+#####
 #####def param_constraint(module: torch.nn.Module,
 #####                     name: str,
 #####                     data: torch.Tensor,
