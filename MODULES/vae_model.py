@@ -181,20 +181,7 @@ class CompositionalVae(torch.nn.Module):
             2. overlap make sure that mask do not overlap
         """
         
-        # 1. fg_pixel_fraction should be in a range. This is a foreground budget.
-        # The model should allocate the foreground pixel where most necessary
-        # (i.e. where description based on background is bad)
-        # Note that prob is attached so that, if you are in the empty solution,
-        # this regularization helps the object to turn themselves on
-        # fg_pixel = torch.sum(inference.prob[..., None, None, None] * inference.big_mask, dim=-5) # singleton ch,w,h
-        # fraction_fg_pixels = torch.mean(fg_pixel, dim=(-1, -2, -3))  # mean over: ch,w,h
-        # cost_fg_pixel_fraction = sample_from_constraints_dict(dict_soft_constraints=self.dict_soft_constraints,
-        #                                                       var_name="fg_pixel_fraction",
-        #                                                       var_value=fraction_fg_pixels,
-        #                                                       verbose=verbose,
-        #                                                       chosen=chosen)
-        
-        # 2. Masks should not overlap:
+        # 1. Masks should not overlap:
         # A = (x1+x2+x3)^2 = x1^2 + x2^2 + x3^2 + 2 x1*x2 + 2 x1*x3 + 2 x2*x3
         # Therefore sum_{i \ne j} x_i x_j = x1*x2 + x1*x3 + x2*x3 = 0.5 * [(sum xi)^2 - (sum xi^2)]
         x = inference.prob[..., None, None, None] * inference.big_mask_NON_interacting
@@ -221,8 +208,7 @@ class CompositionalVae(torch.nn.Module):
                         reg: RegMiniBatch) -> MetricMiniBatch:
 
         # Preparation
-        with torch.no_grad():
-            n_obj_counts = (inference.prob > 0.5).float().sum(-2)  # sum over boxes dimension
+        n_obj_counts = (inference.prob > 0.5).float().sum(-2).detach()  # sum over boxes dimension
         p_times_area_map = inference.p_map * inference.area_map
         mixing_k = inference.big_mask * inference.prob[..., None, None, None]
         mixing_fg = torch.sum(mixing_k, dim=-5)
@@ -254,6 +240,7 @@ class CompositionalVae(torch.nn.Module):
         nll_av = (torch.sum(mixing_k * nll_k, dim=-5) + mixing_bg * nll_bg).mean()
 
         # 4. compute the KL for each image
+        # TODO: NORMALIZE EVERYTHING BY THEIR RUNNING AVERAGE?
         kl_zmask_av = torch.mean(inference.kl_zmask_each_obj)  # mean over: boxes, batch_size, latent_zmask
         kl_zwhat_av = torch.mean(inference.kl_zwhat_each_obj)  # mean over: boxes, batch_size, latent_zwhat
         kl_zwhere_av = torch.mean(inference.kl_zwhere_map)  # imean over: batch_size, ch=4, w, h
@@ -264,7 +251,7 @@ class CompositionalVae(torch.nn.Module):
         with torch.no_grad():
 
             # Compute the moving averages to normalize kl_logit
-            input_dict = {"kl_logit_tot" : kl_logit_tot.item()}
+            input_dict = {"kl_logit_tot": kl_logit_tot.item()}
             # Only if in training mode I accumulate the moving average
             if self.training:
                 ma_dict = self.ma_calculator.accumulate(input_dict)
