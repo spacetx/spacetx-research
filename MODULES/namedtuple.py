@@ -45,27 +45,17 @@ class UNEToutput(NamedTuple):
 
 
 class Inference(NamedTuple):
-    bg_mu: torch.Tensor
     p_map: torch.Tensor
     area_map: torch.Tensor
+    big_bg: torch.Tensor
+    big_img: torch.Tensor
     big_mask: torch.Tensor
     big_mask_NON_interacting: torch.Tensor
-    big_img: torch.Tensor
     prob: torch.Tensor
     bounding_box: BB
-    kl_zwhat_each_obj: torch.Tensor
-    kl_zmask_each_obj: torch.Tensor
-    kl_zwhere_each_obj: torch.Tensor
+    kl_zinstance_each_obj: torch.Tensor
     kl_zwhere_map: torch.Tensor
     kl_logit_map: torch.Tensor
-##     zmask: torch.Tensor
-##     zwhat: torch.Tensor
-##     zwhere_map: torch.Tensor
-##     small_mask: torch.Tensor
-##     cropped_img: torch.Tensor
-##     small_img: torch.Tensor
-##     bounding_box_all: BB
-##     prob_all: torch.Tensor
 
 
 class MetricMiniBatch(NamedTuple):
@@ -73,8 +63,7 @@ class MetricMiniBatch(NamedTuple):
     nll: torch.Tensor
     reg: torch.Tensor
     kl_tot: torch.Tensor
-    kl_what: torch.Tensor
-    kl_mask: torch.Tensor
+    kl_instance: torch.Tensor
     kl_where: torch.Tensor
     kl_logit: torch.Tensor
     sparsity: torch.Tensor
@@ -101,8 +90,7 @@ class Metric_and_Reg(NamedTuple):
     nll: torch.Tensor
     reg: torch.Tensor
     kl_tot: torch.Tensor
-    kl_what: torch.Tensor
-    kl_mask: torch.Tensor
+    kl_instance: torch.Tensor
     kl_where: torch.Tensor
     kl_logit: torch.Tensor
     sparsity: torch.Tensor

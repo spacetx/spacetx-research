@@ -236,13 +236,12 @@ class CompositionalVae(torch.nn.Module):
         # Note that nll_off_bg is detached when appears with the minus sign. 
         # This is b/c we want the best possible background on top of which to add FOREGROUD objects
         nll_k = self.NLL_MSE(output=inference.big_img, target=imgs_in, sigma=self.sigma_fg)
-        nll_bg = self.NLL_MSE(output=inference.bg_mu, target=imgs_in, sigma=self.sigma_bg)  # batch_size, ch, w, h
+        nll_bg = self.NLL_MSE(output=inference.big_bg, target=imgs_in, sigma=self.sigma_bg)  # batch_size, ch, w, h
         nll_av = (torch.sum(mixing_k * nll_k, dim=-5) + mixing_bg * nll_bg).mean()
 
         # 4. compute the KL for each image
         # TODO: NORMALIZE EVERYTHING BY THEIR RUNNING AVERAGE?
-        kl_zmask_av = torch.mean(inference.kl_zmask_each_obj)  # mean over: boxes, batch_size, latent_zmask
-        kl_zwhat_av = torch.mean(inference.kl_zwhat_each_obj)  # mean over: boxes, batch_size, latent_zwhat
+        kl_zinstance_av = torch.mean(inference.kl_zinstance_each_obj)  # mean over: boxes, batch_size, latent_zwhat
         kl_zwhere_av = torch.mean(inference.kl_zwhere_map)  # imean over: batch_size, ch=4, w, h
         kl_logit_tot = torch.sum(inference.kl_logit_map)  # will be normalized by its moving average
         
@@ -259,7 +258,7 @@ class CompositionalVae(torch.nn.Module):
                 ma_dict = input_dict
 
         # 6. Loss_VAE
-        kl_av = kl_zwhat_av + kl_zmask_av + kl_zwhere_av + kl_logit_tot/ma_dict["kl_logit_tot"]
+        kl_av = kl_zinstance_av + kl_zwhere_av + kl_logit_tot/ma_dict["kl_logit_tot"]
         assert nll_av.shape == reg_av.shape == kl_av.shape == sparsity_av.shape
         # print(nll_av, reg_av, kl_av, sparsity_av)
 
@@ -304,8 +303,7 @@ class CompositionalVae(torch.nn.Module):
                                nll=nll_av.detach(),
                                reg=reg_av.detach(),
                                kl_tot=kl_av.detach(),
-                               kl_what=kl_zwhat_av.detach(),
-                               kl_mask=kl_zmask_av.detach(),
+                               kl_instance=kl_zinstance_av.detach(),
                                kl_where=kl_zwhere_av.detach(),
                                kl_logit=kl_logit_tot.detach(),
                                sparsity=sparsity_av.detach(),
