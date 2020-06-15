@@ -180,7 +180,7 @@ class CompositionalVae(torch.nn.Module):
             1. fg_pixel_fraction determines the overall foreground budget
             2. overlap make sure that mask do not overlap
         """
-        
+
         # 1. Masks should not overlap:
         # A = (x1+x2+x3)^2 = x1^2 + x2^2 + x3^2 + 2 x1*x2 + 2 x1*x3 + 2 x2*x3
         # Therefore sum_{i \ne j} x_i x_j = x1*x2 + x1*x3 + x2*x3 = 0.5 * [(sum xi)^2 - (sum xi^2)]
@@ -195,9 +195,19 @@ class CompositionalVae(torch.nn.Module):
                                                     verbose=verbose,
                                                     chosen=chosen)
 
+        # Mask should have a min and max volume
+        volume_mask_absolute = torch.sum(inference.big_mask, dim=(-1, -2, -3))  # sum over ch,w,h
+        cost_volume_absolute = sample_from_constraints_dict(dict_soft_constraints=self.dict_soft_constraints,
+                                                            var_name="mask_volume_absolute",
+                                                            var_value=volume_mask_absolute,
+                                                            verbose=verbose,
+                                                            chosen=chosen)
+        cost_volume_absolute_times_prob = torch.sum(cost_volume_absolute * inference.prob, dim=-2)  # sum over boxes
+
         # Note that before returning I am computing the mean over the batch_size (which is the only dimension left)
         # assert cost_fg_pixel_fraction.shape == cost_overlap.shape
-        return RegMiniBatch(cost_overlap=cost_overlap.mean())
+        return RegMiniBatch(cost_overlap=cost_overlap.mean(),
+                            cost_vol_absolute=cost_volume_absolute_times_prob.mean())
     
     def NLL_MSE(self, output: torch.tensor, target: torch.tensor, sigma: torch.tensor) -> torch.Tensor:
         return ((output-target)/sigma).pow(2)
@@ -216,7 +226,10 @@ class CompositionalVae(torch.nn.Module):
         assert len(mixing_fg.shape) == 4  # batch, ch=1, w, h
 
         # 1. Regularizations
-        reg_av = reg.cost_overlap
+        reg_av: torch.Tensor = torch.zeros(1, device=imgs_in.device, dtype=imgs_in.dtype)  # shape: 1
+        for f in reg._fields:
+            reg_av += getattr(reg, f)
+        reg_av = reg_av.mean()  # shape []
 
         # 2. Sparsity should encourage:
         # 1. small probabilities

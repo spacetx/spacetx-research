@@ -78,6 +78,7 @@ class MetricMiniBatch(NamedTuple):
 class RegMiniBatch(NamedTuple):
     # cost_fg_pixel_fraction: torch.Tensor
     cost_overlap: torch.Tensor
+    cost_vol_absolute: torch.Tensor
     # cost_volume_mask_fraction: torch.Tensor
     # cost_prob_map_integral: torch.Tensor
     # cost_prob_map_fraction: torch.Tensor
@@ -103,6 +104,7 @@ class Metric_and_Reg(NamedTuple):
     # RegMiniBatch (in the same order as underlying class)
     # cost_fg_pixel_fraction: torch.Tensor
     cost_overlap: torch.Tensor
+    cost_vol_absolute: torch.Tensor
     # cost_volume_mask_fraction: torch.Tensor
     # cost_prob_map_integral: torch.Tensor
     # cost_prob_map_fraction: torch.Tensor
