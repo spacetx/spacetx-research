@@ -3,7 +3,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from .namedtuple import ZZ
 from typing import List, Optional
-import torchvision.models
 
 EPS_STD = 1E-3  # standard_deviation = F.softplus(x) + EPS_STD >= EPS_STD
 
