@@ -180,7 +180,7 @@ class CompositionalVae(torch.nn.Module):
             1. fg_pixel_fraction determines the overall foreground budget
             2. overlap make sure that mask do not overlap
         """
-        
+
         # 1. Masks should not overlap:
         # A = (x1+x2+x3)^2 = x1^2 + x2^2 + x3^2 + 2 x1*x2 + 2 x1*x3 + 2 x2*x3
         # Therefore sum_{i \ne j} x_i x_j = x1*x2 + x1*x3 + x2*x3 = 0.5 * [(sum xi)^2 - (sum xi^2)]
@@ -195,9 +195,19 @@ class CompositionalVae(torch.nn.Module):
                                                     verbose=verbose,
                                                     chosen=chosen)
 
+        # Mask should have a min and max volume
+        volume_mask_absolute = torch.sum(inference.big_mask, dim=(-1, -2, -3))  # sum over ch,w,h
+        cost_volume_absolute = sample_from_constraints_dict(dict_soft_constraints=self.dict_soft_constraints,
+                                                            var_name="mask_volume_absolute",
+                                                            var_value=volume_mask_absolute,
+                                                            verbose=verbose,
+                                                            chosen=chosen)
+        cost_volume_absolute_times_prob = torch.sum(cost_volume_absolute * inference.prob, dim=-2)  # sum over boxes
+
         # Note that before returning I am computing the mean over the batch_size (which is the only dimension left)
         # assert cost_fg_pixel_fraction.shape == cost_overlap.shape
-        return RegMiniBatch(cost_overlap=cost_overlap.mean())
+        return RegMiniBatch(cost_overlap=cost_overlap.mean(),
+                            cost_vol_absolute=cost_volume_absolute_times_prob.mean())
     
     def NLL_MSE(self, output: torch.tensor, target: torch.tensor, sigma: torch.tensor) -> torch.Tensor:
         return ((output-target)/sigma).pow(2)
@@ -216,7 +226,10 @@ class CompositionalVae(torch.nn.Module):
         assert len(mixing_fg.shape) == 4  # batch, ch=1, w, h
 
         # 1. Regularizations
-        reg_av = reg.cost_overlap
+        reg_av: torch.Tensor = torch.zeros(1, device=imgs_in.device, dtype=imgs_in.dtype)  # shape: 1
+        for f in reg._fields:
+            reg_av += getattr(reg, f)
+        reg_av = reg_av.mean()  # shape []
 
         # 2. Sparsity should encourage:
         # 1. small probabilities
@@ -236,14 +249,13 @@ class CompositionalVae(torch.nn.Module):
         # Note that nll_off_bg is detached when appears with the minus sign. 
         # This is b/c we want the best possible background on top of which to add FOREGROUD objects
         nll_k = self.NLL_MSE(output=inference.big_img, target=imgs_in, sigma=self.sigma_fg)
-        nll_bg = self.NLL_MSE(output=inference.bg_mu, target=imgs_in, sigma=self.sigma_bg)  # batch_size, ch, w, h
+        nll_bg = self.NLL_MSE(output=inference.big_bg, target=imgs_in, sigma=self.sigma_bg)  # batch_size, ch, w, h
         nll_av = (torch.sum(mixing_k * nll_k, dim=-5) + mixing_bg * nll_bg).mean()
 
         # 4. compute the KL for each image
         # TODO: NORMALIZE EVERYTHING BY THEIR RUNNING AVERAGE?
-        kl_zmask_av = torch.mean(inference.kl_zmask_each_obj)  # mean over: boxes, batch_size, latent_zmask
-        kl_zwhat_av = torch.mean(inference.kl_zwhat_each_obj)  # mean over: boxes, batch_size, latent_zwhat
-        kl_zwhere_av = torch.mean(inference.kl_zwhere_map)  # imean over: batch_size, ch=4, w, h
+        kl_zinstance_av = torch.mean(inference.kl_zinstance_each_obj)  # mean over: boxes, batch_size, latent_zwhat
+        kl_zwhere_av = torch.mean(inference.kl_zwhere_map)  # mean over: batch_size, ch=4, w, h
         kl_logit_tot = torch.sum(inference.kl_logit_map)  # will be normalized by its moving average
         
         
@@ -259,7 +271,7 @@ class CompositionalVae(torch.nn.Module):
                 ma_dict = input_dict
 
         # 6. Loss_VAE
-        kl_av = kl_zwhat_av + kl_zmask_av + kl_zwhere_av + kl_logit_tot/ma_dict["kl_logit_tot"]
+        kl_av = kl_zinstance_av + kl_zwhere_av + kl_logit_tot/ma_dict["kl_logit_tot"]
         assert nll_av.shape == reg_av.shape == kl_av.shape == sparsity_av.shape
         # print(nll_av, reg_av, kl_av, sparsity_av)
 
@@ -304,8 +316,7 @@ class CompositionalVae(torch.nn.Module):
                                nll=nll_av.detach(),
                                reg=reg_av.detach(),
                                kl_tot=kl_av.detach(),
-                               kl_what=kl_zwhat_av.detach(),
-                               kl_mask=kl_zmask_av.detach(),
+                               kl_instance=kl_zinstance_av.detach(),
                                kl_where=kl_zwhere_av.detach(),
                                kl_logit=kl_logit_tot.detach(),
                                sparsity=sparsity_av.detach(),
@@ -314,6 +325,7 @@ class CompositionalVae(torch.nn.Module):
                                geco_balance=f_balance,
                                delta_1=delta_1,
                                delta_2=delta_2,
+                               length_GP=inference.length_scale_GP.detach(),
                                n_obj_counts=n_obj_counts)
 
     def segment(self, img, n_objects_max=None, draw_bounding_box=False):

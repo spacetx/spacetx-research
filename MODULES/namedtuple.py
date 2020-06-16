@@ -45,27 +45,18 @@ class UNEToutput(NamedTuple):
 
 
 class Inference(NamedTuple):
-    bg_mu: torch.Tensor
+    length_scale_GP: torch.Tensor
     p_map: torch.Tensor
     area_map: torch.Tensor
+    big_bg: torch.Tensor
+    big_img: torch.Tensor
     big_mask: torch.Tensor
     big_mask_NON_interacting: torch.Tensor
-    big_img: torch.Tensor
     prob: torch.Tensor
     bounding_box: BB
-    kl_zwhat_each_obj: torch.Tensor
-    kl_zmask_each_obj: torch.Tensor
-    kl_zwhere_each_obj: torch.Tensor
+    kl_zinstance_each_obj: torch.Tensor
     kl_zwhere_map: torch.Tensor
     kl_logit_map: torch.Tensor
-##     zmask: torch.Tensor
-##     zwhat: torch.Tensor
-##     zwhere_map: torch.Tensor
-##     small_mask: torch.Tensor
-##     cropped_img: torch.Tensor
-##     small_img: torch.Tensor
-##     bounding_box_all: BB
-##     prob_all: torch.Tensor
 
 
 class MetricMiniBatch(NamedTuple):
@@ -73,8 +64,7 @@ class MetricMiniBatch(NamedTuple):
     nll: torch.Tensor
     reg: torch.Tensor
     kl_tot: torch.Tensor
-    kl_what: torch.Tensor
-    kl_mask: torch.Tensor
+    kl_instance: torch.Tensor
     kl_where: torch.Tensor
     kl_logit: torch.Tensor
     sparsity: torch.Tensor
@@ -83,12 +73,14 @@ class MetricMiniBatch(NamedTuple):
     geco_balance: torch.Tensor
     delta_1: torch.Tensor
     delta_2: torch.Tensor
+    length_GP: torch.Tensor
     n_obj_counts: torch.Tensor
 
 
 class RegMiniBatch(NamedTuple):
     # cost_fg_pixel_fraction: torch.Tensor
     cost_overlap: torch.Tensor
+    cost_vol_absolute: torch.Tensor
     # cost_volume_mask_fraction: torch.Tensor
     # cost_prob_map_integral: torch.Tensor
     # cost_prob_map_fraction: torch.Tensor
@@ -101,8 +93,7 @@ class Metric_and_Reg(NamedTuple):
     nll: torch.Tensor
     reg: torch.Tensor
     kl_tot: torch.Tensor
-    kl_what: torch.Tensor
-    kl_mask: torch.Tensor
+    kl_instance: torch.Tensor
     kl_where: torch.Tensor
     kl_logit: torch.Tensor
     sparsity: torch.Tensor
@@ -111,10 +102,12 @@ class Metric_and_Reg(NamedTuple):
     geco_balance: torch.Tensor
     delta_1: torch.Tensor
     delta_2: torch.Tensor
+    length_GP: torch.Tensor
     n_obj_counts: torch.Tensor
     # RegMiniBatch (in the same order as underlying class)
     # cost_fg_pixel_fraction: torch.Tensor
     cost_overlap: torch.Tensor
+    cost_vol_absolute: torch.Tensor
     # cost_volume_mask_fraction: torch.Tensor
     # cost_prob_map_integral: torch.Tensor
     # cost_prob_map_fraction: torch.Tensor

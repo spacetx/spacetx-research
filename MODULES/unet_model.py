@@ -52,23 +52,23 @@ class UNet(torch.nn.Module):
             self.s_p_k = module.__add_to_spk_list__(self.s_p_k)
 
         # Prediction maps
-        self.pred_features = torch.nn.Sequential(torch.nn.ReLU(),
-                                                 MLP_1by1(ch_in=self.ch_list[-1],
-                                                          ch_out=self.n_ch_output_features,
-                                                          ch_hidden=-1))
+        self.pred_features = MLP_1by1(ch_in=self.ch_list[-1],
+                                      ch_out=self.n_ch_output_features,
+                                      ch_hidden=-1)  # this means there is NO hidden layer
 
         self.encode_zwhere = Encoder1by1(ch_in=self.ch_list[-self.level_zwhere_and_logit_output - 1],
-                                         dim_z=self.dim_zwhere)
+                                         dim_z=self.dim_zwhere,
+                                         ch_hidden=None)  # this means there is ONE hidden layer of automatic size
 
         self.encode_logit = Encoder1by1(ch_in=self.ch_list[-self.level_zwhere_and_logit_output - 1],
-                                        dim_z=self.dim_logit)
+                                        dim_z=self.dim_logit,
+                                        ch_hidden=None)  # this means there is ONE hidden layer of automatic size
 
         # I don't need all the channels to predict the background. Few channels are enough
         self.ch_in_bg = min(5, self.ch_list[-self.level_background_output - 1])
-        self.pred_background = torch.nn.Sequential(torch.nn.ReLU(),
-                                                   PredictBackground(ch_in=self.ch_in_bg,
-                                                                     ch_out=self.ch_raw_image,
-                                                                     ch_hidden=-1))
+        self.pred_background = PredictBackground(ch_in=self.ch_in_bg,
+                                                 ch_out=self.ch_raw_image,
+                                                 ch_hidden=-1)  # this means there is NO hidden layer
 
     def forward(self, x: torch.Tensor, verbose: bool):
         input_w, input_h = x.shape[-2:]
