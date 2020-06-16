@@ -118,12 +118,13 @@ class Inference_and_Generation(torch.nn.Module):
         self.size_max: int = params["input_image"]["size_object_max"]
         self.size_min: int = params["input_image"]["size_object_min"]
         self.cropped_size: int = params["architecture"]["cropped_size"]
-        self.lenght_scale_prior: float = params["input_image"]["sigma_squared_exp_kernel_prob_map"]
         self.prior_L_cov = None
+
+        self.lenght_scale_GP = torch.nn.Parameter(data=torch.tensor(params["input_image"]["length_scale_GP"]),
+                                                  requires_grad=True)
 
         # modules
         self.unet: UNet = UNet(params)
-
 
         # Decoders
         self.decoder_zwhere: Decoder1by1Linear = Decoder1by1Linear(dim_z=params["architecture"]["dim_zwhere"],
@@ -134,7 +135,7 @@ class Inference_and_Generation(torch.nn.Module):
                                                                   ch_out=1,
                                                                   groups=1)
 
-        leaky = True
+        leaky = False
         if leaky:
             self.decoder_zinstance: DecoderConvLeaky = DecoderConvLeaky(size=params["architecture"]["cropped_size"],
                                                                         dim_z=params["architecture"]["dim_zinstance"],
@@ -216,23 +217,22 @@ class Inference_and_Generation(torch.nn.Module):
         # ---------------------------#
         # 3. LOGIT to Probabilities #
         # ---------------------------#
+
+        # Diagonalize the covaraince matrix at each iteration since it depends on the tunable parameter lenght_scale_prior
+        scale_factor = imgs_in.shape[-1] / unet_output.logit.mu.shape[-1]
+        locations = (pmap_points * scale_factor).view(-1, 2).detach()
+        prior_covariance = squared_exp_kernel(points1=locations,
+                                              points2=locations,
+                                              length_scale=F.softplus(self.lenght_scale_GP),
+                                              eps=1E-3)
+
         posterior_mu = torch.flatten(unet_output.logit.mu, start_dim=1)
         posterior_L_cov = torch.diag_embed(torch.flatten(unet_output.logit.std, start_dim=1), dim1=-2, dim2=-1)
-
-        # Diagonalize the covaraince matrix if necessary
-        if self.prior_L_cov is None or (self.prior_L_cov.shape[-1] != posterior_mu.shape[-1]):
-
-            length_scale = self.lenght_scale_prior * float(unet_output.logit.mu.shape[-1]) / imgs_in.shape[-1]
-            prior_covariance = squared_exp_kernel(points1=pmap_points.view(-1, 2),
-                                                  points2=pmap_points.view(-1, 2),
-                                                  length_scale=length_scale,
-                                                  eps=1E-3)
-            self.prior_L_cov = torch.cholesky(prior_covariance)
 
         logit_map: DIST = sample_and_kl_multivariate_normal(posterior_mu=posterior_mu,
                                                             posterior_L_cov=posterior_L_cov,
                                                             prior_mu=torch.zeros_like(posterior_mu).detach(),
-                                                            prior_L_cov=self.prior_L_cov.detach(),
+                                                            prior_L_cov=torch.cholesky(prior_covariance),
                                                             noisy_sampling=noisy_sampling,
                                                             sample_from_prior=generate_synthetic_data)
 
@@ -316,7 +316,8 @@ class Inference_and_Generation(torch.nn.Module):
         big_mask_NON_interacting = torch.tanh(big_weight)
 
         # 8. Return the inferred quantities
-        return Inference(p_map=p_map_cor,
+        return Inference(length_scale_GP=F.softplus(self.lenght_scale_GP).data.detach(),
+                         p_map=p_map_cor,
                          area_map=area_map,
                          big_bg=big_bg,
                          big_mask=big_mask,

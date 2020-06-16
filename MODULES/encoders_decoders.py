@@ -214,7 +214,7 @@ class EncoderConvLeaky(nn.Module):
 
         self.conv = nn.Sequential(*modules)
         x = torch.zeros(1, self.ch_in, self.width, self.width)
-        ch_flatten = self.conv.flatten(start_dim=1).shape[-1]
+        ch_flatten = self.conv(x).flatten(start_dim=1).shape[-1]
         self.compute_mu = nn.Linear(ch_flatten, self.dim_z)
         self.compute_std = nn.Linear(ch_flatten, self.dim_z)
 

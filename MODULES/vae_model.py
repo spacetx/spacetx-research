@@ -325,6 +325,7 @@ class CompositionalVae(torch.nn.Module):
                                geco_balance=f_balance,
                                delta_1=delta_1,
                                delta_2=delta_2,
+                               length_GP=inference.length_scale_GP.detach(),
                                n_obj_counts=n_obj_counts)
 
     def segment(self, img, n_objects_max=None, draw_bounding_box=False):

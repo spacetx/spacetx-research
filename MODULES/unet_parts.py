@@ -16,17 +16,22 @@ class DoubleConvolutionBlock(nn.Module):
     def __init__(self, ch_in: int, ch_out: int):
         super().__init__()
         self.double_conv = nn.Sequential(
-            nn.ReplicationPad2d(self.PADDING),  # reflection padding
-            nn.Conv2d(ch_in, ch_out, self.FILTER_SIZE, bias=True),
-            #nn.Conv2d(ch_in, ch_out, self.FILTER_SIZE, bias=False),
-            #nn.BatchNorm2d(ch_out, affine=True, track_running_stats=True),
-            nn.ReLU(),
-            nn.ReplicationPad2d(self.PADDING),  # reflection padding
-            nn.Conv2d(ch_out, ch_out, self.FILTER_SIZE, bias=True),
-            #nn.Conv2d(ch_out, ch_out, self.FILTER_SIZE, bias=False),
-            #nn.BatchNorm2d(ch_out, affine=True, track_running_stats=True),
-            nn.ReLU()
+            nn.Conv2d(ch_in, ch_out, self.FILTER_SIZE, bias=True, padding=self.PADDING),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(ch_out, ch_out, self.FILTER_SIZE, bias=True, padding=self.PADDING),
+            nn.ReLU(inplace=True)
         )
+
+#        self.double_conv = nn.Sequential(
+#            nn.ReplicationPad2d(self.PADDING),  # reflection padding
+#            nn.Conv2d(ch_in, ch_out, self.FILTER_SIZE, bias=False),
+#            nn.BatchNorm2d(ch_out, affine=True, track_running_stats=True),
+#            nn.ReLU(inplace=True),
+#            nn.ReplicationPad2d(self.PADDING),  # reflection padding
+#            nn.Conv2d(ch_out, ch_out, self.FILTER_SIZE, bias=False),
+#            nn.BatchNorm2d(ch_out, affine=True, track_running_stats=True),
+#            nn.ReLU(inplace=True)
+#        )
         self.s_p_k = [1.0, 2.0, 5.0]
         
     def __add_to_spk_list__(self, spk_list):

@@ -45,6 +45,7 @@ class UNEToutput(NamedTuple):
 
 
 class Inference(NamedTuple):
+    length_scale_GP: torch.Tensor
     p_map: torch.Tensor
     area_map: torch.Tensor
     big_bg: torch.Tensor
@@ -72,6 +73,7 @@ class MetricMiniBatch(NamedTuple):
     geco_balance: torch.Tensor
     delta_1: torch.Tensor
     delta_2: torch.Tensor
+    length_GP: torch.Tensor
     n_obj_counts: torch.Tensor
 
 
@@ -100,6 +102,7 @@ class Metric_and_Reg(NamedTuple):
     geco_balance: torch.Tensor
     delta_1: torch.Tensor
     delta_2: torch.Tensor
+    length_GP: torch.Tensor
     n_obj_counts: torch.Tensor
     # RegMiniBatch (in the same order as underlying class)
     # cost_fg_pixel_fraction: torch.Tensor
