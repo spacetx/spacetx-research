@@ -17,12 +17,14 @@ class DoubleConvolutionBlock(nn.Module):
         super().__init__()
         self.double_conv = nn.Sequential(
             nn.ReplicationPad2d(self.PADDING),  # reflection padding
-            nn.Conv2d(ch_in, ch_out, self.FILTER_SIZE, bias=False),
-            nn.BatchNorm2d(ch_out),
+            nn.Conv2d(ch_in, ch_out, self.FILTER_SIZE, bias=True),
+            #nn.Conv2d(ch_in, ch_out, self.FILTER_SIZE, bias=False),
+            #nn.BatchNorm2d(ch_out, affine=True, track_running_stats=True),
             nn.ReLU(),
             nn.ReplicationPad2d(self.PADDING),  # reflection padding
-            nn.Conv2d(ch_out, ch_out, self.FILTER_SIZE, bias=False),
-            nn.BatchNorm2d(ch_out),
+            nn.Conv2d(ch_out, ch_out, self.FILTER_SIZE, bias=True),
+            #nn.Conv2d(ch_out, ch_out, self.FILTER_SIZE, bias=False),
+            #nn.BatchNorm2d(ch_out, affine=True, track_running_stats=True),
             nn.ReLU()
         )
         self.s_p_k = [1.0, 2.0, 5.0]

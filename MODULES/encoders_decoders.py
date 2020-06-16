@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from .namedtuple import ZZ
 from typing import List, Optional
+import torchvision.models
 
 EPS_STD = 1E-3  # standard_deviation = F.softplus(x) + EPS_STD >= EPS_STD
 
@@ -64,14 +65,15 @@ class Decoder1by1Linear(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.predict(x)
-    
+
 
 class DecoderConv(nn.Module):
     """ Decode z -> x
-        INPUT:  z of shape: ..., dim_z 
-        OUTPUT: image of shape: ..., ch_out, width, height 
+        INPUT:  z of shape: ..., dim_z
+        OUTPUT: image of shape: ..., ch_out, width, height
         where ... are all the independent dimensions, i.e. box, batch_size, enumeration_dim etc.
     """
+
     def __init__(self, size: int, dim_z: int, ch_out: int):
         super().__init__()
         self.width = size
@@ -95,11 +97,11 @@ class DecoderConv(nn.Module):
 
 class EncoderConv(nn.Module):
     """ Encode x -> z_mu, z_std
-        INPUT  x of shape: ..., ch_raw_image, width, height 
+        INPUT  x of shape: ..., ch_raw_image, width, height
         OUTPUT z_mu, z_std of shape: ..., latent_dim
         where ... are all the independent dimensions, i.e. box, batch_size, enumeration_dim etc.
-    """ 
-    
+    """
+
     def __init__(self, size: int, ch_in: int, dim_z: int):
         super().__init__()
         self.ch_in: int = ch_in
@@ -123,25 +125,107 @@ class EncoderConv(nn.Module):
         dependent_dim = list(x.shape[-3:])  # this includes: ch, width, height
         # assert dependent_dim == [self.ch_raw_image, self.width, self.width]
         x1 = x.view([-1] + dependent_dim)  # flatten the independent dimensions
-        x2 = self.conv(x1).view(-1, 64*7*7)  # flatten the dependent dimension
+        x2 = self.conv(x1).view(-1, 64 * 7 * 7)  # flatten the dependent dimension
         mu = self.compute_mu(x2).view(independent_dim + [self.dim_z])
         std = F.softplus(self.compute_std(x2)).view(independent_dim + [self.dim_z])
         return ZZ(mu=mu, std=std + EPS_STD)
 
-#
-# class MLP_to_ZZ(nn.Module):
-#     def __init__(self, in_features: int, dim_z: int):
-#         super().__init__()
-#         self.ch_in: int = in_features
-#         self.dim_z: int = dim_z
-#         self.ch_hidden = (self.ch_in + self.dim_z) // 2
-#         self.predict = nn.Sequential(
-#             nn.Linear(in_features=self.ch_in, out_features=self.ch_hidden, bias=True),
-#             nn.ReLU(),
-#             nn.Linear(in_features=self.ch_hidden, out_features=2 * self.dim_z, bias=True)
-#         )
-#
-#     def forward(self, x: torch.Tensor) -> ZZ:
-#         mu, std = torch.split(self.predict(x), self.dim_z, dim=-1)
-#         # Apply non-linearity and return
-#         return ZZ(mu=mu, std=F.softplus(std) + EPS_STD)
+
+class DecoderConvLeaky(nn.Module):
+    """ Decode z -> x
+        INPUT:  z of shape: ..., dim_z
+        OUTPUT: image of shape: ..., ch_out, width, height
+        where ... are all the independent dimensions, i.e. box, batch_size, enumeration_dim etc.
+    """
+    def __init__(self, size: int, dim_z: int, ch_out: int):
+        super().__init__()
+        self.width = size
+        self.dim_z: int = dim_z
+        self.ch_out: int = ch_out
+        assert self.width == 64
+
+        # Preparation
+        modules = []
+        hidden_dims = [32, 64, 128, 256, 512]
+
+        self.decoder_input = nn.Linear(dim_z, hidden_dims[-1] * 4)
+
+        hidden_dims.reverse()
+
+        for i in range(len(hidden_dims) - 1):
+            modules.append(
+                nn.Sequential(
+                    nn.ConvTranspose2d(hidden_dims[i],
+                                       hidden_dims[i + 1],
+                                       kernel_size=3,
+                                       stride = 2,
+                                       padding=1,
+                                       output_padding=1),
+                    nn.BatchNorm2d(hidden_dims[i + 1]),
+                    nn.LeakyReLU())
+            )
+        self.decoder = nn.Sequential(*modules)
+        self.final_layer = nn.Sequential(
+                            nn.ConvTranspose2d(hidden_dims[-1],
+                                               hidden_dims[-1],
+                                               kernel_size=3,
+                                               stride=2,
+                                               padding=1,
+                                               output_padding=1),
+                            nn.BatchNorm2d(hidden_dims[-1]),
+                            nn.LeakyReLU(),
+                            nn.Conv2d(hidden_dims[-1], out_channels=ch_out, kernel_size=3, padding=1))
+
+    def forward(self, z: torch.Tensor) -> torch.Tensor:
+        independent_dim = list(z.shape[:-1])
+        x1 = self.decoder_input(z.view(-1, self.dim_z)).view(-1, 512, 2, 2)
+        x2 = self.decoder(x1)
+        return self.final_layer(x2).view(independent_dim + [self.ch_out, self.width, self.width])
+
+
+class EncoderConvLeaky(nn.Module):
+    """ Encode x -> z_mu, z_std
+        INPUT  x of shape: ..., ch_raw_image, width, height
+        OUTPUT z_mu, z_std of shape: ..., latent_dim
+        where ... are all the independent dimensions, i.e. box, batch_size, enumeration_dim etc.
+    """
+
+    def __init__(self, size: int, ch_in: int, dim_z: int):
+        super().__init__()
+        self.ch_in: int = ch_in
+        self.width: int = size
+        self.dim_z = dim_z
+        assert self.width == 64
+
+        # Preparation
+        modules = []
+        hidden_dims = [32, 64, 128, 256, 512]
+        in_channels = self.ch_in
+
+        # Build Encoder
+        for h_dim in hidden_dims:
+            modules.append(
+                nn.Sequential(
+                    nn.Conv2d(in_channels, out_channels=h_dim, kernel_size=3, stride=2, padding=1),
+                    nn.BatchNorm2d(h_dim),
+                    nn.LeakyReLU())
+            )
+            in_channels = h_dim
+
+        self.conv = nn.Sequential(*modules)
+        x = torch.zeros(1, self.ch_in, self.width, self.width)
+        ch_flatten = self.conv.flatten(start_dim=1).shape[-1]
+        self.compute_mu = nn.Linear(ch_flatten, self.dim_z)
+        self.compute_std = nn.Linear(ch_flatten, self.dim_z)
+
+    def forward(self, x: torch.Tensor) -> ZZ:  # this is right
+
+        independent_dim = list(x.shape[:-3])  # this might includes: enumeration, n_boxes, batch_size
+        dependent_dim = list(x.shape[-3:])  # this includes: ch, width, height
+        # assert dependent_dim == [self.ch_raw_image, self.width, self.width]
+        x1 = x.view([-1] + dependent_dim)  # flatten the independent dimensions
+        x2 = self.conv(x1).flatten(start_dim=1)  # flatten the dependent dimension
+        mu = self.compute_mu(x2).view(independent_dim + [self.dim_z])
+        std = F.softplus(self.compute_std(x2)).view(independent_dim + [self.dim_z])
+        return ZZ(mu=mu, std=std + EPS_STD)
+

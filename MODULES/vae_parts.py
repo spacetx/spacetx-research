@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from .cropper_uncropper import Uncropper, Cropper
 from .non_max_suppression import NonMaxSuppression
 from .unet_model import UNet
-from .encoders_decoders import EncoderConv, DecoderConv, Decoder1by1Linear
+from .encoders_decoders import EncoderConv, DecoderConv, Decoder1by1Linear, EncoderConvLeaky, DecoderConvLeaky
 from .utilities import compute_average_intensity_in_box, compute_ranking
 from .utilities import sample_and_kl_diagonal_normal, sample_and_kl_multivariate_normal
 from .utilities import downsample_and_upsample
@@ -124,10 +124,6 @@ class Inference_and_Generation(torch.nn.Module):
         # modules
         self.unet: UNet = UNet(params)
 
-        # encoder z_mask (takes the unet_features)
-        self.encoder_zinstance: EncoderConv = EncoderConv(size=params["architecture"]["cropped_size"],
-                                                          ch_in=params["architecture"]["n_ch_output_features"],
-                                                          dim_z=params["architecture"]["dim_zinstance"])
 
         # Decoders
         self.decoder_zwhere: Decoder1by1Linear = Decoder1by1Linear(dim_z=params["architecture"]["dim_zwhere"],
@@ -138,9 +134,25 @@ class Inference_and_Generation(torch.nn.Module):
                                                                   ch_out=1,
                                                                   groups=1)
 
-        self.decoder_zinstance: DecoderConv = DecoderConv(size=params["architecture"]["cropped_size"],
-                                                          dim_z=params["architecture"]["dim_zinstance"],
-                                                          ch_out=params["input_image"]["ch_in"]+1)
+        leaky = True
+        if leaky:
+            self.decoder_zinstance: DecoderConvLeaky = DecoderConvLeaky(size=params["architecture"]["cropped_size"],
+                                                                        dim_z=params["architecture"]["dim_zinstance"],
+                                                                        ch_out=params["input_image"]["ch_in"] + 1)
+
+            # encoder z_mask (takes the unet_features)
+            self.encoder_zinstance: EncoderConvLeaky = EncoderConvLeaky(size=params["architecture"]["cropped_size"],
+                                                                        ch_in=params["architecture"]["n_ch_output_features"],
+                                                                        dim_z=params["architecture"]["dim_zinstance"])
+        else:
+            self.decoder_zinstance: DecoderConv = DecoderConv(size=params["architecture"]["cropped_size"],
+                                                              dim_z=params["architecture"]["dim_zinstance"],
+                                                              ch_out=params["input_image"]["ch_in"] + 1)
+
+            # encoder z_mask (takes the unet_features)
+            self.encoder_zinstance: EncoderConv = EncoderConv(size=params["architecture"]["cropped_size"],
+                                                              ch_in=params["architecture"]["n_ch_output_features"],
+                                                              dim_z=params["architecture"]["dim_zinstance"])
 
     def forward(self, imgs_in: torch.Tensor,
                 generate_synthetic_data: bool,

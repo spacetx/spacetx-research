@@ -27,7 +27,7 @@
    "dim_zinstance" : 20,
    "dim_zwhere" : 4,
    "dim_logit" : 1,
-   "cropped_size" : 28,
+   "cropped_size" : 64,
    "n_max_pool" : 4,
    "level_zwhere_and_logit_output" : 2,
    "level_background_output" : 4,
@@ -91,13 +91,26 @@
  },
 
  "soft_constraint" : {
-   "__comment": "all the parameters about the soft constraints",
 
-   "overlap": {
-     "__comment": "cost which discourages masks from overlapping",
-     "strength": 1E-2,
-     "exponent": 1
-   }
+  "__comment": "all the parameters about the soft constraints",
+
+  "overlap": {
+    "__comment": "cost which discourages masks from overlapping",
+    "strength": 1E-2,
+    "exponent": 1
+  },
+
+  "mask_volume_absolute" : {
+   "__comment" : "cost which discourage masks which are too large or too small",
+   "lower_bound_value": 40,
+   "lower_bound_width": 5,
+   "lower_bound_strength": 0,
+   "lower_bound_exponent": 2,
+   "upper_bound_value": 300,
+   "upper_bound_width": 5,
+   "upper_bound_strength": 0,
+   "upper_bound_exponent": 2
+  }
  }
 }
 

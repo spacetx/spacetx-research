@@ -255,7 +255,7 @@ class CompositionalVae(torch.nn.Module):
         # 4. compute the KL for each image
         # TODO: NORMALIZE EVERYTHING BY THEIR RUNNING AVERAGE?
         kl_zinstance_av = torch.mean(inference.kl_zinstance_each_obj)  # mean over: boxes, batch_size, latent_zwhat
-        kl_zwhere_av = torch.mean(inference.kl_zwhere_map)  # imean over: batch_size, ch=4, w, h
+        kl_zwhere_av = torch.mean(inference.kl_zwhere_map)  # mean over: batch_size, ch=4, w, h
         kl_logit_tot = torch.sum(inference.kl_logit_map)  # will be normalized by its moving average
         
         
