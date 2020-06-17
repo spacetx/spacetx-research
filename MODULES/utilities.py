@@ -76,8 +76,8 @@ def sample_and_kl_diagonal_normal(posterior_mu: torch.Tensor,
                                   posterior_std: torch.Tensor,
                                   prior_mu: torch.Tensor,
                                   prior_std: torch.Tensor,
-                                  noisy_sampling: bool = True,
-                                  sample_from_prior: bool = False) -> DIST:
+                                  noisy_sampling: bool,
+                                  sample_from_prior: bool) -> DIST:
 
     post_mu, post_std, pr_mu, pr_std = broadcast_all(posterior_mu, posterior_std, prior_mu, prior_std)
     if sample_from_prior:
@@ -111,8 +111,8 @@ def sample_and_kl_multivariate_normal(posterior_mu: torch.Tensor,
                                       posterior_L_cov: torch.Tensor,
                                       prior_mu: torch.Tensor,
                                       prior_L_cov: torch.Tensor,
-                                      noisy_sampling: bool = True,
-                                      sample_from_prior: bool = False) -> DIST:
+                                      noisy_sampling: bool,
+                                      sample_from_prior: bool) -> DIST:
 
     post_L, prior_L = broadcast_all(posterior_L_cov, prior_L_cov)  # (*, n, n)
     post_mu, prior_mu = broadcast_all(posterior_mu, prior_mu)  # (*, n)

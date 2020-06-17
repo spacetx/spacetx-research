@@ -194,6 +194,9 @@ class Inference_and_Generation(torch.nn.Module):
 
         tx_map, ty_map, tw_map, th_map = torch.split(torch.sigmoid(self.decoder_zwhere(zwhere_map.sample)), 1, dim=-3)
 
+        # TODO make this a function and its inverse
+        #  tbb_2_bb(tx,ty,tw,th,raw_img_size,min_box_size,max_box_size) -> bx_map,by_map,bw_map,bh_map
+        #  bb_2_tbb(bx,by,bw,bh,raw_img_size,min_box_size,max_box_size) -> tx_map,ty_map,tw_map,th_map
         with torch.no_grad():
             n_width, n_height = tx_map.shape[-2:]
             ix_array = torch.arange(start=0, end=n_width, dtype=tx_map.dtype, device=tx_map.device)

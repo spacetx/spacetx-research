@@ -109,6 +109,9 @@ class NonMaxSuppression(object):
         binarized_overlap = (overlap_measure > overlap_threshold).float()
         assert binarized_overlap.shape == (n_boxes, n_boxes, batch_size)
 
+        # TODO add dropout of probability before NMS
+        assert 1==2
+
         if topk_only:
             # If nms_mask = 1 then this is equivalent to do topk only
             chosen_nms_mask = torch.ones_like(prob)
