@@ -93,15 +93,16 @@ def sample_and_kl_diagonal_normal(posterior_mu: torch.Tensor,
     return DIST(sample=sample, kl=kl)
 
 def _batch_mv(bmat, bvec):
-    r"""
-    Performs a batched matrix-vector product, with compatible but different batch shapes.
+    """ bmat shape (*, n, n)
+        bvec shape (*, n)
+        result = MatrixVectorMultiplication(bmat,bvec) of shape (*, n)
 
-    This function takes as input `bmat`, containing :math:`n \times n` matrices, and
-    `bvec`, containing length :math:`n` vectors.
+        * represents all the batched dimensions which might or might not be presents
 
-    Both `bmat` and `bvec` may have any number of leading dimensions, which correspond
-    to a batch shape. They are not necessarily assumed to have the same batch shape,
-    just ones which can be broadcasted.
+        Very simple procedure
+        b = bvec.unsqueeze(-1) -> (*, n, 1)
+        c = torch.matmul(bmat, b) = (*, n, n) x (*, n , 1) -> (*, n, 1)
+        result = c.squeeze(-1) -> (*, n)
     """
     return torch.matmul(bmat, bvec.unsqueeze(-1)).squeeze(-1)
 

@@ -49,9 +49,7 @@
 
  "nms" : {
    "__comment" : "parameters for the non-max-suppression",
-   "score_threshold" : -1,
    "overlap_threshold" : 0.3,
-   "randomize_nms_factor" :  0.0
  },
 
  "loss" : {
