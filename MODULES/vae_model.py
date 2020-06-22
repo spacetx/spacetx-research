@@ -237,10 +237,11 @@ class CompositionalVae(torch.nn.Module):
         # Medium solution: sparsity = \sum_{i,j} (p * area_box) + \sum_k (p_chosen * area_mask_chosen)
         #                        = fg_fraction_box + fg_fraction_box
         #                        -> lead to many small object b/c there is no cost
+        # New solution = add term sum p so that many objects are penalized
         # TODO: NORMALIZE EVERYTHING BY THEIR RUNNING AVERAGE?
         fg_fraction_av = torch.sum(mixing_fg) / torch.numel(mixing_fg)  # equivalent to torch.mean
         fg_fraction_box = torch.sum(p_times_area_map) / torch.numel(mixing_fg)  # division by the same as above
-        prob_total1 = torch.sum(inference.p_map)/((1.0-dropout_prob)*batch_size)  # will be normalized by moving average 
+        prob_total = torch.sum(inference.p_map)/((1.0-dropout_prob)*batch_size)  # will be normalized by moving average
 
         # 4. compute the KL for each image
         # TODO: NORMALIZE EVERYTHING BY THEIR RUNNING AVERAGE?
@@ -253,7 +254,7 @@ class CompositionalVae(torch.nn.Module):
 
             # Compute the moving averages to normalize kl_logit
             input_dict = {"kl_logit_tot": kl_logit_tot.item(),
-                          "prob_total1": prob_total1.item()}
+                          "prob_total": prob_total.item()}
             
             # Only if in training mode I accumulate the moving average
             if self.training:
@@ -263,7 +264,7 @@ class CompositionalVae(torch.nn.Module):
 
         # 6. Loss_VAE
         kl_av = kl_zinstance_av + kl_zwhere_av + kl_logit_tot / (1E-3 + ma_dict["kl_logit_tot"])
-        sparsity_av = fg_fraction_box + fg_fraction_av + prob_total1 / (1E-3 + ma_dict["prob_total1"])
+        sparsity_av = fg_fraction_box + fg_fraction_av + prob_total / (1E-3 + ma_dict["prob_total1"])
         assert nll_av.shape == reg_av.shape == kl_av.shape == sparsity_av.shape
         # print(nll_av, reg_av, kl_av, sparsity_av)
 
