@@ -238,6 +238,8 @@ class CompositionalVae(torch.nn.Module):
         #                        = fg_fraction_box + fg_fraction_box
         fg_fraction_av = torch.sum(mixing_fg) / torch.numel(mixing_fg)  # equivalent to torch.mean
         fg_fraction_box = torch.sum(p_times_area_map) / torch.numel(mixing_fg)  # division by the same as above
+        prob_total1 = torch.sum(inference.p_map)/(1.0-dropout_prob)  # will be normalized by moving average 
+        
         sparsity_av = fg_fraction_box + fg_fraction_av
         # print("fg_fraction_av vs fg_fraction_box", fg_fraction_av, fg_fraction_box)
 
@@ -251,7 +253,9 @@ class CompositionalVae(torch.nn.Module):
         with torch.no_grad():
 
             # Compute the moving averages to normalize kl_logit
-            input_dict = {"kl_logit_tot": kl_logit_tot.item()}
+            input_dict = {"kl_logit_tot": kl_logit_tot.item(),
+                          "prob_total1": prob_total1.item()}
+            
             # Only if in training mode I accumulate the moving average
             if self.training:
                 ma_dict = self.ma_calculator.accumulate(input_dict)
@@ -259,7 +263,8 @@ class CompositionalVae(torch.nn.Module):
                 ma_dict = input_dict
 
         # 6. Loss_VAE
-        kl_av = kl_zinstance_av + kl_zwhere_av + kl_logit_tot / ma_dict["kl_logit_tot"]
+        kl_av = kl_zinstance_av + kl_zwhere_av + kl_logit_tot / (1E-3 + ma_dict["kl_logit_tot"])
+        sparsity_av = fg_fraction_box + fg_fraction_av + prob_total1 / (1E-3 + ma_dict["prob_total1"])
         assert nll_av.shape == reg_av.shape == kl_av.shape == sparsity_av.shape
         # print(nll_av, reg_av, kl_av, sparsity_av)
 
@@ -271,13 +276,6 @@ class CompositionalVae(torch.nn.Module):
                                                                max=max(self.geco_dict["factor_sparsity_range"]))
         loss_vae = f_sparsity * sparsity_av + \
                    f_balance * (nll_av + reg_av) + (1.0 - f_balance) * kl_av
-
-
-
-
-
-
-
 
 
 ##########        # 3. Sparsity should encourage:
@@ -454,7 +452,7 @@ class CompositionalVae(torch.nn.Module):
             pad_h = crop_size[1] - stride[1]
             img_padded = F.pad(img.unsqueeze(0), pad=[pad_w, pad_w, pad_h, pad_h], mode='reflect')
             w_paddded, h_padded = img_padded.shape[-2:]
-            segmentation = torch.zeros((ch, w_paddded, h_padded))
+            segmentation = torch.zeros((ch, w_paddded, h_padded), device=img.device, dtype=torch.long)
 
             # print("iw_start -->", iw_start)
             # print("ih_start -->", ih_start)
@@ -473,22 +471,23 @@ class CompositionalVae(torch.nn.Module):
                             crops.append(img_padded[..., i:(i + crop_size[0]), j:(j + crop_size[1])])
                             location_of_corner.append([i, j])
                     batch_of_imgs = torch.cat([img for img in crops], dim=0)
-                    # print("batch_of_imgs.shape -->", batch_of_imgs.shape)
+                    print("batch_of_imgs.shape -->", batch_of_imgs.shape)
 
                     # Segmentation
                     integer_mask = self.segment(batch_of_imgs,
                                                 n_objects_max=n_objects_max_per_patch,
                                                 prob_corr_factor=prob_corr_factor,
                                                 overlap_threshold=overlap_threshold,
-                                                draw_boxes=False)
+                                                draw_boxes=False).long()
 
                     # Shift the index of the integer_masks
                     max_integer = torch.max(integer_mask.flatten(start_dim=1), dim=-1)[0]
                     assert max_integer.shape[0] == batch_of_imgs.shape[0]
                     integer_shift = torch.cumsum(max_integer, dim=0) - max_integer
-                    integer_mask_shifted = torch.where(integer_mask > 0,
-                                                       integer_mask + integer_shift.view(-1, 1, 1, 1),
-                                                       torch.zeros_like(integer_mask))
+                    # print("max_integer ---->", max_integer)
+                    # print("integer_shift -->", integer_shift)
+                    integer_mask_shifted = (integer_mask + integer_shift.view(-1,1,1,1)) * (integer_mask>0).long()
+                    
                     # print("integer_mask_shifted.shape -->", integer_mask_shifted.shape)
 
                     # Make a single large image with the results
@@ -496,9 +495,9 @@ class CompositionalVae(torch.nn.Module):
                         # print("ch, n, locs -->", ch, n, locs)
                         segmentation[ch,
                                      locs[0]:(locs[0] + crop_size[0]),
-                                     locs[1]:(locs[1] + crop_size[1])] = integer_mask_shifted[n, 0, :, :]
+                                     locs[1]:(locs[1] + crop_size[1])] = integer_mask_shifted[n, 0, :, :] #integer_mask[n, 0, :, :] 
 
-        return segmentation[:, pad_w:pad_w + w_img, pad_h:pad_w + h_img]
+        return segmentation[:, pad_w:pad_w + w_img, pad_h:pad_w + h_img], integer_mask
 
     # this is the generic function which has all the options unspecified
     def process_batch_imgs(self,

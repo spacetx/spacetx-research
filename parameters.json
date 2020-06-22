@@ -4,7 +4,7 @@
 
  "wdl.file_train" : "gs://ld-data-bucket/Allen_smFISH/smFISH_stitched_OLEH.tif",
  "wdl.file_test" : "gs://ld-results-bucket/ckpt/dummy_1.pkl",
- "wdl.file_ckpt" : "gs://ld-results-bucket/ckpt/restart_ckp_1800.pkl",
+ "wdl.file_ckpt" : "gs://ld-results-bucket/ckpt/dummy_2.pkl",
  "wdl.bucket_output" : "gs://ld-results-bucket",
  "wdl.dir_output" : "merfish_june21_v2",
 
@@ -14,7 +14,7 @@
 
  "simulation" : {
    "__comment" : "there are 3 types of runs: scratch, resume, pretrained",
-   "type" : "resume",
+   "type" : "scratch",
    "MAX_EPOCHS" : 50000,
    "TEST_FREQUENCY" : 100,
    "CHECKPOINT_FREQUENCY" : 100,
