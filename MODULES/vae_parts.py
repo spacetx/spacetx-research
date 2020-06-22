@@ -6,7 +6,7 @@ from .unet_model import UNet
 from .encoders_decoders import EncoderConv, DecoderConv, Decoder1by1Linear, EncoderConvLeaky, DecoderConvLeaky
 from .utilities import compute_average_intensity_in_box, compute_ranking
 from .utilities import sample_and_kl_diagonal_normal, sample_and_kl_multivariate_normal
-from .utilities import downsample_and_upsample
+from .utilities import downsample_and_upsample, weighted_sampling_without_replacement
 from .namedtuple import Inference, BB, NMSoutput, UNEToutput, ZZ, DIST
 
 
@@ -160,6 +160,7 @@ class Inference_and_Generation(torch.nn.Module):
                 prob_corr_factor: float,
                 overlap_threshold: float,
                 n_objects_max: int,
+                dropout_prob: float,
                 topk_only: bool,
                 noisy_sampling: bool,
                 bg_is_zero: bool,
@@ -241,9 +242,38 @@ class Inference_and_Generation(torch.nn.Module):
 
         p_map = torch.sigmoid(self.decoder_logit(logit_map.sample.view_as(unet_output.logit.mu)))
 
-        # Add probability correction if necessary
-        if (prob_corr_factor > 0) and (prob_corr_factor <= 1.0) and not generate_synthetic_data:
-            with torch.no_grad():
+        # Correct the probability
+        with torch.no_grad():
+
+            # 1. dropout if necessary
+            if (dropout_prob > 0) and (dropout_prob < 1.0):
+                weights = torch.rand_like(p_map).flatten(start_dim=1)
+                batch_size, n_element = weights.shape
+                n_to_drop = int(dropout_prob * n_element)
+
+                if n_to_drop < 0.5 * n_element:
+                    index_to_drop = torch.topk(weights, n_to_drop, dim=-1, largest=True, sorted=True)[1]
+                    batch_index = torch.arange(batch_size,
+                                               dtype=index_to_drop.dtype,
+                                               device=index_to_drop.device).view(-1, 1)
+                    mask_dropout = torch.ones_like(weights)
+                    mask_dropout[batch_index, index_to_drop] = 0.0
+                else:
+                    n_to_keep = n_element - n_to_drop
+                    index_to_keep = torch.topk(weights, n_to_keep, dim=-1, largest=True, sorted=True)[1]
+                    batch_index = torch.arange(batch_size,
+                                               dtype=index_to_keep.dtype,
+                                               device=index_to_keep.device).view(-1, 1)
+                    mask_dropout = torch.zeros_like(weights)
+                    mask_dropout[batch_index, index_to_keep] = 1.0
+                mask_dropout = mask_dropout.view_as(p_map)
+            else:
+                mask_dropout = torch.ones_like(p_map)
+
+            # 2. correction if necessary
+            if (prob_corr_factor > 0) and (prob_corr_factor <= 1.0) and not generate_synthetic_data:
+
+                # probability correction if necessary
                 av_intensity: torch.Tensor = compute_average_intensity_in_box(torch.abs(imgs_in - big_bg),
                                                                               bounding_box_all)
                 assert len(av_intensity.shape) == 2
@@ -254,11 +284,11 @@ class Inference_and_Generation(torch.nn.Module):
                                                                  original_width=p_map.shape[-2],
                                                                  original_height=p_map.shape[-1])
                 p_approx: torch.Tensor = tmp_2.pow(10)
-            # weighted average of the prob by the inference network and prob by correction
-            p_map_cor: torch.Tensor = (1 - prob_corr_factor) * p_map + prob_corr_factor * p_approx
-        else:
-            p_map_cor: torch.Tensor = p_map
+            else:
+                prob_corr_factor = 0
+                p_approx: torch.Tensor = torch.zeros_like(p_map)
 
+        p_map_cor: torch.Tensor = mask_dropout * ((1 - prob_corr_factor) * p_map + prob_corr_factor * p_approx)
         prob_all: torch.Tensor = convert_to_box_list(p_map_cor).squeeze(-1)
         assert bounding_box_all.bx.shape == prob_all.shape  # n_box_all, batch_size
 

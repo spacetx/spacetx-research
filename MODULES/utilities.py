@@ -48,6 +48,18 @@ def reset_parameters(parent_module, verbose):
             pass
 
 
+def weighted_sampling_without_replacement(weights, n, dim):
+    """ Use the algorithm in:
+        https://github.com/LeviViana/torch_sampling/blob/master/Proof%20Weighted%20Sampling.pdf
+
+        Given the weights, it perform random sampling of n elements without replacement along the dimension dim
+    """
+    x = torch.rand_like(weights)
+    keys = x.pow(1.0/weights)
+    value, index = torch.topk(keys, n, dim=dim, largest=True, sorted=True)
+    return index
+
+
 def are_boradcastable(a: torch.Tensor, b: torch.Tensor) -> bool:
     """ Return True if tensor are broadcastable to each other, False otherwise """
     return all((m == n) or (m == 1) or (n == 1) for m, n in zip(a.shape[::-1], b.shape[::-1]))
@@ -495,6 +507,25 @@ def compute_average_intensity_in_box(imgs: torch.Tensor, bounding_box: BB) -> to
     # return the average intensity
     assert tot_intensity.shape == x1.shape
     return tot_intensity / area
+
+
+def draw_img(prob: torch.tensor,
+             bounding_box: BB,
+             big_mask: torch.tensor,
+             big_img: torch.tensor,
+             draw_boxes: bool) -> torch.tensor:
+
+    assert len(prob.shape) == 2  # boxes, batch
+    assert len(big_mask.shape) == len(big_img.shape) == 5  # boxes, batch, ch, w, h
+
+    rec_imgs_no_bb = torch.sum(prob[..., None, None, None] * big_mask * big_img, dim=-5)  # sum over boxes
+    width, height = rec_imgs_no_bb.shape[-2:]
+
+    bounding_boxes = draw_bounding_boxes(prob=prob,
+                                         bounding_box=bounding_box,
+                                         width=width,
+                                         height=height) if draw_boxes else torch.zeros_like(rec_imgs_no_bb)
+    return bounding_boxes + rec_imgs_no_bb
 
 
 def draw_bounding_boxes(prob: Optional[torch.Tensor], bounding_box: BB, width: int, height: int) -> torch.Tensor:

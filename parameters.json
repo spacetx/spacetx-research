@@ -7,7 +7,7 @@
  "wdl.file_ckpt" : "gs://ld-results-bucket/ckpt/dummy_2.pkl", 
  
  "wdl.bucket_output" : "gs://ld-results-bucket",
- "wdl.dir_output" : "merfish_june16_v1",
+ "wdl.dir_output" : "merfish_june18_v1",
 
  "wdl.notebook_name": "MAIN.ipynb",
  "wdl.git_repo": "https://github.com/spacetx/spacetx-research.git",
@@ -50,6 +50,7 @@
  "nms" : {
    "__comment" : "parameters for the non-max-suppression",
    "overlap_threshold" : 0.3,
+   "dropout_prob" : 0.90
  },
 
  "loss" : {

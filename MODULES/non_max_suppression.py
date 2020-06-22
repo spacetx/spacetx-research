@@ -1,6 +1,6 @@
 import torch
 from .namedtuple import BB, NMSoutput
-
+from .utilities import weighted_sampling_without_replacement
 
 class NonMaxSuppression(object):
     """ Use Intersection_over_Union criteria to put most of the entries to zero while leaving few detection unchanged.
@@ -42,7 +42,7 @@ class NonMaxSuppression(object):
         score: torch.Tensor = score.unsqueeze(0)                                                     # 1 x n_box x batch
         possible: torch.Tensor = possible.unsqueeze(0)                                               # 1 x n_box x batch
         idx: torch.Tensor = torch.arange(start=0, end=n_boxes, step=1,
-                           device=score.device).view(n_boxes, 1, 1).long()             # n_box x 1 x 1
+                            device=score.device).view(n_boxes, 1, 1).long()             # n_box x 1 x 1
         selected: torch.Tensor = torch.zeros((n_boxes, 1, batch_size), device=score.device).float()  # n_box x 1 x batch
 
         # Loop
@@ -108,9 +108,6 @@ class NonMaxSuppression(object):
         overlap_measure = NonMaxSuppression.compute_box_intersection_over_min_area(bounding_box=bounding_box)
         binarized_overlap = (overlap_measure > overlap_threshold).float()
         assert binarized_overlap.shape == (n_boxes, n_boxes, batch_size)
-
-        # TODO add dropout of probability before NMS
-        assert 1==2
 
         if topk_only:
             # If nms_mask = 1 then this is equivalent to do topk only

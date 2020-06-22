@@ -159,17 +159,6 @@ class CompositionalVae(torch.nn.Module):
             self.sigma_fg = self.sigma_fg.cuda()
             self.sigma_bg = self.sigma_bg.cuda()
 
-    def draw_img(self, inference: Inference, draw_bounding_box: bool = False) -> torch.tensor:
-
-        rec_imgs_no_bb = torch.sum(inference.prob[..., None, None, None] *
-                                   inference.big_mask * inference.big_img, dim=-5)  # sum over boxes
-        width, height = rec_imgs_no_bb.shape[-2:]
-        
-        bounding_boxes = draw_bounding_boxes(prob=inference.prob,
-                                             bounding_box=inference.bounding_box,
-                                             width=width,
-                                             height=height) if draw_bounding_box else torch.zeros_like(rec_imgs_no_bb)
-        return bounding_boxes + rec_imgs_no_bb
 
     def compute_regularizations(self,
                                 inference: Inference,
@@ -215,9 +204,11 @@ class CompositionalVae(torch.nn.Module):
     def compute_metrics(self,
                         imgs_in: torch.Tensor,
                         inference: Inference,
-                        reg: RegMiniBatch) -> MetricMiniBatch:
+                        reg: RegMiniBatch,
+                        dropout_prob: float) -> MetricMiniBatch:
 
         # Preparation
+        batch_size, ch, w, h = imgs_in.shape
         n_obj_counts = (inference.prob > 0.5).float().sum(-2).detach()  # sum over boxes dimension
         p_times_area_map = inference.p_map * inference.area_map
         mixing_k = inference.big_mask * inference.prob[..., None, None, None]
@@ -225,40 +216,42 @@ class CompositionalVae(torch.nn.Module):
         mixing_bg = 1.0 - mixing_fg
         assert len(mixing_fg.shape) == 4  # batch, ch=1, w, h
 
-        # 1. Regularizations
+        # 1. Observation model
+        # if the observation_std is fixed then normalization 1.0/sqrt(2*pi*sigma^2) is irrelevant.
+        # We are better off using MeanSquareError metric
+        nll_k = self.NLL_MSE(output=inference.big_img, target=imgs_in, sigma=self.sigma_fg)
+        nll_bg = self.NLL_MSE(output=inference.big_bg, target=imgs_in, sigma=self.sigma_bg)  # batch_size, ch, w, h
+        nll_av = (torch.sum(mixing_k * nll_k, dim=-5) + mixing_bg * nll_bg).mean()  # mean over batch_size, ch, w, h
+
+        # 2. Regularizations
         reg_av: torch.Tensor = torch.zeros(1, device=imgs_in.device, dtype=imgs_in.dtype)  # shape: 1
         for f in reg._fields:
             reg_av += getattr(reg, f)
         reg_av = reg_av.mean()  # shape []
 
-        # 2. Sparsity should encourage:
-        # 1. small probabilities
-        # 2. tight bounding boxes
-        # 3. tight masks
+        # 3. Sparsity should encourage:
+        # a. small probabilities
+        # b. tight bounding boxes
+        # c. tight masks
         # Old solution: sparsity = p * area_box -> leads to square masks b/c they have no cost and lead to lower kl_mask
+        # Medium solution: sparsity = \sum_{i,j} (p * area_box) + \sum_k (p_chosen * area_mask_chosen)
+        #                           = fg_fraction_box + fg_fraction_box
+        #                           -> lead to many small objects b/c there is no cost
         # New solution: sparsity = \sum_{i,j} (p * area_box) + \sum_k (p_chosen * area_mask_chosen)
-        #                        = fg_fraction_box + fg_fraction_box -> lead to many small object b/c there is no cost
-        # Newer solution: sparsity = \sum_{i,j} (p * area_box) + \sum_k (p_chosen * area_mask_chosen)
         #                          = fg_fraction_box + fg_fraction_box +  SUM_PROB / K ....
-        fg_mask = torch.sum(mixing_fg)
-        fg_box1 = torch.sum(inference.prob * inference.bounding_box.bw * inference.bounding_box.bh)
-        fg_box2 = torch.sum(inference.p_map * inference.area_map)
-        prob_total1 = torch.sum(inference.p_map)
-        prob_total2 = torch.sum(inference.prob)
+        fg_mask = torch.sum(mixing_fg)/batch_size
+        fg_box1 = torch.sum(inference.prob * inference.bounding_box.bw * inference.bounding_box.bh)/batch_size
+        #fg_box2 = torch.sum(inference.p_map * inference.area_map)/((1.0-dropout_prob)*batch_size)
+        fg_box2 = torch.zeros_like(fg_box1)/batch_size
+        prob_total1 = torch.sum(inference.p_map)/((1.0-dropout_prob)*batch_size)
+        #prob_total2 = torch.sum(inference.prob)/batch_size
+        prob_total2 = torch.zeros_like(prob_total1)
 
-        # 3. Observation model
-        # if the observation_std is fixed then normalization 1.0/sqrt(2*pi*sigma^2) is irrelevant.
-        # We are better off using MeanSquareError metric
-        # Note that nll_off_bg is detached when appears with the minus sign. 
-        # This is b/c we want the best possible background on top of which to add FOREGROUD objects
-        nll_k = self.NLL_MSE(output=inference.big_img, target=imgs_in, sigma=self.sigma_fg)
-        nll_bg = self.NLL_MSE(output=inference.big_bg, target=imgs_in, sigma=self.sigma_bg)  # batch_size, ch, w, h
-        nll_av = (torch.sum(mixing_k * nll_k, dim=-5) + mixing_bg * nll_bg).mean()
 
         # 4. compute the KL for each image
-        kl_zinstance_tot = torch.sum(inference.kl_zinstance_each_obj)  # will be normalized by its moving average
-        kl_zwhere_tot = torch.sum(inference.kl_zwhere_map)  # will be normalized by its moving average
-        kl_logit_tot = torch.sum(inference.kl_logit_map)  # will be normalized by its moving average
+        kl_zinstance_tot = torch.sum(inference.kl_zinstance_each_obj)/batch_size  # will be normalized by its moving average
+        kl_zwhere_tot = torch.sum(inference.kl_zwhere_map)/batch_size  # will be normalized by its moving average
+        kl_logit_tot = torch.sum(inference.kl_logit_map)/batch_size  # will be normalized by its moving average
 
         # 5. compute the moving averages
         with torch.no_grad():
@@ -270,8 +263,8 @@ class CompositionalVae(torch.nn.Module):
                           "prob_total1": prob_total1.item(),
                           "prob_total2": prob_total2.item(),
                           "kl_logit_tot": kl_logit_tot.item(),
-                          "kl_zwhere_tot": kl_zwhere_tot,
-                          "kl_zinstance_tot": kl_zinstance_tot}
+                          "kl_zwhere_tot": kl_zwhere_tot.item(),
+                          "kl_zinstance_tot": kl_zinstance_tot.item()}
             # Only if in training mode I accumulate the moving average
             if self.training:
                 ma_dict = self.ma_calculator.accumulate(input_dict)
@@ -279,15 +272,15 @@ class CompositionalVae(torch.nn.Module):
                 ma_dict = input_dict
 
         # 6. Loss_VAE
-        kl_av = kl_zinstance_tot/ma_dict["kl_zinstance_tot"] + \
-                kl_zwhere_tot/ma_dict["kl_zwhere_tot"] + \
-                kl_logit_tot/ma_dict["kl_logit_tot"]
+        kl_av = kl_zinstance_tot / (1E-3 + ma_dict["kl_zinstance_tot"]) + \
+                kl_zwhere_tot / (1E-3 + ma_dict["kl_zwhere_tot"]) + \
+                kl_logit_tot / (1E-3 + ma_dict["kl_logit_tot"])
 
-        sparsity_av = fg_mask/ma_dict["fg_mask"] + \
-                      fg_box1 / ma_dict["fg_box1"] + \
-                      fg_box2 / ma_dict["fg_box2"] + \
-                      prob_total1 / ma_dict["prob_total1"] + \
-                      prob_total2 / ma_dict["prob_total2"]
+        sparsity_av = fg_mask / (1E-3 + ma_dict["fg_mask"]) + \
+                      fg_box1 / (1E-3 + ma_dict["fg_box1"]) + \
+                      fg_box2 / (1E-3 + ma_dict["fg_box2"]) + \
+                      prob_total1 / (1E-3 + ma_dict["prob_total1"]) + \
+                      prob_total2 / (1E-3 + ma_dict["prob_total2"])
 
         assert nll_av.shape == reg_av.shape == kl_av.shape == sparsity_av.shape
         # print(nll_av, reg_av, kl_av, sparsity_av)
@@ -351,7 +344,7 @@ class CompositionalVae(torch.nn.Module):
                 n_objects_max=None,
                 prob_corr_factor=None,
                 overlap_threshold=None,
-                draw_bounding_box=False):
+                draw_boxes=False):
 
         n_objects_max = self.input_img_dict["n_objects_max"] if n_objects_max is None else n_objects_max
         prob_corr_factor = getattr(self, "prob_corr_factor", 0.0) if prob_corr_factor is None else prob_corr_factor
@@ -363,6 +356,7 @@ class CompositionalVae(torch.nn.Module):
                                                      prob_corr_factor=prob_corr_factor,
                                                      overlap_threshold=overlap_threshold,
                                                      n_objects_max=n_objects_max,
+                                                     dropout_prob=0.0,
                                                      topk_only=False,
                                                      noisy_sampling=False,
                                                      bg_is_zero=True,
@@ -373,7 +367,7 @@ class CompositionalVae(torch.nn.Module):
             most_likely_instance, index = torch.max(mixing_k, dim=-5, keepdim=True)
             integer_segmentation_mask = ((most_likely_instance > 0.5) * (index + 1)).squeeze(-5)  # bg = 0 fg = 1,2,3,...
 
-            if draw_bounding_box:
+            if draw_boxes:
                 bounding_boxes = draw_bounding_boxes(prob=inference.prob,
                                                      bounding_box=inference.bounding_box,
                                                      width=integer_segmentation_mask.shape[-2],
@@ -403,13 +397,16 @@ class CompositionalVae(torch.nn.Module):
             iw_start = [x for x in range(0, crop_size[0], stride[0])]
             ih_start = [x for x in range(0, crop_size[1], stride[1])]
             ch = len(iw_start) * len(ih_start)
-            print(ch)
+            print("number of output_channels -->", ch)
 
             pad_w = crop_size[0] - stride[0]
             pad_h = crop_size[1] - stride[1]
             img_padded = F.pad(img.unsqueeze(0), pad=[pad_w, pad_w, pad_h, pad_h], mode='reflect')
             w_paddded, h_padded = img_padded.shape[-2:]
             segmentation = torch.zeros((ch, w_paddded, h_padded))
+
+            # print("iw_start -->", iw_start)
+            # print("ih_start -->", ih_start)
 
             ch = -1
             for iw in iw_start:
@@ -425,14 +422,14 @@ class CompositionalVae(torch.nn.Module):
                             crops.append(img_padded[..., i:(i + crop_size[0]), j:(j + crop_size[1])])
                             location_of_corner.append([i, j])
                     batch_of_imgs = torch.cat([img for img in crops], dim=0)
+                    # print("batch_of_imgs.shape -->", batch_of_imgs.shape)
 
                     # Segmentation
-                    # integer_mask = tile(batch_of_imgs)
                     integer_mask = self.segment(batch_of_imgs,
                                                 n_objects_max=n_objects_max_per_patch,
                                                 prob_corr_factor=prob_corr_factor,
                                                 overlap_threshold=overlap_threshold,
-                                                draw_bounding_box=False)
+                                                draw_boxes=False)
 
                     # Shift the index of the integer_masks
                     max_integer = torch.max(integer_mask.flatten(start_dim=1), dim=-1)[0]
@@ -441,12 +438,14 @@ class CompositionalVae(torch.nn.Module):
                     integer_mask_shifted = torch.where(integer_mask > 0,
                                                        integer_mask + integer_shift.view(-1, 1, 1, 1),
                                                        torch.zeros_like(integer_mask))
+                    # print("integer_mask_shifted.shape -->", integer_mask_shifted.shape)
 
                     # Make a single large image with the results
                     for n, locs in enumerate(location_of_corner):
+                        # print("ch, n, locs -->", ch, n, locs)
                         segmentation[ch,
                                      locs[0]:(locs[0] + crop_size[0]),
-                                     locs[1]:(locs[1] + crop_size[1])] = integer_mask_shifted[n, 1, :, :]
+                                     locs[1]:(locs[1] + crop_size[1])] = integer_mask_shifted[n, 0, :, :]
 
         return segmentation[:, pad_w:pad_w + w_img, pad_h:pad_w + h_img]
 
@@ -456,11 +455,12 @@ class CompositionalVae(torch.nn.Module):
                            generate_synthetic_data: bool,
                            topk_only: bool,
                            draw_image: bool,
-                           draw_bounding_box: bool,
+                           draw_boxes: bool,
                            verbose: bool,
                            noisy_sampling: bool,
                            prob_corr_factor: float,
                            overlap_threshold: float,
+                           dropout_prob: float,
                            n_objects_max: int,
                            bg_is_zero: bool,
                            bg_resolution: tuple):
@@ -476,6 +476,7 @@ class CompositionalVae(torch.nn.Module):
                                                prob_corr_factor=prob_corr_factor,
                                                overlap_threshold=overlap_threshold,
                                                n_objects_max=n_objects_max,
+                                               dropout_prob=dropout_prob,
                                                topk_only=topk_only,
                                                noisy_sampling=noisy_sampling,
                                                bg_is_zero=bg_is_zero,
@@ -486,68 +487,61 @@ class CompositionalVae(torch.nn.Module):
 
         metrics = self.compute_metrics(imgs_in=imgs_in,
                                        inference=results,
-                                       reg=regularizations)
+                                       reg=regularizations,
+                                       dropout_prob=dropout_prob)
 
         all_metrics = Metric_and_Reg.from_merge(metrics=metrics, regularizations=regularizations)
 
         with torch.no_grad():
-            imgs_rec = self.draw_img(inference=results,
-                                     draw_bounding_box=draw_bounding_box) if draw_image else torch.zeros_like(imgs_in)
+            if draw_image:
+                imgs_rec = draw_img(prob=results.prob,
+                                    bounding_box=results.bounding_box,
+                                    big_mask=results.big_mask,
+                                    big_img=results.big_img,
+                                    draw_boxes=draw_boxes)
+            else:
+                imgs_rec = torch.zeros_like(imgs_in)
 
         return Output(metrics=all_metrics, inference=results, imgs=imgs_rec)
 
     def forward(self,
                 imgs_in: torch.tensor,
                 draw_image: bool = False,
-                draw_bounding_box: bool = False,
+                draw_boxes: bool = False,
                 verbose: bool = False):
-
-        noisy_sampling: bool = True if self.training else False
-        prob_corr_factor = getattr(self, "prob_corr_factor", 0.0)
-        bg_is_zero = getattr(self, "bg_is_zero", True)
-        bg_resolution = getattr(self, "bg_resolution", (2, 2))
 
         return self.process_batch_imgs(imgs_in=imgs_in,
                                        generate_synthetic_data=False,
                                        topk_only=False,
                                        draw_image=draw_image,
-                                       draw_bounding_box=draw_bounding_box,
+                                       draw_boxes=draw_boxes,
                                        verbose=verbose,
-                                       noisy_sampling=noisy_sampling,
-                                       prob_corr_factor=prob_corr_factor,
-                                       overlap_threshold=self.nms_dict["overlap_threshold"],
+                                       noisy_sampling=True, #True if self.training else False,
+                                       prob_corr_factor=getattr(self, "prob_corr_factor", 0.0),
+                                       overlap_threshold=self.nms_dict.get("overlap_threshold", 0.3),
+                                       dropout_prob=self.nms_dict.get("dropout_prob", 0.0) if self.training else 0.0,
                                        n_objects_max=self.input_img_dict["n_objects_max"],
-                                       bg_is_zero=bg_is_zero,
-                                       bg_resolution=bg_resolution)
+                                       bg_is_zero=self.input_img_dict.get("bg_is_zero", True),
+                                       bg_resolution=self.input_img_dict.get("bg_resolution", (2, 2)))
 
     def generate(self,
-                 imgs_in: Optional[torch.tensor] = None,
-                 batch_size: int = 4,
-                 draw_bounding_box: bool = False,
+                 imgs_in: torch.tensor,
+                 draw_boxes: bool = False,
                  verbose: bool = False):
 
         with torch.no_grad():
-            if imgs_in is None:
-                imgs_in = torch.sigmoid(torch.randn(batch_size,
-                                                    self.input_img_dict["ch_in"],
-                                                    self.input_img_dict["size_raw_image"],
-                                                    self.input_img_dict["size_raw_image"]))
-                if self.use_cuda:
-                    imgs_in = imgs_in.cuda()
 
-            else:
-                imgs_in = torch.sigmoid(torch.randn_like(imgs_in))
-
-            return self.process_batch_imgs(imgs_in=imgs_in,
+            return self.process_batch_imgs(imgs_in=torch.zeros_like(imgs_in),
                                            generate_synthetic_data=True,
                                            topk_only=False,
                                            draw_image=True,
-                                           draw_bounding_box=draw_bounding_box,
+                                           draw_boxes=draw_boxes,
                                            verbose=verbose,
                                            noisy_sampling=True,
                                            prob_corr_factor=0.0,
-                                           overlap_threshold=self.nms_dict["overlap_threshold"],
+                                           overlap_threshold=self.nms_dict.get("overlap_threshold", 0.3),
+                                           dropout_prob=0.0,
                                            n_objects_max=self.input_img_dict["n_objects_max"],
                                            bg_is_zero=True,
-                                           bg_resolution=(1, 1))
+                                           bg_resolution=(2, 2))
 
