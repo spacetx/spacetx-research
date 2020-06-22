@@ -4,10 +4,9 @@
 
  "wdl.file_train" : "gs://ld-data-bucket/Allen_smFISH/smFISH_stitched_OLEH.tif",
  "wdl.file_test" : "gs://ld-results-bucket/ckpt/dummy_1.pkl",
- "wdl.file_ckpt" : "gs://ld-results-bucket/ckpt/dummy_2.pkl", 
- 
+ "wdl.file_ckpt" : "gs://ld-results-bucket/ckpt/dummy_2.pkl",
  "wdl.bucket_output" : "gs://ld-results-bucket",
- "wdl.dir_output" : "merfish_june16_v1",
+ "wdl.dir_output" : "merfish_june22_v4",
 
  "wdl.notebook_name": "MAIN.ipynb",
  "wdl.git_repo": "https://github.com/spacetx/spacetx-research.git",
@@ -49,9 +48,8 @@
 
  "nms" : {
    "__comment" : "parameters for the non-max-suppression",
-   "score_threshold" : -1,
    "overlap_threshold" : 0.3,
-   "randomize_nms_factor" :  0.0
+   "dropout_prob" : 0.0
  },
 
  "loss" : {

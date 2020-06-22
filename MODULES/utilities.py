@@ -48,6 +48,8 @@ def reset_parameters(parent_module, verbose):
             pass
 
 
+
+
 def are_boradcastable(a: torch.Tensor, b: torch.Tensor) -> bool:
     """ Return True if tensor are broadcastable to each other, False otherwise """
     return all((m == n) or (m == 1) or (n == 1) for m, n in zip(a.shape[::-1], b.shape[::-1]))
@@ -76,8 +78,8 @@ def sample_and_kl_diagonal_normal(posterior_mu: torch.Tensor,
                                   posterior_std: torch.Tensor,
                                   prior_mu: torch.Tensor,
                                   prior_std: torch.Tensor,
-                                  noisy_sampling: bool = True,
-                                  sample_from_prior: bool = False) -> DIST:
+                                  noisy_sampling: bool,
+                                  sample_from_prior: bool) -> DIST:
 
     post_mu, post_std, pr_mu, pr_std = broadcast_all(posterior_mu, posterior_std, prior_mu, prior_std)
     if sample_from_prior:
@@ -93,15 +95,18 @@ def sample_and_kl_diagonal_normal(posterior_mu: torch.Tensor,
     return DIST(sample=sample, kl=kl)
 
 def _batch_mv(bmat, bvec):
-    r"""
-    Performs a batched matrix-vector product, with compatible but different batch shapes.
+    """ Performs a batched matrix-vector product, with compatible but different batch shapes.
 
-    This function takes as input `bmat`, containing :math:`n \times n` matrices, and
-    `bvec`, containing length :math:`n` vectors.
+        bmat shape (*, n, n)
+        bvec shape (*, n)
+        result = MatrixVectorMultiplication(bmat,bvec) of shape (*, n)
 
-    Both `bmat` and `bvec` may have any number of leading dimensions, which correspond
-    to a batch shape. They are not necessarily assumed to have the same batch shape,
-    just ones which can be broadcasted.
+        * represents all the batched dimensions which might or might not be presents
+
+        Very simple procedure
+        b = bvec.unsqueeze(-1) -> (*, n, 1)
+        c = torch.matmul(bmat, b) = (*, n, n) x (*, n , 1) -> (*, n, 1)
+        result = c.squeeze(-1) -> (*, n)
     """
     return torch.matmul(bmat, bvec.unsqueeze(-1)).squeeze(-1)
 
@@ -110,8 +115,8 @@ def sample_and_kl_multivariate_normal(posterior_mu: torch.Tensor,
                                       posterior_L_cov: torch.Tensor,
                                       prior_mu: torch.Tensor,
                                       prior_L_cov: torch.Tensor,
-                                      noisy_sampling: bool = True,
-                                      sample_from_prior: bool = False) -> DIST:
+                                      noisy_sampling: bool,
+                                      sample_from_prior: bool) -> DIST:
 
     post_L, prior_L = broadcast_all(posterior_L_cov, prior_L_cov)  # (*, n, n)
     post_mu, prior_mu = broadcast_all(posterior_mu, prior_mu)  # (*, n)
@@ -496,6 +501,25 @@ def compute_average_intensity_in_box(imgs: torch.Tensor, bounding_box: BB) -> to
     return tot_intensity / area
 
 
+def draw_img(prob: torch.tensor,
+             bounding_box: BB,
+             big_mask: torch.tensor,
+             big_img: torch.tensor,
+             draw_boxes: bool) -> torch.tensor:
+
+    assert len(prob.shape) == 2  # boxes, batch
+    assert len(big_mask.shape) == len(big_img.shape) == 5  # boxes, batch, ch, w, h
+
+    rec_imgs_no_bb = torch.sum(prob[..., None, None, None] * big_mask * big_img, dim=-5)  # sum over boxes
+    width, height = rec_imgs_no_bb.shape[-2:]
+
+    bounding_boxes = draw_bounding_boxes(prob=prob,
+                                         bounding_box=bounding_box,
+                                         width=width,
+                                         height=height) if draw_boxes else torch.zeros_like(rec_imgs_no_bb)
+    return bounding_boxes + rec_imgs_no_bb
+
+
 def draw_bounding_boxes(prob: Optional[torch.Tensor], bounding_box: BB, width: int, height: int) -> torch.Tensor:
 
     # set all prob to one if they are not passed as input
@@ -583,6 +607,17 @@ def sample_from_constraints_dict(dict_soft_constraints: dict,
 
     return cost
 
+
+### def weighted_sampling_without_replacement(weights, n, dim):
+###     """ Use the algorithm in:
+###         https://github.com/LeviViana/torch_sampling/blob/master/Proof%20Weighted%20Sampling.pdf
+###
+###         Given the weights, it perform random sampling of n elements without replacement along the dimension dim
+###     """
+###     x = torch.rand_like(weights)
+###     keys = x.pow(1.0/weights)
+###     value, index = torch.topk(keys, n, dim=dim, largest=True, sorted=True)
+###     return index
 
 ##### class Constraint(object):
 #####     @staticmethod

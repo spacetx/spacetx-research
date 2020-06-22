@@ -120,8 +120,8 @@ class Inference_and_Generation(torch.nn.Module):
         self.cropped_size: int = params["architecture"]["cropped_size"]
         self.prior_L_cov = None
 
-        self.lenght_scale_GP = torch.nn.Parameter(data=torch.tensor(params["input_image"]["length_scale_GP"]),
-                                                  requires_grad=True)
+        self.length_scale_GP_raw = torch.nn.Parameter(data=torch.tensor(params["input_image"]["length_scale_GP"]),
+                                                      requires_grad=True)
 
         # modules
         self.unet: UNet = UNet(params)
@@ -159,9 +159,8 @@ class Inference_and_Generation(torch.nn.Module):
                 generate_synthetic_data: bool,
                 prob_corr_factor: float,
                 overlap_threshold: float,
-                score_threshold: float,
-                randomize_nms_factor: float,
                 n_objects_max: int,
+                dropout_prob: float,
                 topk_only: bool,
                 noisy_sampling: bool,
                 bg_is_zero: bool,
@@ -196,6 +195,9 @@ class Inference_and_Generation(torch.nn.Module):
 
         tx_map, ty_map, tw_map, th_map = torch.split(torch.sigmoid(self.decoder_zwhere(zwhere_map.sample)), 1, dim=-3)
 
+        # TODO make this a function and its inverse
+        #  tbb_2_bb(tx,ty,tw,th,raw_img_size,min_box_size,max_box_size) -> bx_map,by_map,bw_map,bh_map
+        #  bb_2_tbb(bx,by,bw,bh,raw_img_size,min_box_size,max_box_size) -> tx_map,ty_map,tw_map,th_map
         with torch.no_grad():
             n_width, n_height = tx_map.shape[-2:]
             ix_array = torch.arange(start=0, end=n_width, dtype=tx_map.dtype, device=tx_map.device)
@@ -218,12 +220,14 @@ class Inference_and_Generation(torch.nn.Module):
         # 3. LOGIT to Probabilities #
         # ---------------------------#
 
-        # Diagonalize the covaraince matrix at each iteration since it depends on the tunable parameter lenght_scale_prior
+        # Diagonalize the covariance matrix at each iteration since it depends on the tunable parameter length_scale_GP
         scale_factor = imgs_in.shape[-1] / unet_output.logit.mu.shape[-1]
         locations = (pmap_points * scale_factor).view(-1, 2).detach()
+        length_scale_GP = F.softplus(self.length_scale_GP_raw)
+
         prior_covariance = squared_exp_kernel(points1=locations,
                                               points2=locations,
-                                              length_scale=F.softplus(self.lenght_scale_GP),
+                                              length_scale=length_scale_GP,
                                               eps=1E-3)
 
         posterior_mu = torch.flatten(unet_output.logit.mu, start_dim=1)
@@ -238,9 +242,38 @@ class Inference_and_Generation(torch.nn.Module):
 
         p_map = torch.sigmoid(self.decoder_logit(logit_map.sample.view_as(unet_output.logit.mu)))
 
-        # Add probability correction if necessary
-        if (prob_corr_factor > 0) and (prob_corr_factor <= 1.0) and not generate_synthetic_data:
-            with torch.no_grad():
+        # Correct the probability
+        with torch.no_grad():
+
+            # 1. dropout if necessary
+            if (dropout_prob > 0) and (dropout_prob < 1.0):
+                weights = torch.rand_like(p_map).flatten(start_dim=1)
+                batch_size, n_element = weights.shape
+                n_to_drop = int(dropout_prob * n_element)
+
+                if n_to_drop < 0.5 * n_element:
+                    index_to_drop = torch.topk(weights, n_to_drop, dim=-1, largest=True, sorted=True)[1]
+                    batch_index = torch.arange(batch_size,
+                                               dtype=index_to_drop.dtype,
+                                               device=index_to_drop.device).view(-1, 1)
+                    mask_dropout = torch.ones_like(weights)
+                    mask_dropout[batch_index, index_to_drop] = 0.0
+                else:
+                    n_to_keep = n_element - n_to_drop
+                    index_to_keep = torch.topk(weights, n_to_keep, dim=-1, largest=True, sorted=True)[1]
+                    batch_index = torch.arange(batch_size,
+                                               dtype=index_to_keep.dtype,
+                                               device=index_to_keep.device).view(-1, 1)
+                    mask_dropout = torch.zeros_like(weights)
+                    mask_dropout[batch_index, index_to_keep] = 1.0
+                mask_dropout = mask_dropout.view_as(p_map)
+            else:
+                mask_dropout = torch.ones_like(p_map)
+
+            # 2. correction if necessary
+            if (prob_corr_factor > 0) and (prob_corr_factor <= 1.0) and not generate_synthetic_data:
+
+                # probability correction if necessary
                 av_intensity: torch.Tensor = compute_average_intensity_in_box(torch.abs(imgs_in - big_bg),
                                                                               bounding_box_all)
                 assert len(av_intensity.shape) == 2
@@ -251,11 +284,11 @@ class Inference_and_Generation(torch.nn.Module):
                                                                  original_width=p_map.shape[-2],
                                                                  original_height=p_map.shape[-1])
                 p_approx: torch.Tensor = tmp_2.pow(10)
-            # weighted average of the prob by the inference network and prob by correction
-            p_map_cor: torch.Tensor = (1 - prob_corr_factor) * p_map + prob_corr_factor * p_approx
-        else:
-            p_map_cor: torch.Tensor = p_map
+            else:
+                prob_corr_factor = 0
+                p_approx: torch.Tensor = torch.zeros_like(p_map)
 
+        p_map_cor: torch.Tensor = mask_dropout * ((1 - prob_corr_factor) * p_map + prob_corr_factor * p_approx)
         prob_all: torch.Tensor = convert_to_box_list(p_map_cor).squeeze(-1)
         assert bounding_box_all.bx.shape == prob_all.shape  # n_box_all, batch_size
 
@@ -265,9 +298,7 @@ class Inference_and_Generation(torch.nn.Module):
         with torch.no_grad():
             nms_output: NMSoutput = NonMaxSuppression.compute_mask_and_index(prob=prob_all,
                                                                              bounding_box=bounding_box_all,
-                                                                             score_threshold=score_threshold,
                                                                              overlap_threshold=overlap_threshold,
-                                                                             randomize_nms_factor=randomize_nms_factor,
                                                                              n_objects_max=n_objects_max,
                                                                              topk_only=topk_only)
 
@@ -299,7 +330,7 @@ class Inference_and_Generation(torch.nn.Module):
                                                             sample_from_prior=generate_synthetic_data)
 
         small_stuff_raw = self.decoder_zinstance.forward(zinstance_few.sample)
-        # Apply sigmoid and softplus to first channel (i.e. mask channel) and sigmoid to all others (i.e. img)
+        # Apply softplus to first channel (i.e. mask channel) and sigmoid to all others (i.e. img channels)
         small_stuff = torch.cat((F.softplus(small_stuff_raw[..., :1, :, :]),
                                  torch.sigmoid(small_stuff_raw[..., 1:, :, :])), dim=-3)
         big_stuff = Uncropper.uncrop(bounding_box=bounding_box_few,
@@ -316,7 +347,7 @@ class Inference_and_Generation(torch.nn.Module):
         big_mask_NON_interacting = torch.tanh(big_weight)
 
         # 8. Return the inferred quantities
-        return Inference(length_scale_GP=F.softplus(self.lenght_scale_GP).data.detach(),
+        return Inference(length_scale_GP=length_scale_GP.data.detach(),
                          p_map=p_map_cor,
                          area_map=area_map,
                          big_bg=big_bg,

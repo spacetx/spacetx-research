@@ -15,7 +15,7 @@ class MLP_1by1(nn.Module):
         else:
             self.mlp_1by1 = nn.Sequential(
                 nn.Conv2d(ch_in, ch_hidden, kernel_size=1, stride=1, padding=0, bias=True),
-                nn.ReLU(),
+                nn.ReLU(inplace=True),
                 nn.Conv2d(ch_hidden, ch_out, kernel_size=1, stride=1, padding=0, bias=True)
             )
 
@@ -82,9 +82,9 @@ class DecoderConv(nn.Module):
         self.upsample = nn.Linear(self.dim_z, 64 * 7 * 7)
         self.decoder = nn.Sequential(
             torch.nn.ConvTranspose2d(64, 32, 4, 2, 1),  # B,  64,  14,  14
-            torch.nn.ReLU(),
+            torch.nn.ReLU(inplace=True),
             torch.nn.ConvTranspose2d(32, 32, 4, 2, 1, 1),  # B,  32, 28, 28
-            torch.nn.ReLU(),
+            torch.nn.ReLU(inplace=True),
             torch.nn.ConvTranspose2d(32, self.ch_out, 4, 1, 2)  # B, ch, 28, 28
         )
 
@@ -110,9 +110,9 @@ class EncoderConv(nn.Module):
 
         self.conv = nn.Sequential(
             torch.nn.Conv2d(self.ch_in, 32, 4, 1, 2),  # B, 32, 28, 28
-            torch.nn.ReLU(),
+            torch.nn.ReLU(inplace=True),
             torch.nn.Conv2d(32, 32, 4, 2, 1),  # B, 32, 14, 14
-            torch.nn.ReLU(),
+            torch.nn.ReLU(inplace=True),
             torch.nn.Conv2d(32, 64, 4, 2, 1),  # B, 64,  7, 7
         )
         self.compute_mu = nn.Linear(64 * 7 * 7, self.dim_z)
@@ -157,11 +157,11 @@ class DecoderConvLeaky(nn.Module):
                     nn.ConvTranspose2d(hidden_dims[i],
                                        hidden_dims[i + 1],
                                        kernel_size=3,
-                                       stride = 2,
+                                       stride=2,
                                        padding=1,
                                        output_padding=1),
                     nn.BatchNorm2d(hidden_dims[i + 1]),
-                    nn.LeakyReLU())
+                    nn.LeakyReLU(inplace=True))
             )
         self.decoder = nn.Sequential(*modules)
         self.final_layer = nn.Sequential(
@@ -172,7 +172,7 @@ class DecoderConvLeaky(nn.Module):
                                                padding=1,
                                                output_padding=1),
                             nn.BatchNorm2d(hidden_dims[-1]),
-                            nn.LeakyReLU(),
+                            nn.LeakyReLU(inplace=True),
                             nn.Conv2d(hidden_dims[-1], out_channels=ch_out, kernel_size=3, padding=1))
 
     def forward(self, z: torch.Tensor) -> torch.Tensor:
@@ -207,7 +207,7 @@ class EncoderConvLeaky(nn.Module):
                 nn.Sequential(
                     nn.Conv2d(in_channels, out_channels=h_dim, kernel_size=3, stride=2, padding=1),
                     nn.BatchNorm2d(h_dim),
-                    nn.LeakyReLU())
+                    nn.LeakyReLU(inplace=True))
             )
             in_channels = h_dim
 
