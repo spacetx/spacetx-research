@@ -213,7 +213,7 @@ class CompositionalVae(torch.nn.Module):
         p_times_area_map = inference.p_map * inference.area_map
         mixing_k = inference.big_mask * inference.prob[..., None, None, None]
         mixing_fg = torch.sum(mixing_k, dim=-5)
-        mixing_bg = 1.0 - mixing_fg
+        mixing_bg = torch.ones_like(mixing_fg) - mixing_fg
         assert len(mixing_fg.shape) == 4  # batch, ch=1, w, h
 
         # 1. Observation model
