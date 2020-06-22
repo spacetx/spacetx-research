@@ -6,7 +6,7 @@
  "wdl.file_test" : "gs://ld-results-bucket/ckpt/dummy_1.pkl",
  "wdl.file_ckpt" : "gs://ld-results-bucket/ckpt/dummy_2.pkl",
  "wdl.bucket_output" : "gs://ld-results-bucket",
- "wdl.dir_output" : "merfish_june21_v2",
+ "wdl.dir_output" : "merfish_june22_v4",
 
  "wdl.notebook_name": "MAIN.ipynb",
  "wdl.git_repo": "https://github.com/spacetx/spacetx-research.git",
@@ -70,7 +70,7 @@
  "optimizer" : {
    "__comment" : "which optimizer to use",
    "type" : "adam",
-   "base_lr" : 0.0001,
+   "base_lr" : 0.001,
    "betas" : [0.9, 0.999],
    "base_lr_geco" : 0.001,
    "betas_geco" : [0.9, 0.999],

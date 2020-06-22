@@ -234,12 +234,13 @@ class CompositionalVae(torch.nn.Module):
         # 2. tight bounding boxes
         # 3. tight masks
         # Old solution: sparsity = p * area_box -> leads to square masks b/c they have no cost and lead to lower kl_mask
-        # New solution: sparsity = \sum_{i,j} (p * area_box) + \sum_k (p_chosen * area_mask_chosen)
+        # Medium solution: sparsity = \sum_{i,j} (p * area_box) + \sum_k (p_chosen * area_mask_chosen)
         #                        = fg_fraction_box + fg_fraction_box
+        #                        -> lead to many small object b/c there is no cost
+        # TODO: NORMALIZE EVERYTHING BY THEIR RUNNING AVERAGE?
         fg_fraction_av = torch.sum(mixing_fg) / torch.numel(mixing_fg)  # equivalent to torch.mean
         fg_fraction_box = torch.sum(p_times_area_map) / torch.numel(mixing_fg)  # division by the same as above
         prob_total1 = torch.sum(inference.p_map)/((1.0-dropout_prob)*batch_size)  # will be normalized by moving average 
-        
 
         # 4. compute the KL for each image
         # TODO: NORMALIZE EVERYTHING BY THEIR RUNNING AVERAGE?
@@ -272,75 +273,14 @@ class CompositionalVae(torch.nn.Module):
                                                              max=max(self.geco_dict["factor_balance_range"]))
             f_sparsity = self.geco_sparsity_factor.data.clamp_(min=min(self.geco_dict["factor_sparsity_range"]),
                                                                max=max(self.geco_dict["factor_sparsity_range"]))
+
+        # TODO try this different loss function.
+        # loss_vae = f_balance * (nll_av + reg_av) + (1.0-f_balance) * (kl_av + f_sparsity * sparsity_av)
+        # TODO move reg_av to the other side, i.e. proportional to 1-f_balance?
+
         loss_vae = f_sparsity * sparsity_av + \
                    f_balance * (nll_av + reg_av) + (1.0 - f_balance) * kl_av
 
-
-##########        # 3. Sparsity should encourage:
-##########        # a. small probabilities
-##########        # b. tight bounding boxes
-##########        # c. tight masks
-##########        # Old solution: sparsity = p * area_box -> leads to square masks b/c they have no cost and lead to lower kl_mask
-##########        # Medium solution: sparsity = \sum_{i,j} (p * area_box) + \sum_k (p_chosen * area_mask_chosen)
-##########        #                           = fg_fraction_box + fg_fraction_box
-##########        #                           -> lead to many small objects b/c there is no cost
-##########        # New solution: sparsity = \sum_{i,j} (p * area_box) + \sum_k (p_chosen * area_mask_chosen)
-##########        #                          = fg_fraction_box + fg_fraction_box +  SUM_PROB / K ....
-##########        fg_mask = torch.sum(mixing_fg)/batch_size
-##########        fg_box1 = torch.sum(inference.prob * inference.bounding_box.bw * inference.bounding_box.bh)/batch_size
-##########        #fg_box2 = torch.sum(inference.p_map * inference.area_map)/((1.0-dropout_prob)*batch_size)
-##########        fg_box2 = torch.zeros_like(fg_box1)/batch_size
-##########        prob_total1 = torch.sum(inference.p_map)/((1.0-dropout_prob)*batch_size)
-##########        #prob_total2 = torch.sum(inference.prob)/batch_size
-##########        prob_total2 = torch.zeros_like(prob_total1)
-##########
-##########
-##########        # 4. compute the KL for each image
-##########        kl_zinstance_tot = torch.sum(inference.kl_zinstance_each_obj)/batch_size  # will be normalized by its moving average
-##########        kl_zwhere_tot = torch.sum(inference.kl_zwhere_map)/batch_size  # will be normalized by its moving average
-##########        kl_logit_tot = torch.sum(inference.kl_logit_map)/batch_size  # will be normalized by its moving average
-##########
-##########        # 5. compute the moving averages
-##########        with torch.no_grad():
-##########
-##########            # Compute the moving averages to normalize kl_logit
-##########            input_dict = {"fg_mask": fg_mask.item(),
-##########                          "fg_box1": fg_box1.item(),
-##########                          "fg_box2": fg_box2.item(),
-##########                          "prob_total1": prob_total1.item(),
-##########                          "prob_total2": prob_total2.item(),
-##########                          "kl_logit_tot": kl_logit_tot.item(),
-##########                          "kl_zwhere_tot": kl_zwhere_tot.item(),
-##########                          "kl_zinstance_tot": kl_zinstance_tot.item()}
-##########            # Only if in training mode I accumulate the moving average
-##########            if self.training:
-##########                ma_dict = self.ma_calculator.accumulate(input_dict)
-##########            else:
-##########                ma_dict = input_dict
-##########
-##########        # 6. Loss_VAE
-##########        kl_av = kl_zinstance_tot / (1E-3 + ma_dict["kl_zinstance_tot"]) + \
-##########                kl_zwhere_tot / (1E-3 + ma_dict["kl_zwhere_tot"]) + \
-##########                kl_logit_tot / (1E-3 + ma_dict["kl_logit_tot"])
-##########
-##########        sparsity_av = fg_mask / (1E-3 + ma_dict["fg_mask"]) + \
-##########                      fg_box1 / (1E-3 + ma_dict["fg_box1"]) + \
-##########                      fg_box2 / (1E-3 + ma_dict["fg_box2"]) + \
-##########                      prob_total1 / (1E-3 + ma_dict["prob_total1"]) + \
-##########                      prob_total2 / (1E-3 + ma_dict["prob_total2"])
-##########
-##########        assert nll_av.shape == reg_av.shape == kl_av.shape == sparsity_av.shape
-##########        # print(nll_av, reg_av, kl_av, sparsity_av)
-##########
-##########        # Note that I clamp in_place
-##########        with torch.no_grad():
-##########            f_balance = self.geco_balance_factor.data.clamp_(min=min(self.geco_dict["factor_balance_range"]),
-##########                                                             max=max(self.geco_dict["factor_balance_range"]))
-##########            f_sparsity = self.geco_sparsity_factor.data.clamp_(min=min(self.geco_dict["factor_sparsity_range"]),
-##########                                                               max=max(self.geco_dict["factor_sparsity_range"]))
-##########
-##########        # TODO move reg_av to the other side, i.e. proportional to 1-f_balance?
-##########        loss_vae = f_balance * (nll_av + reg_av) + (1.0-f_balance) * (kl_av + f_sparsity * sparsity_av)
 
 
         # GECO BUSINESS
