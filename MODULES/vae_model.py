@@ -238,10 +238,8 @@ class CompositionalVae(torch.nn.Module):
         #                        = fg_fraction_box + fg_fraction_box
         fg_fraction_av = torch.sum(mixing_fg) / torch.numel(mixing_fg)  # equivalent to torch.mean
         fg_fraction_box = torch.sum(p_times_area_map) / torch.numel(mixing_fg)  # division by the same as above
-        prob_total1 = torch.sum(inference.p_map)/(1.0-dropout_prob)  # will be normalized by moving average 
+        prob_total1 = torch.sum(inference.p_map)/((1.0-dropout_prob)*batch_size)  # will be normalized by moving average 
         
-        sparsity_av = fg_fraction_box + fg_fraction_av
-        # print("fg_fraction_av vs fg_fraction_box", fg_fraction_av, fg_fraction_box)
 
         # 4. compute the KL for each image
         # TODO: NORMALIZE EVERYTHING BY THEIR RUNNING AVERAGE?
