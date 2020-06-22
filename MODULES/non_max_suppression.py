@@ -1,6 +1,6 @@
 import torch
 from .namedtuple import BB, NMSoutput
-from .utilities import weighted_sampling_without_replacement
+
 
 class NonMaxSuppression(object):
     """ Use Intersection_over_Union criteria to put most of the entries to zero while leaving few detection unchanged.
@@ -122,9 +122,7 @@ class NonMaxSuppression(object):
             assert chosen_nms_mask.shape == (n_boxes, batch_size)
 
         # select the indices of the top boxes according to the masked prob.
-        # Note that masked_score:
-        # 1. is based on the prob
-        # 2. is zero for boxes which underwent NMS
+        # Note that masked_prob are zero and do not receive gradients for the boxes which underwent NMS
         masked_prob = chosen_nms_mask * prob
         k = min(n_objects_max, n_boxes)
         indices_top_k: torch.Tensor = torch.topk(masked_prob, k=k, dim=-2, largest=True, sorted=True)[1]

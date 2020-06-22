@@ -48,16 +48,6 @@ def reset_parameters(parent_module, verbose):
             pass
 
 
-def weighted_sampling_without_replacement(weights, n, dim):
-    """ Use the algorithm in:
-        https://github.com/LeviViana/torch_sampling/blob/master/Proof%20Weighted%20Sampling.pdf
-
-        Given the weights, it perform random sampling of n elements without replacement along the dimension dim
-    """
-    x = torch.rand_like(weights)
-    keys = x.pow(1.0/weights)
-    value, index = torch.topk(keys, n, dim=dim, largest=True, sorted=True)
-    return index
 
 
 def are_boradcastable(a: torch.Tensor, b: torch.Tensor) -> bool:
@@ -105,7 +95,9 @@ def sample_and_kl_diagonal_normal(posterior_mu: torch.Tensor,
     return DIST(sample=sample, kl=kl)
 
 def _batch_mv(bmat, bvec):
-    """ bmat shape (*, n, n)
+    """ Performs a batched matrix-vector product, with compatible but different batch shapes.
+
+        bmat shape (*, n, n)
         bvec shape (*, n)
         result = MatrixVectorMultiplication(bmat,bvec) of shape (*, n)
 
@@ -615,6 +607,17 @@ def sample_from_constraints_dict(dict_soft_constraints: dict,
 
     return cost
 
+
+### def weighted_sampling_without_replacement(weights, n, dim):
+###     """ Use the algorithm in:
+###         https://github.com/LeviViana/torch_sampling/blob/master/Proof%20Weighted%20Sampling.pdf
+###
+###         Given the weights, it perform random sampling of n elements without replacement along the dimension dim
+###     """
+###     x = torch.rand_like(weights)
+###     keys = x.pow(1.0/weights)
+###     value, index = torch.topk(keys, n, dim=dim, largest=True, sorted=True)
+###     return index
 
 ##### class Constraint(object):
 #####     @staticmethod
