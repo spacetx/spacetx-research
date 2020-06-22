@@ -6,7 +6,7 @@ from .unet_model import UNet
 from .encoders_decoders import EncoderConv, DecoderConv, Decoder1by1Linear, EncoderConvLeaky, DecoderConvLeaky
 from .utilities import compute_average_intensity_in_box, compute_ranking
 from .utilities import sample_and_kl_diagonal_normal, sample_and_kl_multivariate_normal
-from .utilities import downsample_and_upsample, weighted_sampling_without_replacement
+from .utilities import downsample_and_upsample
 from .namedtuple import Inference, BB, NMSoutput, UNEToutput, ZZ, DIST
 
 
