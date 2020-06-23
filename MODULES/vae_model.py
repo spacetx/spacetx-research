@@ -264,7 +264,7 @@ class CompositionalVae(torch.nn.Module):
 
         # 6. Loss_VAE
         kl_av = kl_zinstance_av + kl_zwhere_av + kl_logit_tot / (1E-3 + ma_dict["kl_logit_tot"])
-        sparsity_av = fg_fraction_box + fg_fraction_av + prob_total / (1E-3 + ma_dict["prob_total1"])
+        sparsity_av = fg_fraction_box + fg_fraction_av + prob_total / (1E-3 + ma_dict["prob_total"])
         assert nll_av.shape == reg_av.shape == kl_av.shape == sparsity_av.shape
         # print(nll_av, reg_av, kl_av, sparsity_av)
 
@@ -328,25 +328,26 @@ class CompositionalVae(torch.nn.Module):
                                length_GP=inference.length_scale_GP.detach(),
                                n_obj_counts=n_obj_counts)
 
-    def segment(self, img,
-                n_objects_max=None,
-                prob_corr_factor=None,
-                overlap_threshold=None,
-                draw_boxes=False):
+    def _segment(self, batch_imgs,
+                 n_objects_max: Optional[int] = None,
+                 prob_corr_factor: Optional[float] = None,
+                 overlap_threshold: Optional[float] = None,
+                 draw_boxes: bool = False,
+                 noisy_sampling: bool = True):
 
         n_objects_max = self.input_img_dict["n_objects_max"] if n_objects_max is None else n_objects_max
         prob_corr_factor = getattr(self, "prob_corr_factor", 0.0) if prob_corr_factor is None else prob_corr_factor
         overlap_threshold = self.nms_dict["overlap_threshold"] if overlap_threshold is None else overlap_threshold
 
         with torch.no_grad():
-            inference = self.inference_and_generator(imgs_in=img,
+            inference = self.inference_and_generator(imgs_in=batch_imgs,
                                                      generate_synthetic_data=False,
                                                      prob_corr_factor=prob_corr_factor,
                                                      overlap_threshold=overlap_threshold,
                                                      n_objects_max=n_objects_max,
                                                      dropout_prob=0.0,
                                                      topk_only=False,
-                                                     noisy_sampling=False,
+                                                     noisy_sampling=noisy_sampling,
                                                      bg_is_zero=True,
                                                      bg_resolution=(1, 1))
 
@@ -365,7 +366,7 @@ class CompositionalVae(torch.nn.Module):
 
         return bounding_boxes + integer_segmentation_mask
 
-    def segment_with_tiling(self, img: torch.Tensor,
+    def segment_with_tiling(self, single_img: torch.Tensor,
                             crop_size: tuple,
                             stride: tuple,
                             n_objects_max_per_patch: Optional[int] = None,
@@ -377,21 +378,21 @@ class CompositionalVae(torch.nn.Module):
         prob_corr_factor = getattr(self, "prob_corr_factor", 0.0) if prob_corr_factor is None else prob_corr_factor
         overlap_threshold = self.nms_dict["overlap_threshold"] if overlap_threshold is None else overlap_threshold
 
-        assert len(img.shape) == 3
-        w_img, h_img = img.shape[-2:]
+        assert len(single_img.shape) == 3
+        w_img, h_img = single_img.shape[-2:]
 
         with torch.no_grad():
 
             iw_start = [x for x in range(0, crop_size[0], stride[0])]
             ih_start = [x for x in range(0, crop_size[1], stride[1])]
             ch = len(iw_start) * len(ih_start)
-            print("number of output_channels -->", ch)
+            print(f'I will produce {ch} segmentation masks each stored in a different channel')
 
             pad_w = crop_size[0] - stride[0]
             pad_h = crop_size[1] - stride[1]
-            img_padded = F.pad(img.unsqueeze(0), pad=[pad_w, pad_w, pad_h, pad_h], mode='reflect')
+            img_padded = F.pad(single_img.unsqueeze(0), pad=[pad_w, pad_w, pad_h, pad_h], mode='reflect')
             w_paddded, h_padded = img_padded.shape[-2:]
-            segmentation = torch.zeros((ch, w_paddded, h_padded), device=img.device, dtype=torch.long)
+            segmentation = torch.zeros((ch, w_paddded, h_padded), device=single_img.device, dtype=torch.long)
 
             # print("iw_start -->", iw_start)
             # print("ih_start -->", ih_start)
@@ -400,7 +401,7 @@ class CompositionalVae(torch.nn.Module):
             for iw in iw_start:
                 for ih in ih_start:
                     ch += 1
-                    print("coordinate upper corner ->", iw, ih, "channel", ch)
+                    # print("coordinate upper corner ->", iw, ih, "channel", ch)
 
                     # Make a batch of images with non-overlapping tiles
                     crops = []
@@ -409,23 +410,22 @@ class CompositionalVae(torch.nn.Module):
                         for j in range(ih, h_img + ih, crop_size[1]):
                             crops.append(img_padded[..., i:(i + crop_size[0]), j:(j + crop_size[1])])
                             location_of_corner.append([i, j])
-                    batch_of_imgs = torch.cat([img for img in crops], dim=0)
-                    print("batch_of_imgs.shape -->", batch_of_imgs.shape)
+                    batch_imgs = torch.cat([img for img in crops], dim=0)
+                    print("batch_of_imgs.shape -->", batch_imgs.shape)
 
                     # Segmentation
-                    integer_mask = self.segment(batch_of_imgs,
-                                                n_objects_max=n_objects_max_per_patch,
-                                                prob_corr_factor=prob_corr_factor,
-                                                overlap_threshold=overlap_threshold,
-                                                draw_boxes=False).long()
+                    integer_mask = self._segment(batch_imgs,
+                                                 n_objects_max=n_objects_max_per_patch,
+                                                 prob_corr_factor=prob_corr_factor,
+                                                 overlap_threshold=overlap_threshold,
+                                                 draw_boxes=False,
+                                                 noisy_sampling=True).long()
 
                     # Shift the index of the integer_masks
                     max_integer = torch.max(integer_mask.flatten(start_dim=1), dim=-1)[0]
-                    assert max_integer.shape[0] == batch_of_imgs.shape[0]
+                    assert max_integer.shape[0] == batch_imgs.shape[0]
                     integer_shift = torch.cumsum(max_integer, dim=0) - max_integer
-                    # print("max_integer ---->", max_integer)
-                    # print("integer_shift -->", integer_shift)
-                    integer_mask_shifted = (integer_mask + integer_shift.view(-1,1,1,1)) * (integer_mask>0).long()
+                    integer_mask_shifted = (integer_mask + integer_shift.view(-1, 1, 1, 1)) * (integer_mask > 0).long()
                     
                     # print("integer_mask_shifted.shape -->", integer_mask_shifted.shape)
 
@@ -434,9 +434,9 @@ class CompositionalVae(torch.nn.Module):
                         # print("ch, n, locs -->", ch, n, locs)
                         segmentation[ch,
                                      locs[0]:(locs[0] + crop_size[0]),
-                                     locs[1]:(locs[1] + crop_size[1])] = integer_mask_shifted[n, 0, :, :] #integer_mask[n, 0, :, :] 
+                                     locs[1]:(locs[1] + crop_size[1])] = integer_mask_shifted[n, 0, :, :]
 
-        return segmentation[:, pad_w:pad_w + w_img, pad_h:pad_w + h_img], integer_mask
+        return segmentation[:, pad_w:pad_w + w_img, pad_h:pad_w + h_img]
 
     # this is the generic function which has all the options unspecified
     def process_batch_imgs(self,

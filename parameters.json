@@ -4,9 +4,9 @@
 
  "wdl.file_train" : "gs://ld-data-bucket/Allen_smFISH/smFISH_stitched_OLEH.tif",
  "wdl.file_test" : "gs://ld-results-bucket/ckpt/dummy_1.pkl",
- "wdl.file_ckpt" : "gs://ld-results-bucket/ckpt/dummy_2.pkl",
+ "wdl.file_ckpt" : "gs://ld-results-bucket/ckpt/for_graph.pkl",
  "wdl.bucket_output" : "gs://ld-results-bucket",
- "wdl.dir_output" : "merfish_june22_v4",
+ "wdl.dir_output" : "merfish_june23_v1",
 
  "wdl.notebook_name": "MAIN.ipynb",
  "wdl.git_repo": "https://github.com/spacetx/spacetx-research.git",
@@ -14,7 +14,7 @@
 
  "simulation" : {
    "__comment" : "there are 3 types of runs: scratch, resume, pretrained",
-   "type" : "scratch",
+   "type" : "resume",
    "MAX_EPOCHS" : 50000,
    "TEST_FREQUENCY" : 100,
    "CHECKPOINT_FREQUENCY" : 100,
