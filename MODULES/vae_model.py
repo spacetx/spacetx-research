@@ -208,6 +208,7 @@ class CompositionalVae(torch.nn.Module):
 
         # Preparation
         batch_size, ch, w, h = imgs_in.shape
+        n_boxes = inference.big_mask.shape[-5] 
         n_obj_counts = (inference.prob > 0.5).float().sum(-2).detach()  # sum over boxes dimension
         p_times_area_map = inference.p_map * inference.area_map
         mixing_k = inference.big_mask * inference.prob[..., None, None, None]
@@ -237,57 +238,42 @@ class CompositionalVae(torch.nn.Module):
         #                        = fg_fraction_box + fg_fraction_box
         #                        -> lead to many small object b/c there is no cost
         # New solution = add term sum p so that many objects are penalized
-        # TODO: NORMALIZE EVERYTHING BY THEIR RUNNING AVERAGE?
-        fg_fraction_mask = torch.sum(mixing_fg) / batch_size
-        fg_fraction_box = torch.sum(p_times_area_map) / batch_size
-        prob_total = torch.sum(inference.p_map)/batch_size
+        fg_fraction_mask_av = torch.sum(mixing_fg) / torch.numel(mixing_fg)  # divide by # total pixel
+        fg_fraction_box_av = torch.sum(p_times_area_map) / torch.numel(mixing_fg)  # divide by # total pixel
+        prob_total_av = torch.sum(inference.p_map)/ (batch_size * n_boxes)  # quickly converge to order 1
 
         # 4. compute the KL for each image
-        # TODO: NORMALIZE EVERYTHING BY THEIR RUNNING AVERAGE?
-        kl_zinstance_tot = torch.sum(inference.kl_zinstance_each_obj) / batch_size
-        kl_zwhere_tot = torch.sum(inference.kl_zwhere_map) / batch_size
-        kl_logit_tot = torch.sum(inference.kl_logit_map) / batch_size
+        kl_zinstance_av = torch.mean(inference.kl_zinstance_each_obj)  # choose latent dim z so that this number is order 1. 
+        kl_zwhere_av = torch.sum(inference.kl_zwhere_map) / (batch_size * n_boxes * 4)  # order 1
+        kl_logit_tot = torch.sum(inference.kl_logit_map) / batch_size  # this will be normalized by running average -> order 1
 
         # 5. compute the moving averages
         with torch.no_grad():
-
-            # Compute the moving averages to normalize kl_logit
-            input_dict = {"fg_fraction_mask": fg_fraction_mask.item(),
-                          "fg_fraction_box": fg_fraction_box.item(),
-                          "prob_total": prob_total.item(),
-                          "kl_zinstance_tot": kl_zinstance_tot.item(),
-                          "kl_zwhere_tot": kl_zwhere_tot.item(),
-                          "kl_logit_tot": kl_logit_tot.item()}
-
+            input_dict = {"kl_logit_tot": kl_logit_tot.item()}
+            
             # Only if in training mode I accumulate the moving average
             if self.training:
                 ma_dict = self.ma_calculator.accumulate(input_dict)
             else:
                 ma_dict = input_dict
 
-        # 6. Loss_VAE
-        kl_av = kl_zinstance_tot / (1E-3 + ma_dict["kl_zinstance_tot"]) + \
-                kl_zwhere_tot / (1E-3 + ma_dict["kl_zwhere_tot"]) + \
-                kl_logit_tot / (1E-3 + ma_dict["kl_logit_tot"])
-        sparsity_av = fg_fraction_mask / (1E-3 + ma_dict["fg_fraction_mask"]) + \
-                      fg_fraction_box / (1E-3 + ma_dict["fg_fraction_box"]) + \
-                      prob_total / (1E-3 + ma_dict["prob_total"])
-        assert nll_av.shape == reg_av.shape == kl_av.shape == sparsity_av.shape
-        # print(nll_av, reg_av, kl_av, sparsity_av)
 
-        # Note that I clamp in_plac e
+        # Note that I clamp in_place
         with torch.no_grad():
             f_balance = self.geco_balance_factor.data.clamp_(min=min(self.geco_dict["factor_balance_range"]),
                                                              max=max(self.geco_dict["factor_balance_range"]))
             f_sparsity = self.geco_sparsity_factor.data.clamp_(min=min(self.geco_dict["factor_sparsity_range"]),
                                                                max=max(self.geco_dict["factor_sparsity_range"]))
 
-        # TODO try this different loss function.
-        # loss_vae = f_balance * (nll_av + reg_av) + (1.0-f_balance) * (kl_av + f_sparsity * sparsity_av)
-        # TODO move reg_av to the other side, i.e. proportional to 1-f_balance?
+        # 6. Loss_VAE
+        # TODO: 
+        # 1. try: loss_vae = f_balance * (nll_av + reg_av) + (1.0-f_balance) * (kl_av + f_sparsity * sparsity_av)
+        # 2. move reg_av to the other size, i.e. proportional to 1-f_balance
+        kl_av = kl_zinstance_av + kl_zwhere_av + kl_logit_tot / (1E-3 + ma_dict["kl_logit_tot"])
+        sparsity_av = fg_fraction_mask_av + fg_fraction_box_av + prob_total_av
+        assert nll_av.shape == reg_av.shape == kl_av.shape == sparsity_av.shape
 
-        loss_vae = f_sparsity * sparsity_av + \
-                   f_balance * (nll_av + reg_av) + (1.0 - f_balance) * kl_av
+        loss_vae = f_sparsity * sparsity_av + f_balance * (nll_av + reg_av) + (1.0 - f_balance) * kl_av
 
 
 
@@ -320,8 +306,8 @@ class CompositionalVae(torch.nn.Module):
                                nll=nll_av.detach(),
                                reg=reg_av.detach(),
                                kl_tot=kl_av.detach(),
-                               kl_instance=kl_zinstance_tot.detach(),
-                               kl_where=kl_zwhere_tot.detach(),
+                               kl_instance=kl_zinstance_av.detach(),
+                               kl_where=kl_zwhere_av.detach(),
                                kl_logit=kl_logit_tot.detach(),
                                sparsity=sparsity_av.detach(),
                                fg_fraction=torch.mean(mixing_fg).detach(),
