@@ -10,26 +10,23 @@ from .utilities import downsample_and_upsample
 from .namedtuple import Inference, BB, NMSoutput, UNEToutput, ZZ, DIST
 
 
-def squared_exp_kernel(points1: torch.Tensor, points2: torch.Tensor, length_scale: float, eps: float = 1E-6):
+def squared_exp_kernel(locations: torch.Tensor, length_scale: float, eps: float = 1E-6):
     """ Input:
-        points1.shape = (*, n, D)
-        points2.shape = (*, m, D)
-        Output: 
-        C.shape = (*, n, m)
+        locations.shape = (*, n, D)
+        Output:
+        C.shape = (*, n, n)
         where batched_dimension * might or might not be present
         It is necessary to add small positive shift on the diagonal otherwise Cholesky decomposition fails
     """
-    dim1 = points1.shape[-1]
-    dim2 = points2.shape[-1]
-    assert dim1 == dim2
-    points1 = points1.unsqueeze(-2)/length_scale  # *, n, 1, D
-    points2 = points2.unsqueeze(-3)/length_scale  # *, 1, m, D
-    scaled_d2 = (points1-points2).pow(2).sum(dim=-1)  # *, n, m
-    cov = torch.exp(-0.5 * scaled_d2)  # *, n, m . This covariance is between (0,1)
+    loc = locations/length_scale  # *, n, D
+    loc1 = loc.unsqueeze(-2)  # *,n,1,D
+    loc2 = loc.unsqueeze(-3)  # *,1,n,D
+    scaled_d2 = (loc1-loc2).pow(2).sum(dim=-1)  # *,n,n
+    cov = torch.exp(-0.5 * scaled_d2)  # *,n,n . This covariance is between (0,1)
 
-    # add STRICTLY POSITIVE noise on the diagonal to prevent matrix from becoming close to singular
-    diag_shift = eps * torch.ones_like(cov[..., 0])  # *, n
-    return (cov + torch.diag_embed(diag_shift, dim1=-2, dim2=-1)).clamp(min=0)
+    # add STRICTLY POSITIVE shift on main diagonal to prevent matrix from becoming close to singular
+    shift = eps * torch.eye(loc.shape[-2], dtype=cov.dtype, device=cov.device, requires_grad=False)  # n,n
+    return (cov + shift).clamp(min=0)
 
 
 def convert_to_box_list(x: torch.Tensor) -> torch.Tensor:
@@ -92,12 +89,10 @@ class Moving_Average_Calculator:
         self._beta = beta
         self._dict_accumulate = {}
         self._dict_MA = {}
-        # print("initialization empty. Step ->", self._steps)
 
     def accumulate(self, input_dict):
         self._steps += 1
         self._bias = 1 - self._beta ** self._steps
-        # print("Mopving_Average_Calculator step", self._steps)
 
         for key, value in input_dict.items():
             try:
@@ -160,7 +155,6 @@ class Inference_and_Generation(torch.nn.Module):
                 prob_corr_factor: float,
                 overlap_threshold: float,
                 n_objects_max: int,
-                dropout_prob: float,
                 topk_only: bool,
                 noisy_sampling: bool,
                 bg_is_zero: bool,
@@ -195,7 +189,7 @@ class Inference_and_Generation(torch.nn.Module):
 
         tx_map, ty_map, tw_map, th_map = torch.split(torch.sigmoid(self.decoder_zwhere(zwhere_map.sample)), 1, dim=-3)
 
-        # TODO make this a function and its inverse
+        # TODO make this a function and its inverse so that it is easier to add supervised loss
         #  tbb_2_bb(tx,ty,tw,th,raw_img_size,min_box_size,max_box_size) -> bx_map,by_map,bw_map,bh_map
         #  bb_2_tbb(bx,by,bw,bh,raw_img_size,min_box_size,max_box_size) -> tx_map,ty_map,tw_map,th_map
         with torch.no_grad():
@@ -221,56 +215,34 @@ class Inference_and_Generation(torch.nn.Module):
         # ---------------------------#
 
         # Diagonalize the covariance matrix at each iteration since it depends on the tunable parameter length_scale_GP
-        scale_factor = imgs_in.shape[-1] / unet_output.logit.mu.shape[-1]
-        locations = (pmap_points * scale_factor).view(-1, 2).detach()
-        length_scale_GP = F.softplus(self.length_scale_GP_raw)
+        with torch.no_grad():
+            scale_factor_x = float(imgs_in.shape[-2]) / unet_output.logit.mu.shape[-2]
+            scale_factor_y = float(imgs_in.shape[-1]) / unet_output.logit.mu.shape[-1]
+            scale_factor = torch.tensor([scale_factor_x, scale_factor_y], device=pmap_points.device).view(1, 1, 2)
+            locations = (pmap_points * scale_factor).view(-1, 2).requires_grad_(False)
 
-        prior_covariance = squared_exp_kernel(points1=locations,
-                                              points2=locations,
+        length_scale_GP = F.softplus(self.length_scale_GP_raw)
+        prior_covariance = squared_exp_kernel(locations=locations,
                                               length_scale=length_scale_GP,
                                               eps=1E-3)
+        prior_L_cov = torch.cholesky(prior_covariance)
 
-        posterior_mu = torch.flatten(unet_output.logit.mu, start_dim=1)
+        posterior_mu = torch.flatten(unet_output.logit.mu, start_dim=1)  # batch_size, nx*ny
         posterior_L_cov = torch.diag_embed(torch.flatten(unet_output.logit.std, start_dim=1), dim1=-2, dim2=-1)
 
         logit_map: DIST = sample_and_kl_multivariate_normal(posterior_mu=posterior_mu,
                                                             posterior_L_cov=posterior_L_cov,
-                                                            prior_mu=torch.zeros_like(posterior_mu).detach(),
-                                                            prior_L_cov=torch.cholesky(prior_covariance),
+                                                            prior_mu=torch.zeros_like(posterior_mu, requires_grad=False),
+                                                            prior_L_cov=prior_L_cov,
                                                             noisy_sampling=noisy_sampling,
                                                             sample_from_prior=generate_synthetic_data)
 
         p_map = torch.sigmoid(self.decoder_logit(logit_map.sample.view_as(unet_output.logit.mu)))
 
-        # Correct the probability
+        # Correct the probability if necessary
         with torch.no_grad():
 
-            # 1. dropout if necessary
-            if (dropout_prob > 0) and (dropout_prob < 1.0):
-                weights = torch.rand_like(p_map).flatten(start_dim=1)
-                batch_size, n_element = weights.shape
-                n_to_drop = int(dropout_prob * n_element)
-
-                if n_to_drop < 0.5 * n_element:
-                    index_to_drop = torch.topk(weights, n_to_drop, dim=-1, largest=True, sorted=True)[1]
-                    batch_index = torch.arange(batch_size,
-                                               dtype=index_to_drop.dtype,
-                                               device=index_to_drop.device).view(-1, 1)
-                    mask_dropout = torch.ones_like(weights)
-                    mask_dropout[batch_index, index_to_drop] = 0.0
-                else:
-                    n_to_keep = n_element - n_to_drop
-                    index_to_keep = torch.topk(weights, n_to_keep, dim=-1, largest=True, sorted=True)[1]
-                    batch_index = torch.arange(batch_size,
-                                               dtype=index_to_keep.dtype,
-                                               device=index_to_keep.device).view(-1, 1)
-                    mask_dropout = torch.zeros_like(weights)
-                    mask_dropout[batch_index, index_to_keep] = 1.0
-                mask_dropout = mask_dropout.view_as(p_map)
-            else:
-                mask_dropout = torch.ones_like(p_map)
-
-            # 2. correction if necessary
+            # 1. correction if necessary
             if (prob_corr_factor > 0) and (prob_corr_factor <= 1.0) and not generate_synthetic_data:
 
                 # probability correction if necessary
@@ -288,7 +260,7 @@ class Inference_and_Generation(torch.nn.Module):
                 prob_corr_factor = 0
                 p_approx: torch.Tensor = torch.zeros_like(p_map)
 
-        p_map_cor: torch.Tensor = mask_dropout * ((1 - prob_corr_factor) * p_map + prob_corr_factor * p_approx)
+        p_map_cor: torch.Tensor = (1 - prob_corr_factor) * p_map + prob_corr_factor * p_approx
         prob_all: torch.Tensor = convert_to_box_list(p_map_cor).squeeze(-1)
         assert bounding_box_all.bx.shape == prob_all.shape  # n_box_all, batch_size
 

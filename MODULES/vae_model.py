@@ -204,8 +204,7 @@ class CompositionalVae(torch.nn.Module):
     def compute_metrics(self,
                         imgs_in: torch.Tensor,
                         inference: Inference,
-                        reg: RegMiniBatch,
-                        dropout_prob: float) -> MetricMiniBatch:
+                        reg: RegMiniBatch) -> MetricMiniBatch:
 
         # Preparation
         batch_size, ch, w, h = imgs_in.shape
@@ -239,23 +238,27 @@ class CompositionalVae(torch.nn.Module):
         #                        -> lead to many small object b/c there is no cost
         # New solution = add term sum p so that many objects are penalized
         # TODO: NORMALIZE EVERYTHING BY THEIR RUNNING AVERAGE?
-        fg_fraction_av = torch.sum(mixing_fg) / torch.numel(mixing_fg)  # equivalent to torch.mean
-        fg_fraction_box = torch.sum(p_times_area_map) / torch.numel(mixing_fg)  # division by the same as above
-        prob_total = torch.sum(inference.p_map)/((1.0-dropout_prob)*batch_size)  # will be normalized by moving average
+        fg_fraction_mask = torch.sum(mixing_fg) / batch_size
+        fg_fraction_box = torch.sum(p_times_area_map) / batch_size
+        prob_total = torch.sum(inference.p_map)/batch_size
 
         # 4. compute the KL for each image
         # TODO: NORMALIZE EVERYTHING BY THEIR RUNNING AVERAGE?
-        kl_zinstance_av = torch.mean(inference.kl_zinstance_each_obj)  # mean over: boxes, batch_size, latent_zwhat
-        kl_zwhere_av = torch.mean(inference.kl_zwhere_map)  # mean over: batch_size, ch=4, w, h
-        kl_logit_tot = torch.sum(inference.kl_logit_map)  # will be normalized by its moving average
+        kl_zinstance_tot = torch.sum(inference.kl_zinstance_each_obj) / batch_size
+        kl_zwhere_tot = torch.sum(inference.kl_zwhere_map) / batch_size
+        kl_logit_tot = torch.sum(inference.kl_logit_map) / batch_size
 
         # 5. compute the moving averages
         with torch.no_grad():
 
             # Compute the moving averages to normalize kl_logit
-            input_dict = {"kl_logit_tot": kl_logit_tot.item(),
-                          "prob_total": prob_total.item()}
-            
+            input_dict = {"fg_fraction_mask": fg_fraction_mask.item(),
+                          "fg_fraction_box": fg_fraction_box.item(),
+                          "prob_total": prob_total.item(),
+                          "kl_zinstance_tot": kl_zinstance_tot.item(),
+                          "kl_zwhere_tot": kl_zwhere_tot.item(),
+                          "kl_logit_tot": kl_logit_tot.item()}
+
             # Only if in training mode I accumulate the moving average
             if self.training:
                 ma_dict = self.ma_calculator.accumulate(input_dict)
@@ -263,12 +266,16 @@ class CompositionalVae(torch.nn.Module):
                 ma_dict = input_dict
 
         # 6. Loss_VAE
-        kl_av = kl_zinstance_av + kl_zwhere_av + kl_logit_tot / (1E-3 + ma_dict["kl_logit_tot"])
-        sparsity_av = fg_fraction_box + fg_fraction_av + prob_total / (1E-3 + ma_dict["prob_total1"])
+        kl_av = kl_zinstance_tot / (1E-3 + ma_dict["kl_zinstance_tot"]) + \
+                kl_zwhere_tot / (1E-3 + ma_dict["kl_zwhere_tot"]) + \
+                kl_logit_tot / (1E-3 + ma_dict["kl_logit_tot"])
+        sparsity_av = fg_fraction_mask / (1E-3 + ma_dict["fg_fraction_mask"]) + \
+                      fg_fraction_box / (1E-3 + ma_dict["fg_fraction_box"]) + \
+                      prob_total / (1E-3 + ma_dict["prob_total"])
         assert nll_av.shape == reg_av.shape == kl_av.shape == sparsity_av.shape
         # print(nll_av, reg_av, kl_av, sparsity_av)
 
-        # Note that I clamp in_place
+        # Note that I clamp in_plac e
         with torch.no_grad():
             f_balance = self.geco_balance_factor.data.clamp_(min=min(self.geco_dict["factor_balance_range"]),
                                                              max=max(self.geco_dict["factor_balance_range"]))
@@ -300,9 +307,6 @@ class CompositionalVae(torch.nn.Module):
                 tmp4 = max(0, min(self.geco_dict["target_nll"]) - nll_av)
                 delta_2 = torch.tensor(tmp4 - tmp3, dtype=loss_vae.dtype, device=loss_vae.device, requires_grad=False)
 
-            #print("delta_1, f_sparsity", delta_1, f_sparsity, self.geco_sparsity_factor.data.item())
-            #print("delta_2, f_balance", delta_2, f_balance, self.geco_balance_factor.data.item())
-
             loss_1 = self.geco_sparsity_factor * delta_1
             loss_2 = self.geco_balance_factor * delta_2
             loss_av = loss_vae + loss_1 + loss_2 - (loss_1 + loss_2).detach()
@@ -316,11 +320,11 @@ class CompositionalVae(torch.nn.Module):
                                nll=nll_av.detach(),
                                reg=reg_av.detach(),
                                kl_tot=kl_av.detach(),
-                               kl_instance=kl_zinstance_av.detach(),
-                               kl_where=kl_zwhere_av.detach(),
+                               kl_instance=kl_zinstance_tot.detach(),
+                               kl_where=kl_zwhere_tot.detach(),
                                kl_logit=kl_logit_tot.detach(),
                                sparsity=sparsity_av.detach(),
-                               fg_fraction=fg_fraction_av.detach(),
+                               fg_fraction=torch.mean(mixing_fg).detach(),
                                geco_sparsity=f_sparsity,
                                geco_balance=f_balance,
                                delta_1=delta_1,
@@ -344,7 +348,6 @@ class CompositionalVae(torch.nn.Module):
                                                      prob_corr_factor=prob_corr_factor,
                                                      overlap_threshold=overlap_threshold,
                                                      n_objects_max=n_objects_max,
-                                                     dropout_prob=0.0,
                                                      topk_only=False,
                                                      noisy_sampling=False,
                                                      bg_is_zero=True,
@@ -449,7 +452,6 @@ class CompositionalVae(torch.nn.Module):
                            noisy_sampling: bool,
                            prob_corr_factor: float,
                            overlap_threshold: float,
-                           dropout_prob: float,
                            n_objects_max: int,
                            bg_is_zero: bool,
                            bg_resolution: tuple):
@@ -465,7 +467,6 @@ class CompositionalVae(torch.nn.Module):
                                                prob_corr_factor=prob_corr_factor,
                                                overlap_threshold=overlap_threshold,
                                                n_objects_max=n_objects_max,
-                                               dropout_prob=dropout_prob,
                                                topk_only=topk_only,
                                                noisy_sampling=noisy_sampling,
                                                bg_is_zero=bg_is_zero,
@@ -476,8 +477,7 @@ class CompositionalVae(torch.nn.Module):
 
         metrics = self.compute_metrics(imgs_in=imgs_in,
                                        inference=results,
-                                       reg=regularizations,
-                                       dropout_prob=dropout_prob)
+                                       reg=regularizations)
 
         all_metrics = Metric_and_Reg.from_merge(metrics=metrics, regularizations=regularizations)
 
@@ -508,7 +508,6 @@ class CompositionalVae(torch.nn.Module):
                                        noisy_sampling=True, #True if self.training else False,
                                        prob_corr_factor=getattr(self, "prob_corr_factor", 0.0),
                                        overlap_threshold=self.nms_dict.get("overlap_threshold", 0.3),
-                                       dropout_prob=self.nms_dict.get("dropout_prob", 0.0) if self.training else 0.0,
                                        n_objects_max=self.input_img_dict["n_objects_max"],
                                        bg_is_zero=self.input_img_dict.get("bg_is_zero", True),
                                        bg_resolution=self.input_img_dict.get("bg_resolution", (2, 2)))
@@ -529,7 +528,6 @@ class CompositionalVae(torch.nn.Module):
                                            noisy_sampling=True,
                                            prob_corr_factor=0.0,
                                            overlap_threshold=self.nms_dict.get("overlap_threshold", 0.3),
-                                           dropout_prob=0.0,
                                            n_objects_max=self.input_img_dict["n_objects_max"],
                                            bg_is_zero=True,
                                            bg_resolution=(2, 2))
