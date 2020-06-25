@@ -48,8 +48,6 @@ def reset_parameters(parent_module, verbose):
             pass
 
 
-
-
 def are_boradcastable(a: torch.Tensor, b: torch.Tensor) -> bool:
     """ Return True if tensor are broadcastable to each other, False otherwise """
     return all((m == n) or (m == 1) or (n == 1) for m, n in zip(a.shape[::-1], b.shape[::-1]))
@@ -94,6 +92,7 @@ def sample_and_kl_diagonal_normal(posterior_mu: torch.Tensor,
 
     return DIST(sample=sample, kl=kl)
 
+
 def _batch_mv(bmat, bvec):
     """ Performs a batched matrix-vector product, with compatible but different batch shapes.
 
@@ -126,8 +125,8 @@ def sample_and_kl_multivariate_normal(posterior_mu: torch.Tensor,
     if sample_from_prior:
         # working with the prior
         eps = torch.randn_like(prior_mu)
-        sample = prior_mu + _batch_mv(prior_L, eps) if noisy_sampling else prior_mu
-        kl = torch.zeros_like(prior_mu)
+        sample = prior_mu + _batch_mv(prior_L, eps) if noisy_sampling else prior_mu  # size: *, n
+        kl = torch.zeros_like(prior_mu[..., 0])  # size: *
     else:
         # working with the posterior
         eps = torch.randn_like(post_mu)
