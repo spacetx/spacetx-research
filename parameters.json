@@ -4,9 +4,9 @@
 
  "wdl.file_train" : "gs://ld-data-bucket/Allen_smFISH/smFISH_stitched_OLEH.tif",
  "wdl.file_test" : "gs://ld-results-bucket/ckpt/dummy_1.pkl",
- "wdl.file_ckpt" : "gs://ld-results-bucket/ckpt/dummy_2.pkl",
+ "wdl.file_ckpt" : "gs://ld-results-bucket/ckpt/v7_ckp_2000.pkl",
  "wdl.bucket_output" : "gs://ld-results-bucket",
- "wdl.dir_output" : "merfish_june25_v7",
+ "wdl.dir_output" : "merfish_segment",
 
  "wdl.notebook_name": "MAIN.ipynb",
  "wdl.git_repo": "https://github.com/spacetx/spacetx-research.git",
@@ -14,7 +14,7 @@
 
  "simulation" : {
    "__comment" : "there are 3 types of runs: scratch, resume, pretrained",
-   "type" : "scratch",
+   "type" : "resume",
    "MAX_EPOCHS" : 5000,
    "TEST_FREQUENCY" : 100,
    "CHECKPOINT_FREQUENCY" : 100,
@@ -61,7 +61,7 @@
    "__comment" : "if active=false use ELBO, else use GECO with Log-Likelihood threshold = n_pixels * n_channel * threshold",
    "is_active" : true,
    "factor_balance_range" : [0.1, 0.8, 0.9],
-   "factor_sparsity_range" : [-1, 1.0, 1000],
+   "factor_sparsity_range" : [-1, 1.0, 100],
    "target_fg_fraction" : [0.05, 0.20],
    "target_nll" : [0.75, 1.0]
  },
@@ -77,7 +77,7 @@
    "eps" : 1E-8,
    "scheduler_is_active" : true,
    "scheduler_type" : "step_LR",
-   "scheduler_step_size" : 1000,
+   "scheduler_step_size" : 500,
    "scheduler_gamma" : 0.75
  },
 

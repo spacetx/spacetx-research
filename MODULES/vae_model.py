@@ -318,11 +318,14 @@ class CompositionalVae(torch.nn.Module):
                                length_GP=inference.length_scale_GP.detach(),
                                n_obj_counts=n_obj_counts)
 
+
+
     def segment(self, img,
-                n_objects_max=None,
-                prob_corr_factor=None,
-                overlap_threshold=None,
-                draw_boxes=False):
+                n_objects_max: Optional[int] = None,
+                prob_corr_factor: Optional[float] = None,
+                overlap_threshold: Optional[float] = None,
+                draw_boxes: bool = False,
+                noisy_sampling: bool = True):
 
         n_objects_max = self.input_img_dict["n_objects_max"] if n_objects_max is None else n_objects_max
         prob_corr_factor = getattr(self, "prob_corr_factor", 0.0) if prob_corr_factor is None else prob_corr_factor
@@ -335,7 +338,7 @@ class CompositionalVae(torch.nn.Module):
                                                      overlap_threshold=overlap_threshold,
                                                      n_objects_max=n_objects_max,
                                                      topk_only=False,
-                                                     noisy_sampling=False,
+                                                     noisy_sampling=noisy_sampling,
                                                      bg_is_zero=True,
                                                      bg_resolution=(1, 1))
 
@@ -406,18 +409,15 @@ class CompositionalVae(torch.nn.Module):
                                                 n_objects_max=n_objects_max_per_patch,
                                                 prob_corr_factor=prob_corr_factor,
                                                 overlap_threshold=overlap_threshold,
-                                                draw_boxes=False).long()
+                                                draw_boxes=False,
+                                                noisy_sampling=True).long()
 
                     # Shift the index of the integer_masks
                     max_integer = torch.max(integer_mask.flatten(start_dim=1), dim=-1)[0]
                     assert max_integer.shape[0] == batch_of_imgs.shape[0]
                     integer_shift = torch.cumsum(max_integer, dim=0) - max_integer
-                    # print("max_integer ---->", max_integer)
-                    # print("integer_shift -->", integer_shift)
-                    integer_mask_shifted = (integer_mask + integer_shift.view(-1,1,1,1)) * (integer_mask>0).long()
+                    integer_mask_shifted = (integer_mask + integer_shift.view(-1,1,1,1)) * (integer_mask > 0).long()
                     
-                    # print("integer_mask_shifted.shape -->", integer_mask_shifted.shape)
-
                     # Make a single large image with the results
                     for n, locs in enumerate(location_of_corner):
                         # print("ch, n, locs -->", ch, n, locs)
@@ -425,7 +425,7 @@ class CompositionalVae(torch.nn.Module):
                                      locs[0]:(locs[0] + crop_size[0]),
                                      locs[1]:(locs[1] + crop_size[1])] = integer_mask_shifted[n, 0, :, :] #integer_mask[n, 0, :, :] 
 
-        return segmentation[:, pad_w:pad_w + w_img, pad_h:pad_w + h_img], integer_mask
+        return segmentation[:, pad_w:pad_w + w_img, pad_h:pad_w + h_img]
 
     # this is the generic function which has all the options unspecified
     def process_batch_imgs(self,
