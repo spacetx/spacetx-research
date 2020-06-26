@@ -461,6 +461,19 @@ def compute_ranking(x: torch.Tensor) -> torch.Tensor:
     return rank
 
 
+def plot_grid(img, figsize=None):
+    assert len(img.shape) == 3
+    N = img.shape[-3]
+
+    MAX_row = N // 4
+
+    figure, axes = plt.subplots(ncols=4, nrows=MAX_row, figsize=figsize)
+    for n in range(4 * MAX_row):
+        row = n // 4
+        col = n % 4
+        axes[row, col].imshow(img[n])
+
+
 def compute_average_intensity_in_box(imgs: torch.Tensor, bounding_box: BB) -> torch.Tensor:
     """ Input batch of images: batch_size x ch x w x h
         z_where collections of [bx,by,bw,bh]

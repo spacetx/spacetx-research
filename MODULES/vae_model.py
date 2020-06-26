@@ -317,12 +317,37 @@ class CompositionalVae(torch.nn.Module):
                                length_GP=inference.length_scale_GP.detach(),
                                n_obj_counts=n_obj_counts)
 
-    def _segment(self, batch_imgs,
-                 n_objects_max: Optional[int] = None,
-                 prob_corr_factor: Optional[float] = None,
-                 overlap_threshold: Optional[float] = None,
-                 draw_boxes: bool = False,
-                 noisy_sampling: bool = True):
+    def compute_edges(self, mixing_k: torch.tensor, radius_nn: int = 2):
+        """ INPUT:  mixing_k of shape --> n_boxes, batch_shape, 1, w, h
+            OUTPUT: edge of shape ------>          batch_shape, (2*r+1)*(2*r+1), w, h
+            where each channels contains the value of e_ij = sum_{k} sqrt(pi_{i,k} pi_{j,k})
+            and j is the pixels shifted by ....
+        """
+        n_boxes, batch_shape, ch_in, w, h = mixing_k.shape
+        assert ch_in == 1
+        ch_out = (2 * radius_nn + 1) * (2 * radius_nn + 1)
+        edge = torch.zeros((batch_shape, ch_out, w, h), device=mixing_k.device, dtype=mixing_k.dtype)
+
+        ch = -1
+        for dx in range(-radius_nn, radius_nn + 1):
+            mixing_k_tmp = torch.roll(mixing_k, dx, dims=-2)
+            for dy in range(-radius_nn, radius_nn + 1):
+                mixing_k_shifted = torch.roll(mixing_k_tmp, dy, dims=-1)
+                ch += 1
+                edge[:, ch, :, :] = torch.sqrt(mixing_k * mixing_k_shifted).sum(dim=-5)[:, 0, :, :]
+        return edge
+
+    def segment(self, batch_imgs,
+                n_objects_max: Optional[int] = None,
+                prob_corr_factor: Optional[float] = None,
+                overlap_threshold: Optional[float] = None,
+                draw_boxes: bool = False,
+                noisy_sampling: bool = True,
+                radius_nn: int = 2):
+        """ Edges: shape batch, radius_NN * radius_NN, width, height
+            In each channel stores
+
+        """
 
         n_objects_max = self.input_img_dict["n_objects_max"] if n_objects_max is None else n_objects_max
         prob_corr_factor = getattr(self, "prob_corr_factor", 0.0) if prob_corr_factor is None else prob_corr_factor
@@ -334,7 +359,6 @@ class CompositionalVae(torch.nn.Module):
                                                      prob_corr_factor=prob_corr_factor,
                                                      overlap_threshold=overlap_threshold,
                                                      n_objects_max=n_objects_max,
-                                                     dropout_prob=0.0,
                                                      topk_only=False,
                                                      noisy_sampling=noisy_sampling,
                                                      bg_is_zero=True,
@@ -342,6 +366,8 @@ class CompositionalVae(torch.nn.Module):
 
             # make the segmentation mask (one integer for each object)
             mixing_k = inference.big_mask * inference.prob[..., None, None, None]
+            edges = self.compute_edges(mixing_k, radius_nn=radius_nn)
+
             most_likely_instance, index = torch.max(mixing_k, dim=-5, keepdim=True)
             integer_segmentation_mask = ((most_likely_instance > 0.5) * (index + 1)).squeeze(-5)  # bg = 0 fg = 1,2,3,...
 
@@ -353,79 +379,82 @@ class CompositionalVae(torch.nn.Module):
             else:
                 bounding_boxes = torch.zeros_like(integer_segmentation_mask)
 
-        return bounding_boxes + integer_segmentation_mask
+        return bounding_boxes + integer_segmentation_mask, edges
 
     def segment_with_tiling(self, single_img: torch.Tensor,
                             crop_size: tuple,
                             stride: tuple,
                             n_objects_max_per_patch: Optional[int] = None,
                             prob_corr_factor: Optional[float] = None,
-                            overlap_threshold: Optional[float] = None):
+                            overlap_threshold: Optional[float] = None,
+                            radius_nn: int=2,
+                            batch: int=64):
 
         n_objects_max_per_patch = self.input_img_dict["n_objects_max"] if n_objects_max_per_patch is \
                                                                           None else n_objects_max_per_patch
         prob_corr_factor = getattr(self, "prob_corr_factor", 0.0) if prob_corr_factor is None else prob_corr_factor
         overlap_threshold = self.nms_dict["overlap_threshold"] if overlap_threshold is None else overlap_threshold
 
+        assert crop_size[0] % stride[0] == 0, "crop and stride size are NOT compatible"
+        assert crop_size[1] % stride[1] == 0, "crop and stride size are NOT compatible"
         assert len(single_img.shape) == 3
-        w_img, h_img = single_img.shape[-2:]
 
         with torch.no_grad():
 
-            iw_start = [x for x in range(0, crop_size[0], stride[0])]
-            ih_start = [x for x in range(0, crop_size[1], stride[1])]
-            ch = len(iw_start) * len(ih_start)
-            print(f'I will produce {ch} segmentation masks each stored in a different channel')
+            w_img, h_img = single_img.shape[-2:]
+            ch_out = (2*radius_nn+1)*(2*radius_nn+1)
+            n_prediction = (crop_size[0]//stride[0]) * (crop_size[1]//stride[1])
+            print(f'Each pixel will be segmented {n_prediction} times')
 
             pad_w = crop_size[0] - stride[0]
             pad_h = crop_size[1] - stride[1]
-            img_padded = F.pad(single_img.unsqueeze(0), pad=[pad_w, pad_w, pad_h, pad_h], mode='reflect')
+            try:
+                img_padded = F.pad(single_img.unsqueeze(0), pad=[pad_w, crop_size[0], pad_h, crop_size[1]],
+                                   mode='reflect')
+            except RuntimeError:
+                img_padded = F.pad(single_img.unsqueeze(0), pad=[pad_w, crop_size[0], pad_h, crop_size[1]],
+                                   mode='constant', value=0)
+
             w_paddded, h_padded = img_padded.shape[-2:]
-            segmentation = torch.zeros((ch, w_paddded, h_padded), device=single_img.device, dtype=torch.long)
+            segmentation_edges = torch.zeros((ch_out, w_paddded, h_padded),
+                                             device=single_img.device,
+                                             dtype=single_img.dtype)
 
-            # print("iw_start -->", iw_start)
-            # print("ih_start -->", ih_start)
+            # Build a list with the locations of the corner of the images
+            location_of_corner = []
+            for i in range(0, w_img + pad_w, stride[0]):
+                for j in range(0, h_img + pad_h, stride[1]):
+                    location_of_corner.append([i, j])
+            print(f'I am going to process {len(location_of_corner)} patches')
 
-            ch = -1
-            for iw in iw_start:
-                for ih in ih_start:
-                    ch += 1
-                    # print("coordinate upper corner ->", iw, ih, "channel", ch)
+            # split the list in chunks of batch_size
+            ij_list_of_list = [location_of_corner[n:n + batch] for n in range(0, len(location_of_corner), batch)]
 
-                    # Make a batch of images with non-overlapping tiles
-                    crops = []
-                    location_of_corner = []
-                    for i in range(iw, w_img + iw, crop_size[0]):
-                        for j in range(ih, h_img + ih, crop_size[1]):
-                            crops.append(img_padded[..., i:(i + crop_size[0]), j:(j + crop_size[1])])
-                            location_of_corner.append([i, j])
-                    batch_imgs = torch.cat([img for img in crops], dim=0)
-                    print("batch_of_imgs.shape -->", batch_imgs.shape)
+            # Build a batch of images and process them
+            for ij_list in ij_list_of_list:
+                crops = []
+                for ij in ij_list:
+                    crops.append(img_padded[..., ij[0]:(ij[0] + crop_size[0]), ij[1]:(ij[1] + crop_size[1])])
 
-                    # Segmentation
-                    integer_mask = self._segment(batch_imgs,
-                                                 n_objects_max=n_objects_max_per_patch,
-                                                 prob_corr_factor=prob_corr_factor,
-                                                 overlap_threshold=overlap_threshold,
-                                                 draw_boxes=False,
-                                                 noisy_sampling=True).long()
+                batch_imgs = torch.cat([img for img in crops], dim=0)
+                print("batch_of_imgs.shape -->", batch_imgs.shape)
 
-                    # Shift the index of the integer_masks
-                    max_integer = torch.max(integer_mask.flatten(start_dim=1), dim=-1)[0]
-                    assert max_integer.shape[0] == batch_imgs.shape[0]
-                    integer_shift = torch.cumsum(max_integer, dim=0) - max_integer
-                    integer_mask_shifted = (integer_mask + integer_shift.view(-1, 1, 1, 1)) * (integer_mask > 0).long()
-                    
-                    # print("integer_mask_shifted.shape -->", integer_mask_shifted.shape)
+                # Segmentation
+                # edges = torch.ones_like(batch_imgs).expand(-1, ch_out, -1, -1)
+                integer_mask, edges = self.segment(batch_imgs,
+                                                   n_objects_max=n_objects_max_per_patch,
+                                                   prob_corr_factor=prob_corr_factor,
+                                                   overlap_threshold=overlap_threshold,
+                                                   draw_boxes=False,
+                                                   noisy_sampling=True,
+                                                   radius_nn=radius_nn)
 
-                    # Make a single large image with the results
-                    for n, locs in enumerate(location_of_corner):
-                        # print("ch, n, locs -->", ch, n, locs)
-                        segmentation[ch,
-                                     locs[0]:(locs[0] + crop_size[0]),
-                                     locs[1]:(locs[1] + crop_size[1])] = integer_mask_shifted[n, 0, :, :] #integer_mask[n, 0, :, :] 
+                for n, ij in enumerate(ij_list):
+                    segmentation_edges[:,
+                                       ij[0]:(ij[0]+crop_size[0]),
+                                       ij[1]:(ij[1]+crop_size[1])] += edges[n, :, :, :]
 
-        return segmentation[:, pad_w:pad_w + w_img, pad_h:pad_w + h_img]
+        return segmentation_edges[:, pad_w:pad_w + w_img, pad_h:pad_h + h_img]/n_prediction
 
     # this is the generic function which has all the options unspecified
     def process_batch_imgs(self,
