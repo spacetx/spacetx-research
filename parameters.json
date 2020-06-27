@@ -6,7 +6,7 @@
  "wdl.file_test" : "gs://ld-results-bucket/ckpt/dummy_1.pkl",
  "wdl.file_ckpt" : "gs://ld-results-bucket/ckpt/to_segment_ckp.pkl",
  "wdl.bucket_output" : "gs://ld-results-bucket",
- "wdl.dir_output" : "merfish_segment",
+ "wdl.dir_output" : "merfish_segment_june27",
 
  "wdl.notebook_name": "MAIN.ipynb",
  "wdl.git_repo": "https://github.com/spacetx/spacetx-research.git",

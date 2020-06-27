@@ -312,13 +312,13 @@ class CompositionalVae(torch.nn.Module):
     def compute_edges(self, mixing_k: torch.tensor, radius_nn: int = 2):
         """ INPUT:  mixing_k of shape --> n_boxes, batch_shape, 1, w, h
             OUTPUT: edge of shape ------>          batch_shape, (2*r+1)*(2*r+1), w, h
-            where each channels contains the value of e_ij = sum_{k} sqrt(pi_{i,k} pi_{j,k})
+            where each channels contains the value of e_ij = sum_{k} sqrt(mixing_{i,k} mixing_{j,k})
             and j is the pixels shifted by ....
         """
         n_boxes, batch_shape, ch_in, w, h = mixing_k.shape
         assert ch_in == 1
         ch_out = (2 * radius_nn + 1) * (2 * radius_nn + 1)
-        edge = torch.zeros((batch_shape, ch_out, w, h), device=mixing_k.device, dtype=mixing_k.dtype)
+        edges = torch.zeros((batch_shape, ch_out, w, h), device=mixing_k.device, dtype=mixing_k.dtype)
 
         ch = -1
         for dx in range(-radius_nn, radius_nn + 1):
@@ -326,8 +326,8 @@ class CompositionalVae(torch.nn.Module):
             for dy in range(-radius_nn, radius_nn + 1):
                 mixing_k_shifted = torch.roll(mixing_k_tmp, dy, dims=-1)
                 ch += 1
-                edge[:, ch, :, :] = torch.sqrt(mixing_k * mixing_k_shifted).sum(dim=-5)[:, 0, :, :]
-        return edge
+                edges[:, ch, :, :] = torch.sqrt(mixing_k * mixing_k_shifted).sum(dim=-5)[:, 0, :, :]
+        return edges
 
     def segment(self, batch_imgs,
                 n_objects_max: Optional[int] = None,
@@ -360,27 +360,28 @@ class CompositionalVae(torch.nn.Module):
             mixing_k = inference.big_mask * inference.prob[..., None, None, None]
             edges = self.compute_edges(mixing_k, radius_nn=radius_nn)
 
-            most_likely_instance, index = torch.max(mixing_k, dim=-5, keepdim=True)
-            integer_segmentation_mask = ((most_likely_instance > 0.5) * (index + 1)).squeeze(-5)  # bg = 0 fg = 1,2,3,...
+            most_likely_mixing, index = torch.max(mixing_k, dim=-5, keepdim=True)  # 1, batch_size, 1, w, h
+            int_seg_mask = ((most_likely_mixing > 0.5) * (index + 1)).squeeze(-5)  # bg = 0 fg = 1,2,3,...
 
             if draw_boxes:
                 bounding_boxes = draw_bounding_boxes(prob=inference.prob,
                                                      bounding_box=inference.bounding_box,
-                                                     width=integer_segmentation_mask.shape[-2],
-                                                     height=integer_segmentation_mask.shape[-1])
+                                                     width=int_seg_mask.shape[-2],
+                                                     height=int_seg_mask.shape[-1])
             else:
-                bounding_boxes = torch.zeros_like(integer_segmentation_mask)
+                bounding_boxes = torch.zeros_like(int_seg_mask)
 
-        return bounding_boxes + integer_segmentation_mask, edges
+        return bounding_boxes + int_seg_mask, edges
 
-    def segment_with_tiling(self, single_img: torch.Tensor,
-                            crop_size: tuple,
-                            stride: tuple,
-                            n_objects_max_per_patch: Optional[int] = None,
-                            prob_corr_factor: Optional[float] = None,
-                            overlap_threshold: Optional[float] = None,
-                            radius_nn: int=2,
-                            batch: int=64):
+    def co_objectiveness_edges_by_tiling(self, 
+                                         single_img: torch.Tensor,
+                                         crop_size: tuple,
+                                         stride: tuple,
+                                         n_objects_max_per_patch: Optional[int] = None,
+                                         prob_corr_factor: Optional[float] = None,
+                                         overlap_threshold: Optional[float] = None,
+                                         radius_nn: int=2,
+                                         batch: int=64): 
 
         n_objects_max_per_patch = self.input_img_dict["n_objects_max"] if n_objects_max_per_patch is \
                                                                           None else n_objects_max_per_patch
@@ -422,17 +423,20 @@ class CompositionalVae(torch.nn.Module):
             # split the list in chunks of batch_size
             ij_list_of_list = [location_of_corner[n:n + batch] for n in range(0, len(location_of_corner), batch)]
 
+
             # Build a batch of images and process them
-            for ij_list in ij_list_of_list:
+            for n,ij_list in enumerate(ij_list_of_list):
+                
+                # Build a batch of images
                 crops = []
                 for ij in ij_list:
                     crops.append(img_padded[..., ij[0]:(ij[0] + crop_size[0]), ij[1]:(ij[1] + crop_size[1])])
-
                 batch_imgs = torch.cat([img for img in crops], dim=0)
-                print("batch_of_imgs.shape -->", batch_imgs.shape)
+                
+                if n%100 == 0 or n==len(ij_list_of_list)-1:
+                    print(f'{n} out of {len(ij_list_of_list)-1} -> batch_of_imgs.shape = {batch_imgs.shape}') 
 
-                # Segmentation
-                # edges = torch.ones_like(batch_imgs).expand(-1, ch_out, -1, -1)
+                # Segment the batch 
                 integer_mask, edges = self.segment(batch_imgs,
                                                    n_objects_max=n_objects_max_per_patch,
                                                    prob_corr_factor=prob_corr_factor,
