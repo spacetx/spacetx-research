@@ -34,40 +34,32 @@ def save_everything(path: str,
                 'hyperparam_dict': hyperparams_dict}, path)
 
 
-def load_info(path: str,
-              load_params: bool = False,
-              load_epoch: bool = False,
-              load_history: bool = False) -> Checkpoint:
-
-    if torch.cuda.is_available():
-        resumed = torch.load(path) #, map_location="cuda:0")
-    else:
-        resumed = torch.load(path, map_location=torch.device('cpu'))
-
-    epoch = resumed['epoch'] if load_epoch else None
-    hyperparams_dict = resumed['hyperparam_dict'] if load_params else None
-    history_dict = resumed['history_dict'] if load_history else None
-
-    return Checkpoint(history_dict=history_dict, epoch=epoch, hyperparams_dict=hyperparams_dict)
-
-
-def load_ckpt(path: str, device: Optional[str]=None):
+def file2resumed(path: str, device: Optional[str]=None):
+    """ wrapper around torch.load """
     if device is None:
         resumed = torch.load(path)
     elif device == 'cuda':
         resumed = torch.load(path, map_location="cuda:0")
-        #device = torch.device("cuda")
-        #resumed = torch.load(path, map_location=device)
     elif device == 'cpu':
-        device = torch.device('cpu')
-        resumed = torch.load(path, map_location=device)
+        resumed = torch.load(path, map_location=torch.device('cpu'))
     else:
         raise Exception("device is not recognized")
-
     return resumed
 
 
-def load_model_optimizer(ckpt,
+def load_info(resumed,
+              load_params: bool = False,
+              load_epoch: bool = False,
+              load_history: bool = False) -> Checkpoint:
+
+    epoch = resumed['epoch'] if load_epoch else None
+    hyperparam_dict = resumed['hyperparam_dict'] if load_params else None
+    history_dict = resumed['history_dict'] if load_history else None
+
+    return Checkpoint(history_dict=history_dict, epoch=epoch, hyperparams_dict=hyperparam_dict)
+
+
+def load_model_optimizer(resumed,
                          model: Union[None, torch.nn.Module] = None,
                          optimizer: Union[None, torch.optim.Optimizer] = None,
                          overwrite_member_var: bool = False):
@@ -78,15 +70,15 @@ def load_model_optimizer(ckpt,
 
         # load member variables
         if overwrite_member_var:
-            for key, value in ckpt['model_member_var'].items():
+            for key, value in resumed['model_member_var'].items():
                 setattr(model, key, value)
 
         # load the modules
-        model.load_state_dict(ckpt['model_state_dict'])
+        model.load_state_dict(resumed['model_state_dict'])
         model.to(device)
 
     if optimizer is not None:
-        optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+        optimizer.load_state_dict(resumed['optimizer_state_dict'])
 
 
 def instantiate_optimizer(model: torch.nn.Module,
