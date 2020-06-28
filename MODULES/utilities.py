@@ -3,7 +3,7 @@ import json
 import PIL.Image 
 import PIL.ImageDraw 
 import pickle
-import numpy as np
+import numpy
 from torchvision import utils
 from matplotlib import pyplot as plt
 from torch.distributions.utils import broadcast_all
@@ -48,7 +48,14 @@ def reset_parameters(parent_module, verbose):
             pass
 
 
-def are_boradcastable(a: torch.Tensor, b: torch.Tensor) -> bool:
+def roller_2d(x: torch.tensor, radius_nn: int = 2):
+    for dx in range(-radius_nn, radius_nn + 1):
+        x_tmp = torch.roll(x, dx, dims=-2)
+        for dy in range(-radius_nn, radius_nn + 1):
+            yield torch.roll(x_tmp, dy, dims=-1)
+
+
+def are_broadcastable(a: torch.Tensor, b: torch.Tensor) -> bool:
     """ Return True if tensor are broadcastable to each other, False otherwise """
     return all((m == n) or (m == 1) or (n == 1) for m, n in zip(a.shape[::-1], b.shape[::-1]))
 
@@ -154,8 +161,8 @@ def kl_multivariate_normal0_normal1(mu0: torch.Tensor,
     * represents all the batched dimensions which might or might not be presents
     """
 
-    assert are_boradcastable(mu0, mu1)  # (*, n)
-    assert are_boradcastable(L_cov0, L_cov1)  # (*, n, n)
+    assert are_broadcastable(mu0, mu1)  # (*, n)
+    assert are_broadcastable(L_cov0, L_cov1)  # (*, n, n)
     n = L_cov0.shape[-1]
 
     # Tr[cov1^(-1)cov0] = Tr[L L^T] = sum_of_element_wise_square(L)
@@ -181,11 +188,11 @@ def kl_multivariate_normal0_normal1(mu0: torch.Tensor,
     return 0.5 * (trace_term + square_term - n + logdet_term)
 
 
-def linear_interpolation(t: Union[np.array, float], values: tuple, times: tuple) -> Union[np.array, float]:
+def linear_interpolation(t: Union[numpy.array, float], values: tuple, times: tuple) -> Union[numpy.array, float]:
     """ Makes an interpolation between (t_in,v_in) and (t_fin,v_fin)
         For time t>t_fin and t<t_in the value of v is clamped to either v_in or v_fin
         Usage:
-        epoch = np.arange(0,100,1)
+        epoch = numpy.arange(0,100,1)
         v = linear_interpolation(epoch, values=[0.0,0.5], times=[20,40])
         plt.plot(epoch,v)
     """
@@ -201,7 +208,7 @@ def linear_interpolation(t: Union[np.array, float], values: tuple, times: tuple)
 
     v_min = min(v_in, v_fin)
     v_max = max(v_in, v_fin)
-    return np.clip(v, v_min, v_max)
+    return numpy.clip(v, v_min, v_max)
 
 
 def accumulate_counting_accuracy(indices_wrong_examples: list,
@@ -236,8 +243,6 @@ def flatten_list(my_list: List[List]) -> list:
 ##        return self.n_max
 
 
-
-
 class ManyRandomCropsTensor(object):
     """Crop a torch Tensor at random locations to obtain output of given size """
 
@@ -269,9 +274,9 @@ class ManyRandomCropsTensor(object):
                                    w_desired=self.desired_w,
                                    h_desired=self.desired_h)
 
-            if self.fg_mask is None or torch.mean(self.fg_mask[...,i:(i+self.desired_w), 
+            if self.fg_mask is None or torch.mean(self.fg_mask[..., i:(i+self.desired_w),
                                                                j:(j+self.desired_h)], 
-                                                  dim=(-1,-2)) > self.fg_fraction_threshold:
+                                                  dim=(-1, -2)) > self.fg_fraction_threshold:
                 crops.append(img[..., i:(i+self.desired_w), j:(j+self.desired_h)])
 
         return torch.cat([crop for crop in crops], dim=0)
@@ -544,7 +549,7 @@ def draw_bounding_boxes(prob: Optional[torch.Tensor], bounding_box: BB, width: i
     n_boxes, batch_size = bounding_box.bx.shape
 
     # prepare the storage
-    batch_bb_np = np.zeros((batch_size, width, height, 3))  # numpy storage for bounding box images
+    batch_bb_np = numpy.zeros((batch_size, width, height, 3))  # numpy storage for bounding box images
 
     # compute the coordinates of the bounding boxes and the probability of each box
     x1 = bounding_box.bx - 0.5 * bounding_box.bw
@@ -564,7 +569,7 @@ def draw_bounding_boxes(prob: Optional[torch.Tensor], bounding_box: BB, width: i
             if prob[box, batch] > -1:
             # if prob[box, batch] > 0.5:
                 draw.rectangle(x1y1x3y3[box, batch, :].cpu().numpy(), outline='red', fill=None)
-        batch_bb_np[batch, ...] = np.array(img.getdata(), np.uint8).reshape((width, height, 3))
+        batch_bb_np[batch, ...] = numpy.array(img.getdata(), numpy.uint8).reshape((width, height, 3))
 
     # Transform np to torch, rescale from [0,255] to (0,1)
     batch_bb_torch = torch.from_numpy(batch_bb_np).permute(0, 3, 2, 1).float() / 255  # permute(0,3,2,1) is CORRECT

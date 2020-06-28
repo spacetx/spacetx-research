@@ -1,10 +1,29 @@
 import torch
-import collections
+import numpy
 from typing import NamedTuple
 
 #  ----------------------------------------------------------------  #
 #  ------- Stuff defined in terms of native types -----------------  #
 #  ----------------------------------------------------------------  #
+
+
+class COMMUNITY(NamedTuple):
+    mask: numpy.array
+    n: int
+    modularity: float
+    resolution: float
+
+
+class Adjacency(NamedTuple):
+    edge_weight: list
+    source: list
+    destination: list
+
+
+class TILING(NamedTuple):
+    co_object: torch.Tensor  # NN, w, h   where NN = (2r+1)*(2*r+1)
+    raw_img: torch.Tensor  # ch,w,h
+
 
 class DIST(NamedTuple):
     sample: torch.Tensor

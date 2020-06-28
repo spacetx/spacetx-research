@@ -318,15 +318,13 @@ class CompositionalVae(torch.nn.Module):
         n_boxes, batch_shape, ch_in, w, h = mixing_k.shape
         assert ch_in == 1
         ch_out = (2 * radius_nn + 1) * (2 * radius_nn + 1)
+        pad = radius_nn+1
         edges = torch.zeros((batch_shape, ch_out, w, h), device=mixing_k.device, dtype=mixing_k.dtype)
 
-        ch = -1
-        for dx in range(-radius_nn, radius_nn + 1):
-            mixing_k_tmp = torch.roll(mixing_k, dx, dims=-2)
-            for dy in range(-radius_nn, radius_nn + 1):
-                mixing_k_shifted = torch.roll(mixing_k_tmp, dy, dims=-1)
-                ch += 1
-                edges[:, ch, :, :] = torch.sqrt(mixing_k * mixing_k_shifted).sum(dim=-5)[:, 0, :, :]
+        # Pad width and height with zero before rolling to avoid spurious connections due to PBC
+        pad_mixing_k = F.pad(mixing_k, pad=[pad, pad, pad, pad], mode="constant", value=0.0)
+        for ch, pad_mixing_k_shifted in enumerate(roller_2d(pad_mixing_k, radius_nn=radius_nn)):
+            edges[:, ch] = torch.sqrt(pad_mixing_k * pad_mixing_k_shifted).sum(dim=-5)[:, 0, pad:(pad+w), pad:(pad+h)]
         return edges
 
     def segment(self, batch_imgs,
@@ -373,15 +371,17 @@ class CompositionalVae(torch.nn.Module):
 
         return bounding_boxes + int_seg_mask, edges
 
-    def co_objectiveness_edges_by_tiling(self, 
-                                         single_img: torch.Tensor,
-                                         crop_size: tuple,
-                                         stride: tuple,
-                                         n_objects_max_per_patch: Optional[int] = None,
-                                         prob_corr_factor: Optional[float] = None,
-                                         overlap_threshold: Optional[float] = None,
-                                         radius_nn: int=2,
-                                         batch: int=64): 
+    def tiling(self,
+               single_img: torch.Tensor,
+               crop_size: tuple,
+               stride: tuple,
+               n_objects_max_per_patch: Optional[int] = None,
+               prob_corr_factor: Optional[float] = None,
+               overlap_threshold: Optional[float] = None,
+               radius_nn: int=2,
+               batch: int=64):
+        """ Uses a sliding window approach to collect a co_objectiveness information
+            about the pixels of a large image """
 
         n_objects_max_per_patch = self.input_img_dict["n_objects_max"] if n_objects_max_per_patch is \
                                                                           None else n_objects_max_per_patch
@@ -401,14 +401,15 @@ class CompositionalVae(torch.nn.Module):
 
             pad_w = crop_size[0] - stride[0]
             pad_h = crop_size[1] - stride[1]
+            pad_list = [pad_w, crop_size[0], pad_h, crop_size[1]]
             try:
-                img_padded = F.pad(single_img.unsqueeze(0), pad=[pad_w, crop_size[0], pad_h, crop_size[1]],
-                                   mode='reflect')
+                img_padded = F.pad(single_img.unsqueeze(0),
+                                   pad=pad_list, mode='reflect')  # 1, ch_in, w_pad, h_pad
             except RuntimeError:
-                img_padded = F.pad(single_img.unsqueeze(0), pad=[pad_w, crop_size[0], pad_h, crop_size[1]],
-                                   mode='constant', value=0)
-
+                img_padded = F.pad(single_img.unsqueeze(0),
+                                   pad=pad_list, mode='constant', value=0)  # 1, ch_in, w_pad, h_pad
             w_paddded, h_padded = img_padded.shape[-2:]
+
             segmentation_edges = torch.zeros((ch_out, w_paddded, h_padded),
                                              device=single_img.device,
                                              dtype=single_img.dtype)
@@ -423,17 +424,14 @@ class CompositionalVae(torch.nn.Module):
             # split the list in chunks of batch_size
             ij_list_of_list = [location_of_corner[n:n + batch] for n in range(0, len(location_of_corner), batch)]
 
-
             # Build a batch of images and process them
-            for n,ij_list in enumerate(ij_list_of_list):
+            for n, ij_list in enumerate(ij_list_of_list):
                 
                 # Build a batch of images
-                crops = []
-                for ij in ij_list:
-                    crops.append(img_padded[..., ij[0]:(ij[0] + crop_size[0]), ij[1]:(ij[1] + crop_size[1])])
-                batch_imgs = torch.cat([img for img in crops], dim=0)
+                batch_imgs = torch.cat([img_padded[..., ij[0]:(ij[0] + crop_size[0]), ij[1]:(ij[1] + crop_size[1])]
+                                        for ij in ij_list], dim=0)
                 
-                if n%100 == 0 or n==len(ij_list_of_list)-1:
+                if (n % 100 == 0) or (n == len(ij_list_of_list)-1):
                     print(f'{n} out of {len(ij_list_of_list)-1} -> batch_of_imgs.shape = {batch_imgs.shape}') 
 
                 # Segment the batch 
@@ -445,12 +443,14 @@ class CompositionalVae(torch.nn.Module):
                                                    noisy_sampling=True,
                                                    radius_nn=radius_nn)
 
-                for n, ij in enumerate(ij_list):
+                # TODO Can we vectorize this?
+                for b, ij in enumerate(ij_list):
                     segmentation_edges[:,
                                        ij[0]:(ij[0]+crop_size[0]),
-                                       ij[1]:(ij[1]+crop_size[1])] += edges[n, :, :, :]
+                                       ij[1]:(ij[1]+crop_size[1])] += edges[b, :, :, :]
 
-        return segmentation_edges[:, pad_w:pad_w + w_img, pad_h:pad_h + h_img]/n_prediction
+        return TILING(co_object=segmentation_edges[:, pad_w:pad_w + w_img, pad_h:pad_h + h_img]/n_prediction,
+                      raw_img=single_img)
 
     # this is the generic function which has all the options unspecified
     def process_batch_imgs(self,
