@@ -48,6 +48,13 @@ def reset_parameters(parent_module, verbose):
             pass
 
 
+def roller_2d_first_quadrant(x: torch.tensor, radius_nn: int = 2):
+    for dx in range(0, radius_nn + 1):
+        x_tmp = torch.roll(x, dx, dims=-2)
+        for dy in range(0, radius_nn + 1):
+            yield torch.roll(x_tmp, dy, dims=-1)
+
+
 def roller_2d(x: torch.tensor, radius_nn: int = 2):
     for dx in range(-radius_nn, radius_nn + 1):
         x_tmp = torch.roll(x, dx, dims=-2)

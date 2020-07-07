@@ -6,6 +6,12 @@ from typing import NamedTuple
 #  ------- Stuff defined in terms of native types -----------------  #
 #  ----------------------------------------------------------------  #
 
+class SimplifiedPartition(NamedTuple):
+    sizes: list
+    membership: list
+    resolution_parameter: float
+    modularity: float
+
 
 class COMMUNITY(NamedTuple):
     mask: numpy.array
