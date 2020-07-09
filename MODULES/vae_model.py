@@ -2,6 +2,7 @@ from .utilities import *
 from .vae_parts import *
 from .namedtuple import *
 from typing import Union
+import time
 
 
 def pretty_print_metrics(epoch: int,
@@ -463,13 +464,15 @@ class CompositionalVae(torch.nn.Module):
                                          ij[0]:(ij[0]+crop_size[0]),
                                          ij[1]:(ij[1]+crop_size[1])] = shifted_integer_mask
 
-                # Remove possible missing values in the big_integer_mask
-                bin_count = torch.bincount(big_integer_mask[0, pad_w:pad_w+w_img, pad_h:pad_h+h_img].flatten().int())
-                new_label = (torch.cumsum(bin_count > 0, dim=0) - 1).float()
+            # Remove possible missing values in the big_integer_mask
+            time_start = time.time()
+            bin_count = torch.bincount(big_integer_mask[0, pad_w:pad_w+w_img, pad_h:pad_h+h_img].flatten().int())
+            new_label = (torch.cumsum(bin_count > 0, dim=0) - 1).float()
 
-                for old_label, count in enumerate(bin_count):
-                    if (count > 0) and (old_label > 0):
-                        big_integer_mask[big_integer_mask == old_label] = new_label[old_label]
+            for old_label, count in enumerate(bin_count):
+                if (count > 0) and (old_label > 0):
+                    big_integer_mask[big_integer_mask == old_label] = new_label[old_label]
+            print("--- remove missing values %s ---" % (time.time()-time_start))
 
         return TILING(co_object=big_edges[:, pad_w:pad_w + w_img, pad_h:pad_h + h_img]/n_prediction,
                       raw_img=single_img,
