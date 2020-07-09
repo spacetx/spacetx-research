@@ -52,14 +52,15 @@ def roller_2d_first_quadrant(x: torch.tensor, radius_nn: int = 2):
     for dx in range(0, radius_nn + 1):
         x_tmp = torch.roll(x, dx, dims=-2)
         for dy in range(0, radius_nn + 1):
-            yield torch.roll(x_tmp, dy, dims=-1)
+            yield torch.roll(x_tmp, dy, dims=-1), dx, dy
 
 
-def roller_2d(x: torch.tensor, radius_nn: int = 2):
-    for dx in range(-radius_nn, radius_nn + 1):
-        x_tmp = torch.roll(x, dx, dims=-2)
-        for dy in range(-radius_nn, radius_nn + 1):
-            yield torch.roll(x_tmp, dy, dims=-1)
+# I am commenting this to make sure that it is never used
+# def roller_2d(x: torch.tensor, radius_nn: int = 2):
+#     for dx in range(-radius_nn, radius_nn + 1):
+#         x_tmp = torch.roll(x, dx, dims=-2)
+#         for dy in range(-radius_nn, radius_nn + 1):
+#             yield torch.roll(x_tmp, dy, dims=-1), dx, dy
 
 
 def are_broadcastable(a: torch.Tensor, b: torch.Tensor) -> bool:

@@ -6,7 +6,8 @@ import leidenalg as la
 import igraph as ig
 import functools 
 from MODULES.namedtuple import COMMUNITY, Adjacency, TILING, SimplifiedPartition
-from MODULES.utilities import roller_2d #roller_2d_first_quadrant, plot_grid
+# from MODULES.utilities import roller_2d
+from MODULES.utilities import roller_2d_first_quadrant
 from typing import Optional
 from matplotlib import pyplot as plt
 import time
@@ -40,10 +41,11 @@ class GraphSegmentation(object):
         self.tiling = tiling
         self.device = self.tiling.raw_img.device
         ch, self.nx, self.ny = self.tiling.co_object.shape
-        self.radius_nn = int(numpy.sqrt(ch) - 1) // 2
+        #self.radius_nn = int(numpy.sqrt(ch) - 1) // 2
+        #self.ch_edge_ii = (ch - 1)//2
+        self.radius_nn = int(numpy.sqrt(ch) - 1)
+        self.ch_edge_ii = 0
         print("radius_nn ->", self.radius_nn)
-        
-        self.ch_edge_ii = (ch - 1)//2
         print("ch_e_ii -->", self.ch_edge_ii)
         
         self.fg_mask = self.tiling.co_object[self.ch_edge_ii] > 0.25
@@ -57,7 +59,8 @@ class GraphSegmentation(object):
         self.index_matrix = -1*torch.ones_like(ix_matrix)
         self.index_matrix[self.x_coordinate_fg_pixel, self.y_coordinate_fg_pixel] = self.index_array
         print("n_fg_pixel -->", self.n_fg_pixel)
-                
+
+        self.adj = self._build_adjacency()
         self.graph = self._build_graph(adj=self._build_adjacency())
         self._clusters = None
 
@@ -78,13 +81,13 @@ class GraphSegmentation(object):
         pad_fg_mask = F.pad(self.fg_mask, pad=pad_list, mode="constant", value=False)
         pad_weight = F.pad(self.tiling.co_object, pad=pad_list, mode="constant", value=0.0)
         
-        for ch, pad_index_matrix_shifted in enumerate(roller_2d(pad_index_matrix, radius_nn=self.radius_nn)):
+        for ch, pad_index_matrix_shifted in enumerate(roller_2d_first_quadrant(pad_index_matrix, radius_nn=self.radius_nn)):
             
             w = pad_weight[ch][pad_fg_mask]
             i = pad_index_matrix[pad_fg_mask]
             j = pad_index_matrix_shifted[pad_fg_mask]
 
-            my_filter = (i >= 0) * (j >= 0) * (w > 0.01)
+            my_filter = (i >= 0) * (j >= 0) * (w > 0.01) * (i != j)  # avoid self loop
             
             w_list += w[my_filter].cpu().numpy().tolist()
             i_list += i[my_filter].cpu().numpy().tolist()
@@ -93,12 +96,23 @@ class GraphSegmentation(object):
         return Adjacency(edge_weight=w_list, source=i_list, destination=j_list)
 
     def _build_graph(self, adj: Adjacency):
-        
+
         vertex_list = [n for n in range(self.n_fg_pixel)]
         edgelist = list(zip(adj.source, adj.destination))
-        
         graph = ig.Graph(vertex_attrs={"label": vertex_list}, edges=edgelist, directed=False)
-        graph.es['weight'] = adj.edge_weight
+
+        # Compute the sum of the edges connected to each vertex
+        i_array = torch.tensor(adj.source, dtype=torch.long, device=self.device)
+        j_array = torch.tensor(adj.destination, dtype=torch.long, device=self.device)
+        w_array = torch.tensor(adj.edge_weight, dtype=torch.float, device=self.device)
+        d = torch.zeros(self.n_fg_pixel, dtype=torch.float, device=self.device)
+        for v in vertex_list:
+            mask = ((i_array == v) + (j_array == v)) > 0  # check either source or destination involve vertex v
+            d[v] = w_array[mask].sum()
+        w_array /= torch.sqrt(d[i_array]*d[j_array])
+        graph.es['weight'] = list(w_array)
+
+        #graph.es['weight'] = adj.edge_weight
         return graph
     
 ###    @functools.lru_cache(maxsize=10)
@@ -125,7 +139,7 @@ class GraphSegmentation(object):
                 if (n % 100) == 0:
                     print("cluster %s out of %s" % (n, n_clusters))
                 p = la.find_partition(graph=g,
-                                      partition_type=la.RBConfigurationVertexPartition, #la.RBERVertexPartition, #la.CPMVertexPartition,
+                                      partition_type=la.CPMVertexPartition, #la.RBConfigurationVertexPartition, #la.RBERVertexPartition, #la.CPMVertexPartition,
                                       initial_membership=None,  # start from singleton
                                       weights=g.es['weight'],
                                       n_iterations=2,
@@ -140,7 +154,7 @@ class GraphSegmentation(object):
 
         else:
             partition = la.find_partition(graph=self.graph,
-                                          partition_type=la.RBConfigurationVertexPartition, #la.RBERVertexPartition, #la.CPMVertexPartition,
+                                          partition_type=la.CPMVertexPartition, #la.RBConfigurationVertexPartition, #la.RBERVertexPartition, #la.CPMVertexPartition,
                                           initial_membership=None,  # start from singleton
                                           weights=self.graph.es['weight'],
                                           n_iterations=2,

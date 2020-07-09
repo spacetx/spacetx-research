@@ -29,6 +29,7 @@ class Adjacency(NamedTuple):
 class TILING(NamedTuple):
     co_object: torch.Tensor  # NN, w, h   where NN = (2r+1)*(2*r+1)
     raw_img: torch.Tensor  # ch,w,h
+    integer_mask: torch.Tensor  # 1,w,h
 
 
 class DIST(NamedTuple):
