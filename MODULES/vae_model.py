@@ -474,9 +474,9 @@ class CompositionalVae(torch.nn.Module):
                     big_integer_mask[big_integer_mask == old_label] = new_label[old_label]
             print("--- remove missing values %s ---" % (time.time()-time_start))
 
-        return TILING(co_object=big_edges[:, pad_w:pad_w + w_img, pad_h:pad_h + h_img]/n_prediction,
-                      raw_img=single_img,
-                      integer_mask=big_integer_mask[:, pad_w:pad_w + w_img, pad_h:pad_h + h_img])
+            return TILING(co_object=big_edges[:, pad_w:pad_w + w_img, pad_h:pad_h + h_img]/n_prediction,
+                          raw_img=single_img,
+                          integer_mask=big_integer_mask[:, pad_w:pad_w + w_img, pad_h:pad_h + h_img])
 
     # this is the generic function which has all the options unspecified
     def process_batch_imgs(self,
