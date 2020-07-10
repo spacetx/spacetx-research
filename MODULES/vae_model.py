@@ -318,18 +318,18 @@ class CompositionalVae(torch.nn.Module):
         """
         n_boxes, batch_shape, ch_in, w, h = mixing_k.shape
         assert ch_in == 1
-        ch_out = (radius_nn + 1) * (radius_nn + 1)
-        pad = radius_nn+1
-        edges = torch.zeros((batch_shape, ch_out, w, h), device=mixing_k.device, dtype=mixing_k.dtype)
 
         # Pad width and height with zero before rolling to avoid spurious connections due to PBC
+        pad = radius_nn+1
         pad_mixing_k = F.pad(mixing_k, pad=[pad, pad, pad, pad], mode="constant", value=0.0)
-        for ch, rolled in enumerate(roller_2d_first_quadrant(pad_mixing_k, radius_nn=radius_nn)):
-            pad_mixing_k_shifted, dx, dy = rolled
-            if (dx == 0) and (dy == 0):
-                edges[:, ch] = pad_mixing_k.sum(dim=-5)[:, 0, pad:(pad + w), pad:(pad + h)]
-            else:
-                edges[:, ch] = (pad_mixing_k * pad_mixing_k_shifted).sum(dim=-5)[:, 0, pad:(pad + w), pad:(pad + h)]
+        pad_is_instance = pad_mixing_k > 0.5
+
+        # Prepare storage
+        ch_out = (radius_nn + 1) * (radius_nn + 1)
+        edges = torch.zeros((batch_shape, ch_out, w, h), device=mixing_k.device, dtype=torch.uint8)
+        for ch, rolled in enumerate(roller_2d_first_quadrant(pad_is_instance, radius_nn=radius_nn)):
+            pad_is_instance_shifted, dx, dy = rolled
+            edges[:, ch] = (pad_is_instance * pad_is_instance_shifted).sum(dim=-5)[:, 0, pad:(pad + w), pad:(pad + h)]
         return edges
 
     def segment(self, batch_imgs,
@@ -341,7 +341,6 @@ class CompositionalVae(torch.nn.Module):
                 radius_nn: int = 2):
         """ Edges: shape batch, radius_NN * radius_NN, width, height
             In each channel stores
-
         """
 
         n_objects_max = self.input_img_dict["n_objects_max"] if n_objects_max is None else n_objects_max
@@ -364,7 +363,7 @@ class CompositionalVae(torch.nn.Module):
             edges = self.compute_edges(mixing_k, radius_nn=radius_nn)
 
             most_likely_mixing, index = torch.max(mixing_k, dim=-5, keepdim=True)  # 1, batch_size, 1, w, h
-            int_seg_mask = ((most_likely_mixing > 0.5) * (index + 1)).squeeze(-5)  # bg = 0 fg = 1,2,3,...
+            int_seg_mask = ((most_likely_mixing > 0.5) * (index + 1)).squeeze(-5).to(dtype=torch.int32)  # bg = 0 fg = 1,2,3,...
 
             if draw_boxes:
                 bounding_boxes = draw_bounding_boxes(prob=inference.prob,
@@ -449,7 +448,7 @@ class CompositionalVae(torch.nn.Module):
                     big_edges = torch.zeros((edges.shape[-3], w_paddded, h_padded),
                                             device=edges.device, dtype=edges.dtype)
                     big_integer_mask = torch.zeros((integer_mask.shape[-3], w_paddded, h_padded),
-                                                   device=edges.device, dtype=edges.dtype)
+                                                   device=integer_mask.device, dtype=integer_mask.dtype)
 
                 for b, ij in enumerate(ij_list):
 
@@ -465,18 +464,14 @@ class CompositionalVae(torch.nn.Module):
                                          ij[1]:(ij[1]+crop_size[1])] = shifted_integer_mask
 
             # Remove possible missing values in the big_integer_mask
-            time_start = time.time()
-            bin_count = torch.bincount(big_integer_mask[0, pad_w:pad_w+w_img, pad_h:pad_h+h_img].flatten().int())
-            new_label = (torch.cumsum(bin_count > 0, dim=0) - 1).float()
+            bin_count = torch.bincount(big_integer_mask[0, pad_w:pad_w+w_img, pad_h:pad_h+h_img].flatten())
+            old2new_label = torch.cumsum(bin_count > 0, dim=0) - 1 # conversion old -> new
 
-            for old_label, count in enumerate(bin_count):
-                if (count > 0) and (old_label > 0):
-                    big_integer_mask[big_integer_mask == old_label] = new_label[old_label]
-            print("--- remove missing values %s ---" % (time.time()-time_start))
-
-            return TILING(co_object=big_edges[:, pad_w:pad_w + w_img, pad_h:pad_h + h_img]/n_prediction,
+            return TILING(co_object=big_edges[:, pad_w:pad_w + w_img, pad_h:pad_h + h_img].float()/n_prediction,
                           raw_img=single_img,
-                          integer_mask=big_integer_mask[:, pad_w:pad_w + w_img, pad_h:pad_h + h_img])
+                          integer_mask=old2new_label[big_integer_mask[:,
+                                                     pad_w:pad_w + w_img,
+                                                     pad_h:pad_h + h_img].long()].to(dtype=big_integer_mask.dtype))
 
     # this is the generic function which has all the options unspecified
     def process_batch_imgs(self,
@@ -542,7 +537,7 @@ class CompositionalVae(torch.nn.Module):
                                        draw_image=draw_image,
                                        draw_boxes=draw_boxes,
                                        verbose=verbose,
-                                       noisy_sampling=True, #True if self.training else False,
+                                       noisy_sampling=True,  # True if self.training else False,
                                        prob_corr_factor=getattr(self, "prob_corr_factor", 0.0),
                                        overlap_threshold=self.nms_dict.get("overlap_threshold", 0.3),
                                        n_objects_max=self.input_img_dict["n_objects_max"],

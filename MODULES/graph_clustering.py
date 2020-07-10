@@ -6,7 +6,6 @@ import leidenalg as la
 import igraph as ig
 import functools 
 from MODULES.namedtuple import COMMUNITY, Adjacency, TILING, SimplifiedPartition
-# from MODULES.utilities import roller_2d
 from MODULES.utilities import roller_2d_first_quadrant
 from typing import Optional
 from matplotlib import pyplot as plt
@@ -41,14 +40,12 @@ class GraphSegmentation(object):
         self.tiling = tiling
         self.device = self.tiling.raw_img.device
         ch, self.nx, self.ny = self.tiling.co_object.shape
-        #self.radius_nn = int(numpy.sqrt(ch) - 1) // 2
-        #self.ch_edge_ii = (ch - 1)//2
         self.radius_nn = int(numpy.sqrt(ch) - 1)
         self.ch_edge_ii = 0
         print("radius_nn ->", self.radius_nn)
         print("ch_e_ii -->", self.ch_edge_ii)
         
-        self.fg_mask = self.tiling.co_object[self.ch_edge_ii] > 0.25
+        self.fg_mask = self.tiling.co_object[self.ch_edge_ii] > 0.1
         
         ix_matrix, iy_matrix = torch.meshgrid([torch.arange(self.nx, dtype=torch.long, device=self.device),
                                                torch.arange(self.ny, dtype=torch.long, device=self.device)])
@@ -60,7 +57,6 @@ class GraphSegmentation(object):
         self.index_matrix[self.x_coordinate_fg_pixel, self.y_coordinate_fg_pixel] = self.index_array
         print("n_fg_pixel -->", self.n_fg_pixel)
 
-        self.adj = self._build_adjacency()
         self.graph = self._build_graph(adj=self._build_adjacency())
         self._clusters = None
 
@@ -75,20 +71,22 @@ class GraphSegmentation(object):
 
     def _build_adjacency(self):
         w_list, i_list, j_list = [], [], []
-        
+
         pad_list = [self.radius_nn+1, self.radius_nn+1, self.radius_nn+1, self.radius_nn+1]
         pad_index_matrix = F.pad(self.index_matrix, pad=pad_list, mode="constant", value=-1)
         pad_fg_mask = F.pad(self.fg_mask, pad=pad_list, mode="constant", value=False)
         pad_weight = F.pad(self.tiling.co_object, pad=pad_list, mode="constant", value=0.0)
-        
-        for ch, pad_index_matrix_shifted in enumerate(roller_2d_first_quadrant(pad_index_matrix, radius_nn=self.radius_nn)):
-            
+
+        for ch, rolled in enumerate(roller_2d_first_quadrant(pad_index_matrix, radius_nn=self.radius_nn)):
+            pad_index_matrix_shifted, dx, dy = rolled
+
             w = pad_weight[ch][pad_fg_mask]
             i = pad_index_matrix[pad_fg_mask]
             j = pad_index_matrix_shifted[pad_fg_mask]
 
+            # Do not add loops.
             my_filter = (i >= 0) * (j >= 0) * (w > 0.01) * (i != j)  # avoid self loop
-            
+
             w_list += w[my_filter].cpu().numpy().tolist()
             i_list += i[my_filter].cpu().numpy().tolist()
             j_list += j[my_filter].cpu().numpy().tolist()
@@ -97,35 +95,29 @@ class GraphSegmentation(object):
 
     def _build_graph(self, adj: Adjacency):
 
-        vertex_list = [n for n in range(self.n_fg_pixel)]
+        vertex_ids = [n for n in range(self.n_fg_pixel)]
         edgelist = list(zip(adj.source, adj.destination))
-        graph = ig.Graph(vertex_attrs={"label": vertex_list}, edges=edgelist, directed=False)
+        graph = ig.Graph(vertex_attrs={"label": vertex_ids, "size": [1] * self.n_fg_pixel},
+                         edges=edgelist,
+                         edge_attrs={"weight": adj.weight},
+                         directed=False)
 
-        # Compute the sum of the edges connected to each vertex
-        i_array = torch.tensor(adj.source, dtype=torch.long, device=self.device)
-        j_array = torch.tensor(adj.destination, dtype=torch.long, device=self.device)
-        w_array = torch.tensor(adj.edge_weight, dtype=torch.float, device=self.device)
-        d = torch.zeros(self.n_fg_pixel, dtype=torch.float, device=self.device)
-        for v in vertex_list:
-            mask = ((i_array == v) + (j_array == v)) > 0  # check either source or destination involve vertex v
-            d[v] = w_array[mask].sum()
-        w_array /= torch.sqrt(d[i_array]*d[j_array])
-        graph.es['weight'] = list(w_array)
+        # Sometimes people normalize e_ij -> e_ij / sqrt(d_i d_j) where d_i = sum_j e_ij
+        # After normalization sum_j e_ij ~ 1 for all vertex.
+        # It is unclear if I need this or not
 
-        #graph.es['weight'] = adj.edge_weight
+#         # Compute the sum of the edges connected to each vertex
+#         i_array = torch.tensor(adj.source, dtype=torch.long, device=self.device)
+#         j_array = torch.tensor(adj.destination, dtype=torch.long, device=self.device)
+#         w_array = torch.tensor(adj.edge_weight, dtype=torch.float, device=self.device)
+#         d = torch.zeros(self.n_fg_pixel, dtype=torch.float, device=self.device)
+#         for v in vertex_list:
+#             mask = ((i_array == v) + (j_array == v)) > 0  # check either source or destination involve vertex v
+#             d[v] = w_array[mask].sum()
+#         w_array /= torch.sqrt(d[i_array]*d[j_array])
+#         graph.es['weight'] = list(w_array.cpu().numpy())
         return graph
     
-###    @functools.lru_cache(maxsize=10)
-###    def find_profile(self, resolution_range=(0.01, 0.1)):
-###        optimiser = la.Optimiser()
-###        profile = optimiser.resolution_profile(self.graph, la.CPMVertexPartition,
-###                                               resolution_range=resolution_range,
-###                                               weights=self.graph.es['weight'])
-###        return profile
-###    def profile_2_communities(self, profile, size_threshold: int = 10):
-###        communities = [self.partition_2_community(partition, size_threshold) for partition in profile]
-###        return communities
-
     @functools.lru_cache(maxsize=10)
     def find_partition(self, resolution: int = 0.03, each_connected_component_separately: bool = True):
 
@@ -142,6 +134,7 @@ class GraphSegmentation(object):
                                       partition_type=la.CPMVertexPartition, #la.RBConfigurationVertexPartition, #la.RBERVertexPartition, #la.CPMVertexPartition,
                                       initial_membership=None,  # start from singleton
                                       weights=g.es['weight'],
+                                      node_sizes=g.vs['size'],
                                       n_iterations=2,
                                       resolution_parameter=resolution)
 
@@ -157,6 +150,7 @@ class GraphSegmentation(object):
                                           partition_type=la.CPMVertexPartition, #la.RBConfigurationVertexPartition, #la.RBERVertexPartition, #la.CPMVertexPartition,
                                           initial_membership=None,  # start from singleton
                                           weights=self.graph.es['weight'],
+                                          node_sizes=self.graph.vs['size'],
                                           n_iterations=2,
                                           resolution_parameter=resolution)
             return partition
@@ -189,21 +183,32 @@ class GraphSegmentation(object):
         w = [0, community.mask.shape[-2], 0, community.mask.shape[-1]] if windows is None else windows
         sizes_fg = numpy.bincount(community.mask.flatten())[1:]
 
-        figure, axes = plt.subplots(ncols=2, nrows=2, figsize=figsize)
+        figure, axes = plt.subplots(ncols=2, nrows=3, figsize=figsize)
         axes[0, 0].imshow(skimage.color.label2rgb(community.mask[w[0]:w[1], w[2]:w[3]],
                                                   numpy.zeros_like(community.mask[w[0]:w[1], w[2]:w[3]]),
                                                   alpha=1.0,
                                                   bg_label=0))
         axes[0, 1].imshow(skimage.color.label2rgb(community.mask[w[0]:w[1], w[2]:w[3]],
-                                                  self.tiling.raw_img[0, w[0]:w[1], w[2]:w[3]].cpu(),
+                                                  self.tiling.raw_img[0, w[0]:w[1], w[2]:w[3]].cpu().numpy(),
                                                   alpha=0.25,
                                                   bg_label=0))
-        axes[1, 0].imshow(self.tiling.raw_img[0, w[0]:w[1], w[2]:w[3]].cpu(), cmap='gray')
-        axes[1, 1].hist(sizes_fg, **kargs)
+        axes[1, 0].imshow(skimage.color.label2rgb(self.tiling.integer_mask[0, w[0]:w[1], w[2]:w[3]].cpu().numpy(),
+                                                  numpy.zeros_like(community.mask[w[0]:w[1], w[2]:w[3]]),
+                                                  alpha=1.0,
+                                                  bg_label=0))
+        axes[1, 1].imshow(skimage.color.label2rgb(self.tiling.integer_mask[0, w[0]:w[1], w[2]:w[3]].cpu().numpy(),
+                                                  self.tiling.raw_img[0, w[0]:w[1], w[2]:w[3]].cpu().numpy(),
+                                                  alpha=0.25,
+                                                  bg_label=0))
+        axes[2, 0].imshow(self.tiling.raw_img[0, w[0]:w[1], w[2]:w[3]].cpu(), cmap='gray')
+        axes[2, 1].hist(sizes_fg, **kargs)
+
         axes[0, 0].set_title("N = "+str(community.n))
         axes[0, 1].set_title("resolution = "+str(community.resolution))
-        axes[1, 0].set_title("raw image")
-        axes[1, 1].set_title("size distribution")
+        axes[1, 0].set_title("one segmentation")
+        axes[1, 1].set_title("one segmentation")
+        axes[2, 0].set_title("raw image")
+        axes[2, 1].set_title("size distribution")
 
     def plot_seg_masks(self, masks, ncols: int = 4, figsize: tuple = (20, 20)):
         assert isinstance(masks, list)
