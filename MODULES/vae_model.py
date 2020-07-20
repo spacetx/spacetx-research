@@ -249,7 +249,6 @@ class CompositionalVae(torch.nn.Module):
             else:
                 ma_dict = input_dict
 
-
         # Note that I clamp in_place
         with torch.no_grad():
             f_balance = self.geco_balance_factor.data.clamp_(min=min(self.geco_dict["factor_balance_range"]),
@@ -266,8 +265,6 @@ class CompositionalVae(torch.nn.Module):
         assert nll_av.shape == reg_av.shape == kl_av.shape == sparsity_av.shape
 
         loss_vae = f_sparsity * sparsity_av + f_balance * (nll_av + reg_av) + (1.0 - f_balance) * kl_av
-
-
 
         # GECO BUSINESS
         if self.geco_dict["is_active"]:
@@ -310,44 +307,96 @@ class CompositionalVae(torch.nn.Module):
                                length_GP=inference.length_scale_GP.detach(),
                                n_obj_counts=n_obj_counts)
 
-    def compute_edges(self, mixing_k: torch.tensor, radius_nn: int = 2):
-        """ INPUT:  mixing_k of shape --> n_boxes, batch_shape, 1, w, h
-            OUTPUT: edge of shape ------>          batch_shape, (2*r+1)*(2*r+1), w, h
-            where each channels contains the value of e_ij = sum_{k} sqrt(mixing_{i,k} mixing_{j,k})
-            and j is the pixels shifted by ....
+    @staticmethod
+    def compute_similarity(mixing_k: torch.tensor, radius_nn: int = 2) -> Similarity:
+        """ Compute the similarity between two pixels by computing the cosine distance between mixing_k
+            describing the probabilityh that each pixel belong to a given foreground instance
+
+            INPUT: mixing_k of shape --> n_boxes, batch_shape, 1, w, h
+            OUTPUT: similarity of shape ------>   batch_shape, ch_out, w, h
+            where ch_out = ((2*radius + 1)**2 -1)//2
+            Each channel has the similarity between pixel and pixel shifted by dx,dy
         """
+        time0 = time.time()
         n_boxes, batch_shape, ch_in, w, h = mixing_k.shape
         assert ch_in == 1
 
         # Pad width and height with zero before rolling to avoid spurious connections due to PBC
-        pad = radius_nn+1
+        pad = radius_nn + 1
         pad_mixing_k = F.pad(mixing_k, pad=[pad, pad, pad, pad], mode="constant", value=0.0)
-        pad_is_instance = pad_mixing_k > 0.5
 
         # Prepare storage
-        ch_out = (radius_nn + 1) * (radius_nn + 1)
-        edges = torch.zeros((batch_shape, ch_out, w, h), device=mixing_k.device, dtype=torch.uint8)
-        for ch, rolled in enumerate(roller_2d_first_quadrant(pad_is_instance, radius_nn=radius_nn)):
-            pad_is_instance_shifted, dx, dy = rolled
-            edges[:, ch] = (pad_is_instance * pad_is_instance_shifted).sum(dim=-5)[:, 0, pad:(pad + w), pad:(pad + h)]
-        return edges
+        ch_out = int(((2 * radius_nn + 1) ** 2 - 1)/2)  # this is the number of point NN points
+
+        #edges_type = 'hard'
+        #edges_type = 'dot_product'
+        #edges_type = "l2_norm"
+        edges_type = "l1_norm"
+
+        if edges_type == 'hard':
+            print(edges_type)
+            pad_is_instance = pad_mixing_k > 0.5
+            ch_to_dxdy = []
+            similarity = torch.zeros((batch_shape, ch_out, w, h), device=mixing_k.device, dtype=torch.uint8)
+            for ch, rolled in enumerate(roller_2d(pad_is_instance, radius=radius_nn)):
+                pad_is_instance_shifted, dx, dy = rolled
+                ch_to_dxdy.append([dx, dy])
+                similarity[:, ch] = (pad_is_instance *
+                                     pad_is_instance_shifted).sum(dim=-5)[:, 0, pad:(pad + w), pad:(pad + h)]
+
+        elif edges_type == 'dot_product':
+            print(edges_type)
+            ch_to_dxdy = []
+            similarity = torch.zeros((batch_shape, ch_out, w, h), device=mixing_k.device, dtype=mixing_k.dtype)
+            for ch, rolled in enumerate(roller_2d(pad_mixing_k, radius=radius_nn)):
+                pad_mixing_k_shifted, dx, dy = rolled
+                ch_to_dxdy.append([dx, dy])
+                similarity[:, ch] = (pad_mixing_k *
+                                     pad_mixing_k_shifted).sum(dim=-5)[:, 0, pad:(pad + w), pad:(pad + h)]
+
+        elif edges_type == 'l2_norm':
+            print(edges_type)
+            ch_to_dxdy = []
+            similarity = torch.zeros((batch_shape, ch_out, w, h), device=mixing_k.device, dtype=mixing_k.dtype)
+            for ch, rolled in enumerate(roller_2d(pad_mixing_k, radius=radius_nn)):
+                pad_mixing_k_shifted, dx, dy = rolled
+                ch_to_dxdy.append([dx, dy])
+                l2_norm = (pad_mixing_k - pad_mixing_k_shifted).pow(2).sum(dim=-5).sqrt()
+                similarity[:, ch] = l2_norm[:, 0, pad:(pad + w), pad:(pad + h)]
+                # print("debug", dx, dy, torch.max(similarity[:, ch]))
+
+        elif edges_type == 'l1_norm':
+            print(edges_type)
+            ch_to_dxdy = []
+            similarity = torch.zeros((batch_shape, ch_out, w, h), device=mixing_k.device, dtype=mixing_k.dtype)
+            for ch, rolled in enumerate(roller_2d(pad_mixing_k, radius=radius_nn)):
+                pad_mixing_k_shifted, dx, dy = rolled
+                ch_to_dxdy.append([dx, dy])
+                l2_norm = (pad_mixing_k - pad_mixing_k_shifted).abs().sum(dim=-5)
+                similarity[:, ch] = l2_norm[:, 0, pad:(pad + w), pad:(pad + h)]
+                # print("debug", dx, dy, torch.max(similarity[:, ch]))
+
+        else:
+            raise Exception("not recognized edges_type")
+
+        print("--- similarity time %s ---" % (time.time() - time0))
+        return Similarity(data=similarity, ch_to_dxdy=ch_to_dxdy)
 
     def segment(self, batch_imgs,
                 n_objects_max: Optional[int] = None,
                 prob_corr_factor: Optional[float] = None,
                 overlap_threshold: Optional[float] = None,
-                draw_boxes: bool = False,
                 noisy_sampling: bool = True,
-                radius_nn: int = 2):
-        """ Edges: shape batch, radius_NN * radius_NN, width, height
-            In each channel stores
-        """
+                draw_boxes: bool = False,
+                radius_nn: int = 2) -> Segmentation:
+        """ Segment the batch of images """
 
         n_objects_max = self.input_img_dict["n_objects_max"] if n_objects_max is None else n_objects_max
         prob_corr_factor = getattr(self, "prob_corr_factor", 0.0) if prob_corr_factor is None else prob_corr_factor
         overlap_threshold = self.nms_dict["overlap_threshold"] if overlap_threshold is None else overlap_threshold
 
         with torch.no_grad():
+            time0 = time.time()
             inference = self.inference_and_generator(imgs_in=batch_imgs,
                                                      generate_synthetic_data=False,
                                                      prob_corr_factor=prob_corr_factor,
@@ -357,33 +406,37 @@ class CompositionalVae(torch.nn.Module):
                                                      noisy_sampling=noisy_sampling,
                                                      bg_is_zero=True,
                                                      bg_resolution=(1, 1))
+            time1 = time.time()
+            print("--- inference time %s ---" % (time1 - time0))
 
-            # make the segmentation mask (one integer for each object)
             mixing_k = inference.big_mask * inference.prob[..., None, None, None]
-            edges = self.compute_edges(mixing_k, radius_nn=radius_nn)
 
+            # Now compute fg_prob, integer_segmentation_mask, similarity
             most_likely_mixing, index = torch.max(mixing_k, dim=-5, keepdim=True)  # 1, batch_size, 1, w, h
-            int_seg_mask = ((most_likely_mixing > 0.5) * (index + 1)).squeeze(-5).to(dtype=torch.int32)  # bg = 0 fg = 1,2,3,...
+            integer_mask = ((most_likely_mixing > 0.5) * (index + 1)).squeeze(-5).to(dtype=torch.int32)  # bg = 0 fg = 1,2,3,...
 
-            if draw_boxes:
-                bounding_boxes = draw_bounding_boxes(prob=inference.prob,
-                                                     bounding_box=inference.bounding_box,
-                                                     width=int_seg_mask.shape[-2],
-                                                     height=int_seg_mask.shape[-1])
-            else:
-                bounding_boxes = torch.zeros_like(int_seg_mask)
+            fg_prob = torch.sum(mixing_k, dim=-5)  # sum over instances
 
-        return bounding_boxes + int_seg_mask, edges
+            bounding_boxes = draw_bounding_boxes(prob=inference.prob,
+                                                 bounding_box=inference.bounding_box,
+                                                 width=integer_mask.shape[-2],
+                                                 height=integer_mask.shape[-1]) if draw_boxes else None
 
-    def tiling(self,
-               single_img: torch.Tensor,
-               crop_size: tuple,
-               stride: tuple,
-               n_objects_max_per_patch: Optional[int] = None,
-               prob_corr_factor: Optional[float] = None,
-               overlap_threshold: Optional[float] = None,
-               radius_nn: int = 2,
-               batch: int = 64):
+            return Segmentation(raw_image=batch_imgs,
+                                fg_prob=fg_prob,
+                                integer_mask=integer_mask,
+                                bounding_boxes=bounding_boxes,
+                                similarity=CompositionalVae.compute_similarity(mixing_k, radius_nn=radius_nn))
+
+    def segment_with_tiling(self,
+                            single_img: torch.Tensor,
+                            crop_size: tuple,
+                            stride: tuple,
+                            n_objects_max_per_patch: Optional[int] = None,
+                            prob_corr_factor: Optional[float] = None,
+                            overlap_threshold: Optional[float] = None,
+                            radius_nn: int = 2,
+                            batch: int = 64) -> Segmentation:
         """ Uses a sliding window approach to collect a co_objectiveness information
             about the pixels of a large image """
 
@@ -394,17 +447,21 @@ class CompositionalVae(torch.nn.Module):
 
         assert crop_size[0] % stride[0] == 0, "crop and stride size are NOT compatible"
         assert crop_size[1] % stride[1] == 0, "crop and stride size are NOT compatible"
-        assert len(single_img.shape) == 3
+        assert len(single_img.shape) == 3  # ch, w, h
 
         with torch.no_grad():
 
             w_img, h_img = single_img.shape[-2:]
+            index_matrix = torch.arange(torch.numel(single_img[0]),
+                                        dtype=torch.long,
+                                        device=single_img.device).view_as(single_img[0])
             n_prediction = (crop_size[0]//stride[0]) * (crop_size[1]//stride[1])
             print(f'Each pixel will be segmented {n_prediction} times')
 
             pad_w = crop_size[0] - stride[0]
             pad_h = crop_size[1] - stride[1]
             pad_list = [pad_w, crop_size[0], pad_h, crop_size[1]]
+            index_matrix_padded = F.pad(index_matrix, pad=pad_list, mode='constant', value=-1)
             try:
                 img_padded = F.pad(single_img.unsqueeze(0),
                                    pad=pad_list, mode='reflect')  # 1, ch_in, w_pad, h_pad
@@ -424,7 +481,7 @@ class CompositionalVae(torch.nn.Module):
             ij_list_of_list = [location_of_corner[n:n + batch] for n in range(0, len(location_of_corner), batch)]
 
             # Build a batch of images and process them
-            big_edges, big_integer_mask = None, None
+            big_similarity, big_integer_mask = None, None
             n_instances_tot = 0
             for n, ij_list in enumerate(ij_list_of_list):
                 
@@ -435,43 +492,68 @@ class CompositionalVae(torch.nn.Module):
                 if (n % 100 == 0) or (n == len(ij_list_of_list)-1):
                     print(f'{n} out of {len(ij_list_of_list)-1} -> batch_of_imgs.shape = {batch_imgs.shape}') 
 
-                # Segment the batch 
-                integer_mask, edges = self.segment(batch_imgs,
-                                                   n_objects_max=n_objects_max_per_patch,
-                                                   prob_corr_factor=prob_corr_factor,
-                                                   overlap_threshold=overlap_threshold,
-                                                   draw_boxes=False,
-                                                   noisy_sampling=True,
-                                                   radius_nn=radius_nn)
+                # Segment the batch
+                time0 = time.time()
+                segmentation = self.segment(batch_imgs,
+                                            n_objects_max=n_objects_max_per_patch,
+                                            prob_corr_factor=prob_corr_factor,
+                                            overlap_threshold=overlap_threshold,
+                                            noisy_sampling=True,
+                                            draw_boxes=False,
+                                            radius_nn=radius_nn)
+                time1 = time.time()
+                print("--- all segmentation time %s ---" % (time1 - time0))
 
-                if big_edges is None:
-                    big_edges = torch.zeros((edges.shape[-3], w_paddded, h_padded),
-                                            device=edges.device, dtype=edges.dtype)
-                    big_integer_mask = torch.zeros((integer_mask.shape[-3], w_paddded, h_padded),
-                                                   device=integer_mask.device, dtype=integer_mask.dtype)
+                if big_similarity is None:
+                    csr_similarity = None
+                    big_similarity = torch.zeros((segmentation.similarity.data.shape[-3], w_paddded, h_padded),
+                                                 device=segmentation.similarity.data.device,
+                                                 dtype=segmentation.similarity.data.dtype)
+                    big_fg_prob = torch.zeros((w_paddded, h_padded),
+                                              device=segmentation.fg_prob.device,
+                                              dtype=segmentation.fg_prob.dtype)
+                    big_integer_mask = torch.zeros((w_paddded, h_padded),
+                                                   device=segmentation.integer_mask.device,
+                                                   dtype=segmentation.integer_mask.dtype)
 
                 for b, ij in enumerate(ij_list):
 
-                    big_edges[:, ij[0]:(ij[0]+crop_size[0]), ij[1]:(ij[1]+crop_size[1])] += edges[b, :, :, :]
+                    csr_similarity_delta =
+
+                    big_similarity[:, ij[0]:(ij[0]+crop_size[0]),
+                                      ij[1]:(ij[1]+crop_size[1])] += segmentation.similarity.data[b, :, :, :]
+                    big_fg_prob[ij[0]:(ij[0]+crop_size[0]),
+                                ij[1]:(ij[1]+crop_size[1])] += segmentation.fg_prob[b, 0, :, :]
 
                     # Find a set of not-overlapping tiles to obtain a sample segmentation (without graph clustering)
                     if ((ij[0] - pad_w) % crop_size[0] == 0) and ((ij[1] - pad_h) % crop_size[1] == 0):
-                        n_instances = torch.max(integer_mask[b])
-                        shifted_integer_mask = (integer_mask[b] > 0) * (integer_mask[b] + n_instances_tot)
+                        n_instances = torch.max(segmentation.integer_mask[b])
+                        shifted_integer_mask = (segmentation.integer_mask[b] > 0) * \
+                                               (segmentation.integer_mask[b] + n_instances_tot)
                         n_instances_tot += n_instances
-                        big_integer_mask[:,
-                                         ij[0]:(ij[0]+crop_size[0]),
+                        big_integer_mask[ij[0]:(ij[0]+crop_size[0]),
                                          ij[1]:(ij[1]+crop_size[1])] = shifted_integer_mask
 
-            # Remove possible missing values in the big_integer_mask
-            bin_count = torch.bincount(big_integer_mask[0, pad_w:pad_w+w_img, pad_h:pad_h+h_img].flatten())
-            old2new_label = torch.cumsum(bin_count > 0, dim=0) - 1 # conversion old -> new
+                time2 = time.time()
+                print("--- all the rest %s ---" % (time2 - time1))
 
-            return TILING(co_object=big_edges[:, pad_w:pad_w + w_img, pad_h:pad_h + h_img].float()/n_prediction,
-                          raw_img=single_img,
-                          integer_mask=old2new_label[big_integer_mask[:,
-                                                     pad_w:pad_w + w_img,
-                                                     pad_h:pad_h + h_img].long()].to(dtype=big_integer_mask.dtype))
+            # Normalize the similarity
+            big_similarity_normalized = big_similarity[...,
+                                                       pad_w:pad_w + w_img,
+                                                       pad_h:pad_h + h_img].float()/n_prediction
+
+            # Remove possible missing values in the big_integer_mask
+            big_integer_mask = big_integer_mask[pad_w:pad_w + w_img, pad_h:pad_h + h_img]
+            original_type = big_integer_mask.dtype
+            bin_count = torch.bincount(big_integer_mask.flatten())
+            old2new_label = torch.cumsum(bin_count > 0, dim=0) - 1  # conversion old -> new
+            integer_mask_no_gaps = old2new_label[big_integer_mask.long()].to(original_type)
+
+            return Segmentation(raw_image=single_img[None],
+                                fg_prob=big_fg_prob[None, None, pad_w:pad_w + w_img, pad_h:pad_h + h_img],
+                                integer_mask=integer_mask_no_gaps[None, None],
+                                bounding_boxes=None,
+                                similarity=segmentation.similarity._replace(data=big_similarity_normalized[None]))
 
     # this is the generic function which has all the options unspecified
     def process_batch_imgs(self,

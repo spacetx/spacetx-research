@@ -1,35 +1,17 @@
 import torch
 import numpy
-from typing import NamedTuple
+from typing import NamedTuple, Optional, Tuple
 
 #  ----------------------------------------------------------------  #
 #  ------- Stuff defined in terms of native types -----------------  #
 #  ----------------------------------------------------------------  #
 
-class SimplifiedPartition(NamedTuple):
-    sizes: list
-    membership: list
-    resolution_parameter: float
-    modularity: float
 
-
-class COMMUNITY(NamedTuple):
-    mask: numpy.array
-    n: int
-    modularity: float
-    resolution: float
-
-
-class Adjacency(NamedTuple):
-    edge_weight: list
-    source: list
-    destination: list
-
-
-class TILING(NamedTuple):
-    co_object: torch.Tensor  # NN, w, h   where NN = (2r+1)*(2*r+1)
-    raw_img: torch.Tensor  # ch,w,h
-    integer_mask: torch.Tensor  # 1,w,h
+class Partition(NamedTuple):
+    type: str
+    membership: torch.tensor  # bg=0, fg=1,2,3,.....
+    sizes: torch.tensor  # both for bg and fg. It is simply obtained by numpy.bincount(membership)
+    params: dict
 
 
 class DIST(NamedTuple):
@@ -59,9 +41,53 @@ class Checkpoint(NamedTuple):
     hyperparams_dict: dict
     history_dict: dict
 
+
+class Similarity(NamedTuple):
+    data: torch.tensor  # *, nn, w, h where nn = ((2*r+1)^2 -1)//2
+    ch_to_dxdy: list  # [(dx0,dy0),(dx1,dy1),....]  of lenght nn
+
+    def reduce_similarity_radius(self, new_radius: int):
+
+        # Check which element should be selected
+        to_select = [(abs(dxdy[0]) <= new_radius and abs(dxdy[1]) <= new_radius) for dxdy in self.ch_to_dxdy]
+        all_true = sum(to_select) == len(to_select)
+        if all_true:
+            raise Exception("new radius should be smaller than current radius. No subsetting left to do")
+
+        # Subsample the ch_to_dxdy
+        new_ch_to_dxdy = []
+        for selected, dxdy in zip(to_select, self.ch_to_dxdy):
+            if selected:
+                new_ch_to_dxdy.append(dxdy)
+
+        # Subsample the similarity matrix
+        index = torch.arange(len(to_select), dtype=torch.long)[to_select]
+
+        return Similarity(data=torch.index_select(self.data, dim=-3, index=index), ch_to_dxdy=new_ch_to_dxdy)
+
+    def one_over(self):
+        return self._replace(data=1.0/self.data)
+
+
 #  ----------------------------------------------------------------  #
 #  -------Stuff defined in term of other sutff --------------------  #
 #  ----------------------------------------------------------------  #
+
+
+class Segmentation(NamedTuple):
+    """ Where * is the batch dimension which might be NOT present """
+    raw_image: torch.Tensor  # *,ch,w,h
+    fg_prob: torch.Tensor  # *,1,w,h
+    integer_mask: torch.Tensor  # *,1,w,h
+    bounding_boxes: Optional[torch.Tensor]  # *,3,w,h
+    similarity: Similarity
+
+    def reduce_similarity_radius(self, new_radius: int):
+        return self._replace(similarity=self.similarity.reduce_similarity_radius(new_radius=new_radius))
+
+    def one_over_similarity(self):
+        return self._replace(similarity=self.similarity.one_over())
+
 
 class UNEToutput(NamedTuple):
     zwhere: ZZ

@@ -1,221 +1,330 @@
 import torch
 import numpy
+import skimage.segmentation
 import skimage.color
 import torch.nn.functional as F
 import leidenalg as la
 import igraph as ig
 import functools 
-from MODULES.namedtuple import COMMUNITY, Adjacency, TILING, SimplifiedPartition
-from MODULES.utilities import roller_2d_first_quadrant
-from typing import Optional
+from MODULES.namedtuple import Segmentation, Partition, Similarity
+from typing import Optional, Union
 from matplotlib import pyplot as plt
 import time
+import hdbscan
+
+#@ TODO
+#EVERYTHING IN PYTORCH
+
+with torch.no_grad():
+
+    class GraphSegmentation(object):
+        """ Produce a consensus segmentation mask by finding communities on a graph.
+            Each node is a foreground pixel and each edge is the probabiliity that
+            spatially nearby pixels belong to the same object.
 
 
-class GraphSegmentation(object):
-    """ Produce a consensus segmentation mask by finding communities on a graph.
-        Each node is a foreground pixel and each edge is the probabiliity that
-        spatially nearby pixels belong to the same object.
-        
-        
-        Typical usage:
-        g = GraphSegmentation(tiling)
+            Typical usage:
+            g = GraphSegmentation(tiling)
 
-        disconnected_components = g.graph.clusters(mode="STRONG")
-        community1=g.partition_2_community(disconnected_components)
-        g.plot_community(community1, figsize=(20,20))
+            disconnected_components = g.graph.clusters(mode="STRONG")
+            community1=g.partition_2_community(disconnected_components)
+            g.plot_community(community1, figsize=(20,20))
 
 
-        partition = g.find_partition(resolution = 0.03)
-        community2 = g.partition_2_community(partition, size_threshold=10)
-        g.plot_community(community2, figsize=(20,20))
-    """
-    
-    def __init__(self, tiling: TILING) -> None:
-        super().__init__()
-        
-        # size = (2*r+1)*(2*r+1), w, h. Each channel contains the edges between pixel_i and pixel_j
-        assert len(tiling.co_object.shape) == 3
-        
-        self.tiling = tiling
-        self.device = self.tiling.raw_img.device
-        ch, self.nx, self.ny = self.tiling.co_object.shape
-        self.radius_nn = int(numpy.sqrt(ch) - 1)
-        self.ch_edge_ii = 0
-        print("radius_nn ->", self.radius_nn)
-        print("ch_e_ii -->", self.ch_edge_ii)
-        
-        self.fg_mask = self.tiling.co_object[self.ch_edge_ii] > 0.1
-        
-        ix_matrix, iy_matrix = torch.meshgrid([torch.arange(self.nx, dtype=torch.long, device=self.device),
-                                               torch.arange(self.ny, dtype=torch.long, device=self.device)])
-        self.x_coordinate_fg_pixel = ix_matrix[self.fg_mask]
-        self.y_coordinate_fg_pixel = iy_matrix[self.fg_mask]
-        self.n_fg_pixel = self.x_coordinate_fg_pixel.shape[0]
-        self.index_array = torch.arange(self.n_fg_pixel, dtype=torch.long, device=self.device)
-        self.index_matrix = -1*torch.ones_like(ix_matrix)
-        self.index_matrix[self.x_coordinate_fg_pixel, self.y_coordinate_fg_pixel] = self.index_array
-        print("n_fg_pixel -->", self.n_fg_pixel)
+            partition = g.find_partition(resolution = 0.03)
+            community2 = g.partition_2_community(partition, size_threshold=10)
+            g.plot_community(community2, figsize=(20,20))
+        """
 
-        self.graph = self._build_graph(adj=self._build_adjacency())
-        self._clusters = None
+        def __init__(self, segmentation: Segmentation,
+                     min_fg_prob: float = 0.1,
+                     min_edge_weight: Optional[float] = 0.01,
+                     max_edge_weight: Optional[float] = None,
+                     normalize_graph_edges: bool = False) -> None:
+            super().__init__()
 
-    @property
-    def clusters(self):
-        if self._clusters is None:
-            print("computing connected clusters")
-            start_time = time.time()
-            self._clusters = self.graph.clusters(mode="STRONG")
-            print("--- clustering time %s ---" % (time.time() - start_time))
-        return self._clusters
+            # size = (2*r+1)*(2*r+1), w, h. Each channel contains the edges between pixel_i and pixel_j
+            assert len(segmentation.similarity.data.shape) == 4  # b, ch, width, height
+            b, ch, nx, ny = segmentation.similarity.data.shape
+            assert b == 1
 
-    def _build_adjacency(self):
-        w_list, i_list, j_list = [], [], []
+            self.device = segmentation.integer_mask.device
+            self.min_edge_weight = min_edge_weight
+            self.max_edge_weight = max_edge_weight
+            self.raw_image = segmentation.raw_image[0]
+            self.example_integer_mask = segmentation.integer_mask[0]
 
-        pad_list = [self.radius_nn+1, self.radius_nn+1, self.radius_nn+1, self.radius_nn+1]
-        pad_index_matrix = F.pad(self.index_matrix, pad=pad_list, mode="constant", value=-1)
-        pad_fg_mask = F.pad(self.fg_mask, pad=pad_list, mode="constant", value=False)
-        pad_weight = F.pad(self.tiling.co_object, pad=pad_list, mode="constant", value=0.0)
+            # Build the graph only with foreground points which are connected
+            vertex_mask = segmentation.fg_prob[0, 0] > min_fg_prob
+            if min_edge_weight is not None:
+                vertex_mask *= torch.max(segmentation.similarity.data[0], dim=-3)[0] > min_edge_weight
+            if max_edge_weight is not None:
+                vertex_mask *= torch.min(segmentation.similarity.data[0], dim=-3)[0] < max_edge_weight
 
-        for ch, rolled in enumerate(roller_2d_first_quadrant(pad_index_matrix, radius_nn=self.radius_nn)):
-            pad_index_matrix_shifted, dx, dy = rolled
+            self.n_fg_pixel = torch.sum(vertex_mask).item()
+            self.radius_nn = numpy.max(segmentation.similarity.ch_to_dxdy)
 
-            w = pad_weight[ch][pad_fg_mask]
-            i = pad_index_matrix[pad_fg_mask]
-            j = pad_index_matrix_shifted[pad_fg_mask]
+            ix_matrix, iy_matrix = torch.meshgrid([torch.arange(nx, dtype=torch.long, device=self.device),
+                                                   torch.arange(ny, dtype=torch.long, device=self.device)])
+            self.x_coordinate_fg_pixel = ix_matrix[vertex_mask]
+            self.y_coordinate_fg_pixel = iy_matrix[vertex_mask]
+            self.index_matrix = -1*torch.ones_like(ix_matrix)
+            self.index_matrix[self.x_coordinate_fg_pixel, self.y_coordinate_fg_pixel] = torch.arange(self.n_fg_pixel,
+                                                                                                     dtype=torch.long,
+                                                                                                     device=self.device)
 
-            # Do not add loops.
-            my_filter = (i >= 0) * (j >= 0) * (w > 0.01) * (i != j)  # avoid self loop
+            self.graph, self.img_to_flood = self.similarity_2_graph_and_flood(similarity=segmentation.similarity,
+                                                                              normalize_graph_edges=normalize_graph_edges)
 
-            w_list += w[my_filter].cpu().numpy().tolist()
-            i_list += i[my_filter].cpu().numpy().tolist()
-            j_list += j[my_filter].cpu().numpy().tolist()
-                
-        return Adjacency(edge_weight=w_list, source=i_list, destination=j_list)
+            self.partition_connected_components = self.find_partition_connected_components()
 
-    def _build_graph(self, adj: Adjacency):
+        @staticmethod
+        def filter_by_size(input: Union[Partition,torch.tensor], min_size: int) -> torch.tensor:
+            """ If a cluster is too small, its label is set to zero (i.e. background value).
+                The subsequent labels are shifted so that there are no gaps in the labels number.
+            """
+            if isinstance(input, Partition):
+                membership = input.membership
+            else:
+                membership = input
 
-        vertex_ids = [n for n in range(self.n_fg_pixel)]
-        edgelist = list(zip(adj.source, adj.destination))
-        graph = ig.Graph(vertex_attrs={"label": vertex_ids, "size": [1] * self.n_fg_pixel},
-                         edges=edgelist,
-                         edge_attrs={"weight": adj.weight},
-                         directed=False)
+            sizes = torch.bincount(membership)
+            my_filter = sizes > min_size
+            count = torch.cumsum(my_filter, dim=-1)
+            old_2_new = (count - count[0]) * my_filter  # this makes sure that label 0 is always mapped to 0
+            new_membership = old_2_new[membership]
 
-        # Sometimes people normalize e_ij -> e_ij / sqrt(d_i d_j) where d_i = sum_j e_ij
-        # After normalization sum_j e_ij ~ 1 for all vertex.
-        # It is unclear if I need this or not
+            if isinstance(input, Partition):
+                new_dict = input.params
+                new_dict["filter_by_size"] = min_size
+                return input._replace(membership=new_membership, params=new_dict, sizes=torch.bincount(new_membership))
+            else:
+                return new_membership
 
-#         # Compute the sum of the edges connected to each vertex
-#         i_array = torch.tensor(adj.source, dtype=torch.long, device=self.device)
-#         j_array = torch.tensor(adj.destination, dtype=torch.long, device=self.device)
-#         w_array = torch.tensor(adj.edge_weight, dtype=torch.float, device=self.device)
-#         d = torch.zeros(self.n_fg_pixel, dtype=torch.float, device=self.device)
-#         for v in vertex_list:
-#             mask = ((i_array == v) + (j_array == v)) > 0  # check either source or destination involve vertex v
-#             d[v] = w_array[mask].sum()
-#         w_array /= torch.sqrt(d[i_array]*d[j_array])
-#         graph.es['weight'] = list(w_array.cpu().numpy())
-        return graph
-    
-    @functools.lru_cache(maxsize=10)
-    def find_partition(self, resolution: int = 0.03, each_connected_component_separately: bool = True):
+        def subgraphs_by_partition(self, partition: Partition, include_bg: bool = False):
+            vertex_labels = torch.tensor(self.graph.vs["label"], device=self.device)
+            n_start = 0 if include_bg else 1
+            for n in range(n_start, partition.sizes.shape[0]):
+                sub_vertex_list = vertex_labels[partition.membership == n].tolist()
+                yield self.graph.subgraph(vertices=sub_vertex_list)
 
-        if each_connected_component_separately:
+        def similarity_2_graph_and_flood(self, similarity: Similarity, normalize_graph_edges: bool = True) -> ig.Graph:
 
-            # find community in each connected cluster and then put the partition back together
-            sizes = []
-            membership = numpy.zeros(self.n_fg_pixel)
-            n_clusters = len(self.clusters.sizes())
-            for n, g in enumerate(self.clusters.subgraphs()):
-                if (n % 100) == 0:
-                    print("cluster %s out of %s" % (n, n_clusters))
+            assert similarity.data.shape[0] == 1  # making batch_shape = 1
+            assert similarity.data.shape[-2:] == self.index_matrix.shape
+
+            # Padding
+            pad_list = [self.radius_nn+1]*4
+            pad_index_matrix = F.pad(self.index_matrix, pad=pad_list, mode="constant", value=-1)
+            pad_weight = F.pad(similarity.data, pad=pad_list, mode="constant", value=0.0)
+
+            # Prepare the storage
+            i_list, j_list, e_list = [], [], []  # i,j are verteces, e=edges
+            sum_edges_at_vertex = torch.zeros(self.n_fg_pixel, device=self.device, dtype=torch.float)
+            minimum_distance_to_border = 9999 * torch.ones_like(sum_edges_at_vertex)
+
+            for ch, dxdy in enumerate(similarity.ch_to_dxdy):
+
+                pad_index_matrix_shifted = torch.roll(torch.roll(pad_index_matrix, dxdy[0], dims=-2), dxdy[1], dims=-1)
+
+                data = pad_weight[0, ch].flatten()
+                row_ind = pad_index_matrix.flatten()
+                col_ind = pad_index_matrix_shifted.flatten()
+
+                # Do not add loops.
+                my_filter = (row_ind >= 0) * (col_ind >= 0)
+
+                e = data[my_filter]
+                i = row_ind[my_filter]
+                j = col_ind[my_filter]
+
+                # compute the sum of edges touching any vertex
+                sum_edges_at_vertex[i] += e
+                sum_edges_at_vertex[j] += e
+
+                # convert torch to numpy to list
+                e_list += e.tolist()
+                i_list += i.tolist()
+                j_list += j.tolist()
+
+    ####            # Minimum distance to a pixel of the wrong type
+    ####            new_min = minimum_distance_to_border.clamp(max=distance)
+    ####            #print(dxdy, new_min)
+    ####
+    ####            new_filter = e < 0.25  # Pixel ij are both fg and of opposite type
+    ####            minimum_distance_to_border[i[new_filter]] = new_min[i[new_filter]]
+    ####            minimum_distance_to_border[j[new_filter]] = new_min[j[new_filter]]
+    ####
+    ####            i_fg_and_j_bg = (row_ind >= 0) * (col_ind < 0)
+    ####            i_bg_and_j_fg = (row_ind < 0) * (col_ind >= 0)
+    ####            minimum_distance_to_border[row_ind[i_fg_and_j_bg]] = new_min[row_ind[i_fg_and_j_bg]]
+    ####            minimum_distance_to_border[col_ind[i_bg_and_j_fg]] = new_min[col_ind[i_bg_and_j_fg]]
+
+            # Build the image for the flooding
+            img_to_flood = torch.zeros_like(self.index_matrix).float()
+            img_to_flood[self.x_coordinate_fg_pixel,
+                         self.y_coordinate_fg_pixel] = minimum_distance_to_border
+
+            # Build the graph
+            sqrt_d = numpy.sqrt(sum_edges_at_vertex)
+            vertex_ids = [n for n in range(self.n_fg_pixel)]
+            edgelist = list(zip(i_list, j_list))
+
+            if normalize_graph_edges:
+                edge_weight = [e/(sqrt_d[i] * sqrt_d[j]) for e, i, j in zip(e_list, i_list, j_list)]
+            else:
+                edge_weight = e_list
+
+            return ig.Graph(vertex_attrs={"label": vertex_ids,
+                                          "size": [1] * self.n_fg_pixel,
+                                          "d": sum_edges_at_vertex},
+                            edges=edgelist,
+                            edge_attrs={"weight": edge_weight},
+                            directed=False), img_to_flood
+
+        def find_partition_connected_components(self, cluster_min_size=3):
+            partition = self.graph.clusters(mode="STRONG")
+            old_membership = torch.tensor(partition.membership, device=self.device, dtype=torch.long) + 1  # fg=1,2,3..
+            new_membership = GraphSegmentation.filter_by_size(input=old_membership,
+                                                              min_size=cluster_min_size)
+            print("debug connected components", torch.bincount(new_membership))
+            return Partition(type="connected_components",
+                             sizes=torch.bincount(new_membership),
+                             membership=new_membership,
+                             params={"cluster_min_size": cluster_min_size})
+
+        def find_partition_watershed(self, watershed_line: bool = False) -> Partition:
+
+            img_labels = skimage.segmentation.watershed(-self.img_to_flood.cpu().numpy(),  # minus b/c watershed starts from minima
+                                                        markers=None,
+                                                        connectivity=1,
+                                                        offset=None,
+                                                        mask=self.index_matrix.cpu().numpy() > 0,
+                                                        compactness=0,
+                                                        watershed_line=watershed_line)
+
+            sizes = list(numpy.bincount(img_labels.flatten())[1:])  # skip label=0 which is the background
+            membership = list(img_labels[self.x_coordinate_fg_pixel, self.y_coordinate_fg_pixel])
+
+            return Partition(type="watershed",
+                             sizes=sizes,
+                             membership=membership,
+                             params={"watershed_line": watershed_line})
+
+        @functools.lru_cache(maxsize=10)
+        def find_partition_leiden(self, resolution: int = 0.03) -> Partition:
+
+            max_label = 0
+            membership = torch.zeros(self.n_fg_pixel, dtype=torch.long, device=self.device)
+            for n, g in enumerate(self.subgraphs_by_partition(partition=self.partition_connected_components)):
+
                 p = la.find_partition(graph=g,
-                                      partition_type=la.CPMVertexPartition, #la.RBConfigurationVertexPartition, #la.RBERVertexPartition, #la.CPMVertexPartition,
+                                      partition_type=la.RBConfigurationVertexPartition, # la.CPMVertexPartition,
                                       initial_membership=None,  # start from singleton
                                       weights=g.es['weight'],
-                                      node_sizes=g.vs['size'],
+                                      #node_sizes=g.vs['size'],
                                       n_iterations=2,
                                       resolution_parameter=resolution)
 
-                membership[g.vs['label']] = numpy.array(p.membership) + len(sizes)
-                sizes += p.sizes()
-            return SimplifiedPartition(sizes=sizes,
-                                       membership=list(membership),
-                                       resolution_parameter=resolution,
-                                       modularity=0.0)
+                labels = torch.tensor(p.membership, device=self.device, dtype=torch.long) + 1  # bg=0, fg=1,2,3,...
+                shifted_labels = labels + max_label
+                max_label += torch.max(labels)
 
-        else:
-            partition = la.find_partition(graph=self.graph,
-                                          partition_type=la.CPMVertexPartition, #la.RBConfigurationVertexPartition, #la.RBERVertexPartition, #la.CPMVertexPartition,
-                                          initial_membership=None,  # start from singleton
-                                          weights=self.graph.es['weight'],
-                                          node_sizes=self.graph.vs['size'],
-                                          n_iterations=2,
-                                          resolution_parameter=resolution)
-            return partition
+                membership[g.vs['label']] = shifted_labels
 
-    def partition_2_community(self, partition, size_threshold: int = 10):
+            return Partition(type="leiden",
+                             sizes=torch.bincount(membership),
+                             membership=membership,
+                             params={"resolution": resolution})
 
-        if not isinstance(partition, SimplifiedPartition):
-            partition = SimplifiedPartition(sizes=partition.sizes(),
-                                            membership=partition.membership,
-                                            resolution_parameter=getattr(partition, "resolution_parameter", 0.0),
-                                            modularity=partition.modularity)
+        @functools.lru_cache(maxsize=10)
+        def find_partition_hdbscan(self) -> Partition:
 
-        cell_ids = torch.arange(start=1, end=len(partition.sizes) + 1, step=1, device=self.device)  # +1 b/c bg=0, fg=1,2,...
-        my_filter = torch.tensor(partition.sizes, device=self.device) > size_threshold
-        cell_ids *= my_filter  # this makes the small cells having id=0
-        pixel_membership = cell_ids[partition.membership]  # label for each pixel, pixel in small cells have label=0
+            def csr_similarity_2_dense_distance(csr_similarity):
+                distance = 1.0 - csr_similarity.todense()
+                distance[distance == 1] = numpy.infty
+                return distance.astype(numpy.double)
 
-        mask = torch.zeros_like(self.index_matrix, device=self.device)
-        mask[self.x_coordinate_fg_pixel, self.y_coordinate_fg_pixel] = pixel_membership
-        return COMMUNITY(mask=mask.cpu().numpy(),
-                         n=torch.sum(my_filter).cpu().numpy(),
-                         modularity=partition.modularity, 
-                         resolution=getattr(partition, "resolution_parameter", 0))
-    
-    def plot_community(self, community, figsize: Optional[tuple] = None, windows: Optional[tuple] = None, **kargs):
-        """ kargs can include:
-            density=True, bins=50, range=(10,100), ...
-        """
-        assert isinstance(community, COMMUNITY)
-        w = [0, community.mask.shape[-2], 0, community.mask.shape[-1]] if windows is None else windows
-        sizes_fg = numpy.bincount(community.mask.flatten())[1:]
+            clusterer = hdbscan.HDBSCAN(metric='precomputed', min_cluster_size=15,
+                                        min_samples=15, allow_single_cluster=True)
 
-        figure, axes = plt.subplots(ncols=2, nrows=3, figsize=figsize)
-        axes[0, 0].imshow(skimage.color.label2rgb(community.mask[w[0]:w[1], w[2]:w[3]],
-                                                  numpy.zeros_like(community.mask[w[0]:w[1], w[2]:w[3]]),
-                                                  alpha=1.0,
-                                                  bg_label=0))
-        axes[0, 1].imshow(skimage.color.label2rgb(community.mask[w[0]:w[1], w[2]:w[3]],
-                                                  self.tiling.raw_img[0, w[0]:w[1], w[2]:w[3]].cpu().numpy(),
-                                                  alpha=0.25,
-                                                  bg_label=0))
-        axes[1, 0].imshow(skimage.color.label2rgb(self.tiling.integer_mask[0, w[0]:w[1], w[2]:w[3]].cpu().numpy(),
-                                                  numpy.zeros_like(community.mask[w[0]:w[1], w[2]:w[3]]),
-                                                  alpha=1.0,
-                                                  bg_label=0))
-        axes[1, 1].imshow(skimage.color.label2rgb(self.tiling.integer_mask[0, w[0]:w[1], w[2]:w[3]].cpu().numpy(),
-                                                  self.tiling.raw_img[0, w[0]:w[1], w[2]:w[3]].cpu().numpy(),
-                                                  alpha=0.25,
-                                                  bg_label=0))
-        axes[2, 0].imshow(self.tiling.raw_img[0, w[0]:w[1], w[2]:w[3]].cpu(), cmap='gray')
-        axes[2, 1].hist(sizes_fg, **kargs)
+            # find community in each connected cluster and then put the partition back together
+            membership = torch.zeros(self.n_fg_pixel, dtype=torch.long, device=self.device)
+            n_clusters = len(self.partition_connected_components.sizes)
+            print(n_clusters)
+            max_label = 0
 
-        axes[0, 0].set_title("N = "+str(community.n))
-        axes[0, 1].set_title("resolution = "+str(community.resolution))
-        axes[1, 0].set_title("one segmentation")
-        axes[1, 1].set_title("one segmentation")
-        axes[2, 0].set_title("raw image")
-        axes[2, 1].set_title("size distribution")
+            for n, g in enumerate(self.subgraphs_by_partition(partition=self.partition_connected_components)):
 
-    def plot_seg_masks(self, masks, ncols: int = 4, figsize: tuple = (20, 20)):
-        assert isinstance(masks, list)
-        max_row = int(numpy.ceil(len(masks)/ncols))
-    
-        figure, axes = plt.subplots(ncols=ncols, nrows=max_row, figsize=figsize)
-        for n in range(len(masks)):
-            row = n//ncols
-            col = n % ncols
-            axes[row, col].imshow(skimage.color.label2rgb(masks[n], numpy.zeros_like(masks[n]), alpha=1.0, bg_label=0))
+                #if (n % 100) == 0:
+                #    print("cluster %s out of %s" % (n, n_clusters))
+
+                csr_similarity = g.get_adjacency_sparse(attribute="weight")
+                distance_matrix = csr_similarity_2_dense_distance(csr_similarity)
+                clusterer.fit(distance_matrix)  # hdbscan. -1=bg, 0,1,2,3 = fg
+                labels = torch.tensor(clusterer.labels_, device=self.device, dtype=torch.long) + 1  # bg=0, fg=1,2,3,...
+                shifted_labels = labels + max_label
+                max_label += torch.max(labels)
+
+                membership[g.vs['label']] = shifted_labels
+
+            return Partition(type="hdbscan",
+                             sizes=torch.bincount(membership),
+                             membership=membership,
+                             params={"ciao": "ciao"})
+
+        def plot_partition(self, partition: Partition,
+                           size_threshold: int = 10,
+                           figsize: Optional[tuple] = None,
+                           windows: Optional[tuple] = None,
+                           **kargs):
+            """ kargs can include:
+                density=True, bins=50, range=(10,100), ...
+            """
+
+            if size_threshold <= 0:
+                new_membership = partition.membership
+                sizes_fg = partition.sizes[1:]
+            else:
+                new_membership = self.filter_by_size(partition.membership, min_size=size_threshold)
+                sizes_fg = torch.bincount(new_membership)[1:]
+
+            n_instances = sizes_fg.shape[0]
+            segmask = torch.zeros_like(self.index_matrix, device=self.device)
+            segmask[self.x_coordinate_fg_pixel,
+                    self.y_coordinate_fg_pixel] = new_membership
+
+            w = [0, segmask.shape[-2], 0, segmask.shape[-1]] if windows is None else windows
+
+            segmask = segmask.cpu().numpy()
+            zeros_mask = numpy.zeros(segmask.shape)
+
+            figure, axes = plt.subplots(ncols=2, nrows=3, figsize=figsize)
+            axes[0, 0].imshow(skimage.color.label2rgb(segmask[w[0]:w[1], w[2]:w[3]],
+                                                      zeros_mask[w[0]:w[1], w[2]:w[3]],
+                                                      alpha=1.0,
+                                                      bg_label=0))
+            axes[0, 1].imshow(skimage.color.label2rgb(segmask[w[0]:w[1], w[2]:w[3]],
+                                                      self.raw_image[0, w[0]:w[1], w[2]:w[3]].cpu().numpy(),
+                                                      alpha=0.25,
+                                                      bg_label=0))
+            axes[1, 0].imshow(skimage.color.label2rgb(self.example_integer_mask[0, w[0]:w[1], w[2]:w[3]].cpu().numpy(),
+                                                      zeros_mask[w[0]:w[1], w[2]:w[3]],
+                                                      alpha=1.0,
+                                                      bg_label=0))
+            axes[1, 1].imshow(skimage.color.label2rgb(self.example_integer_mask[0, w[0]:w[1], w[2]:w[3]].cpu().numpy(),
+                                                      self.raw_image[0, w[0]:w[1], w[2]:w[3]].cpu().numpy(),
+                                                      alpha=0.25,
+                                                      bg_label=0))
+            axes[2, 0].imshow(self.raw_image[0, w[0]:w[1], w[2]:w[3]].cpu(), cmap='gray')
+            axes[2, 1].hist(sizes_fg, **kargs)
+
+            axes[0, 0].set_title("consensus, N_instances = "+str(n_instances))
+            axes[0, 1].set_title("consensus, N_instances = "+str(n_instances))
+            axes[1, 0].set_title("one segmentation")
+            axes[1, 1].set_title("one segmentation")
+            axes[2, 0].set_title("raw image")
+            axes[2, 1].set_title("size distribution")
+
+        def plot_cc(self):
+            return self.plot_partition(partition=self.partition_connected_components)

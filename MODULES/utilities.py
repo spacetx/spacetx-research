@@ -10,6 +10,7 @@ from torch.distributions.utils import broadcast_all
 from typing import Union, Callable, Optional, List, Tuple
 from .namedtuple import BB, DIST
 import torch.nn.functional as F
+from itertools import chain
 
 
 def downsample_and_upsample(x: torch.Tensor, low_resolution: tuple, high_resolution: tuple):
@@ -48,20 +49,17 @@ def reset_parameters(parent_module, verbose):
             pass
 
 
-
-def roller_2d_first_quadrant(x: torch.tensor, radius_nn: int = 2):
-    for dx in range(0, radius_nn + 1):
+def roller_2d(x: torch.tensor, radius: int = 2):
+    """ Performs rolling of the last two spatial dimensions.
+        For each point consider half a square. Each pair of points will appear once.
+        Number of channels: [(2r+1)**2 - 1]/2
+    """
+    for dx in range(0, radius + 1):
         x_tmp = torch.roll(x, dx, dims=-2)
-        for dy in range(0, radius_nn + 1):
+        for dy in range(-radius, radius + 1):
+            if dx == 0 and dy <= 0:
+                continue
             yield torch.roll(x_tmp, dy, dims=-1), dx, dy
-
-
-# I am commenting this to make sure that it is never used
-# def roller_2d(x: torch.tensor, radius_nn: int = 2):
-#     for dx in range(-radius_nn, radius_nn + 1):
-#         x_tmp = torch.roll(x, dx, dims=-2)
-#         for dy in range(-radius_nn, radius_nn + 1):
-#             yield torch.roll(x_tmp, dy, dims=-1), dx, dy
 
 
 def are_broadcastable(a: torch.Tensor, b: torch.Tensor) -> bool:
