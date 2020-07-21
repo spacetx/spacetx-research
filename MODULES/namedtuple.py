@@ -7,11 +7,82 @@ from typing import NamedTuple, Optional, Tuple
 #  ----------------------------------------------------------------  #
 
 
+class Concordance(NamedTuple):
+    joint_distribution: torch.tensor
+    mutual_information: float
+    delta_n: int
+    mean_IoU: float
+    mean_IoU_reverse: float
+
+
 class Partition(NamedTuple):
     type: str
     membership: torch.tensor  # bg=0, fg=1,2,3,.....
     sizes: torch.tensor  # both for bg and fg. It is simply obtained by numpy.bincount(membership)
     params: dict
+
+    def filter_by_size(self, min_size: int):
+        """ If a cluster is too small, its label is set to zero (i.e. background value).
+            The subsequent labels are shifted so that there are no gaps in the labels number.
+        """
+        my_filter = self.sizes > min_size
+        count = torch.cumsum(my_filter, dim=-1)
+        old_2_new = (count - count[0]) * my_filter  # this makes sure that label 0 is always mapped to 0
+
+        new_dict = self.params
+        new_dict["filter_by_size"] = min_size
+        new_membership = old_2_new[self.membership]
+        return self._replace(membership=new_membership, params=new_dict, sizes=torch.bincount(new_membership))
+
+    def concordance_with_partition(self, other_partition) -> Concordance:
+        """ Compute Mutual_Information.
+            From the peaks of the join distribution extract the mapping between membership labels.
+            Compute Intersection over Union
+        """
+
+        assert self.membership.shape == other_partition.membership.shape
+        nx = len(other_partition.sizes)
+        px = other_partition.sizes.float() / torch.sum(other_partition.sizes)
+
+        ny = len(self.sizes)
+        py = self.sizes.float() / torch.sum(self.sizes)
+
+        pxy = torch.zeros((nx, ny), dtype=torch.float, device=self.membership.device)
+        for ix in range(0, nx):
+            counts = torch.bincount(self.membership[other_partition.membership == ix])
+            pxy[ix, :counts.shape[0]] = counts
+        pxy /= torch.sum(pxy)
+
+        # Compute the mutual information
+        log_term = torch.log(pxy) - torch.log(px.view(-1, 1) * py.view(1, -1))
+        log_term[pxy == 0] = 0
+        mutual_information = torch.sum(pxy * log_term).item()
+
+        # Extract the most likely mapping and compute the two types of Intersection_over_Union
+        # The asymmetry to IoU is due to the fact that mappings target_to_trial and
+        # trial_to_target might be one to many
+        target_to_trial = torch.max(pxy, dim=-1)[1]
+        trial_to_target = torch.max(pxy, dim=-2)[1]
+
+        same = (target_to_trial[other_partition.membership.long()] == self.membership)
+        IoU = torch.zeros(nx, dtype=torch.float, device=self.membership.device)
+        for ix in range(0, nx):
+            intersection = torch.sum(same[other_partition.membership == ix]).float()
+            union = other_partition.sizes[ix] + self.sizes[target_to_trial[ix]] - intersection
+            IoU[ix] = intersection / union
+
+        same_reverse = other_partition.membership == (trial_to_target[self.membership.long()])
+        IoU_reverse = torch.zeros(ny, dtype=torch.float, device=self.membership.device)
+        for iy in range(0, ny):
+            intersection = torch.sum(same_reverse[self.membership == iy]).float()
+            union = other_partition.sizes[trial_to_target[iy]] + self.sizes[iy] - intersection
+            IoU_reverse[iy] = intersection / union
+
+        return Concordance(joint_distribution=pxy,
+                           mutual_information=mutual_information,
+                           delta_n=ny - nx,
+                           mean_IoU=torch.mean(IoU).item(),
+                           mean_IoU_reverse=torch.mean(IoU_reverse).item())
 
 
 class DIST(NamedTuple):
@@ -65,9 +136,6 @@ class Similarity(NamedTuple):
 
         return Similarity(data=torch.index_select(self.data, dim=-3, index=index), ch_to_dxdy=new_ch_to_dxdy)
 
-    def one_over(self):
-        return self._replace(data=1.0/self.data)
-
 
 #  ----------------------------------------------------------------  #
 #  -------Stuff defined in term of other sutff --------------------  #
@@ -84,9 +152,6 @@ class Segmentation(NamedTuple):
 
     def reduce_similarity_radius(self, new_radius: int):
         return self._replace(similarity=self.similarity.reduce_similarity_radius(new_radius=new_radius))
-
-    def one_over_similarity(self):
-        return self._replace(similarity=self.similarity.one_over())
 
 
 class UNEToutput(NamedTuple):

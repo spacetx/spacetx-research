@@ -330,8 +330,8 @@ class CompositionalVae(torch.nn.Module):
 
         #edges_type = 'hard'
         #edges_type = 'dot_product'
-        #edges_type = "l2_norm"
-        edges_type = "l1_norm"
+        #edges_type = "exp_l2_norm"
+        edges_type = "exp_l1_norm"
 
         if edges_type == 'hard':
             print(edges_type)
@@ -354,7 +354,8 @@ class CompositionalVae(torch.nn.Module):
                 similarity[:, ch] = (pad_mixing_k *
                                      pad_mixing_k_shifted).sum(dim=-5)[:, 0, pad:(pad + w), pad:(pad + h)]
 
-        elif edges_type == 'l2_norm':
+        elif edges_type == 'exp_l2_norm':
+            raise NotImplementedError
             print(edges_type)
             ch_to_dxdy = []
             similarity = torch.zeros((batch_shape, ch_out, w, h), device=mixing_k.device, dtype=mixing_k.dtype)
@@ -365,15 +366,16 @@ class CompositionalVae(torch.nn.Module):
                 similarity[:, ch] = l2_norm[:, 0, pad:(pad + w), pad:(pad + h)]
                 # print("debug", dx, dy, torch.max(similarity[:, ch]))
 
-        elif edges_type == 'l1_norm':
+        elif edges_type == 'exp_l1_norm':
+            raise NotImplementedError
             print(edges_type)
             ch_to_dxdy = []
             similarity = torch.zeros((batch_shape, ch_out, w, h), device=mixing_k.device, dtype=mixing_k.dtype)
             for ch, rolled in enumerate(roller_2d(pad_mixing_k, radius=radius_nn)):
                 pad_mixing_k_shifted, dx, dy = rolled
                 ch_to_dxdy.append([dx, dy])
-                l2_norm = (pad_mixing_k - pad_mixing_k_shifted).abs().sum(dim=-5)
-                similarity[:, ch] = l2_norm[:, 0, pad:(pad + w), pad:(pad + h)]
+                l1_norm = (pad_mixing_k - pad_mixing_k_shifted).abs().sum(dim=-5)
+                similarity[:, ch] = l1_norm[:, 0, pad:(pad + w), pad:(pad + h)]
                 # print("debug", dx, dy, torch.max(similarity[:, ch]))
 
         else:
@@ -435,7 +437,7 @@ class CompositionalVae(torch.nn.Module):
                             n_objects_max_per_patch: Optional[int] = None,
                             prob_corr_factor: Optional[float] = None,
                             overlap_threshold: Optional[float] = None,
-                            radius_nn: int = 2,
+                            radius_nn: int = 5,
                             batch: int = 64) -> Segmentation:
         """ Uses a sliding window approach to collect a co_objectiveness information
             about the pixels of a large image """
@@ -452,16 +454,12 @@ class CompositionalVae(torch.nn.Module):
         with torch.no_grad():
 
             w_img, h_img = single_img.shape[-2:]
-            index_matrix = torch.arange(torch.numel(single_img[0]),
-                                        dtype=torch.long,
-                                        device=single_img.device).view_as(single_img[0])
             n_prediction = (crop_size[0]//stride[0]) * (crop_size[1]//stride[1])
             print(f'Each pixel will be segmented {n_prediction} times')
 
             pad_w = crop_size[0] - stride[0]
             pad_h = crop_size[1] - stride[1]
             pad_list = [pad_w, crop_size[0], pad_h, crop_size[1]]
-            index_matrix_padded = F.pad(index_matrix, pad=pad_list, mode='constant', value=-1)
             try:
                 img_padded = F.pad(single_img.unsqueeze(0),
                                    pad=pad_list, mode='reflect')  # 1, ch_in, w_pad, h_pad
@@ -517,8 +515,6 @@ class CompositionalVae(torch.nn.Module):
                                                    dtype=segmentation.integer_mask.dtype)
 
                 for b, ij in enumerate(ij_list):
-
-                    csr_similarity_delta =
 
                     big_similarity[:, ij[0]:(ij[0]+crop_size[0]),
                                       ij[1]:(ij[1]+crop_size[1])] += segmentation.similarity.data[b, :, :, :]
