@@ -70,6 +70,8 @@ class Partition(NamedTuple):
             intersection = torch.sum(same[other_partition.membership == ix]).float()
             union = other_partition.sizes[ix] + self.sizes[target_to_trial[ix]] - intersection
             IoU[ix] = intersection / union
+        #IoU_avg = torch.sum(IoU*other_partition.sizes)/torch.sum(other_partition.sizes)
+        IoU_avg = torch.mean(IoU)
 
         same_reverse = other_partition.membership == (trial_to_target[self.membership.long()])
         IoU_reverse = torch.zeros(ny, dtype=torch.float, device=self.membership.device)
@@ -77,12 +79,16 @@ class Partition(NamedTuple):
             intersection = torch.sum(same_reverse[self.membership == iy]).float()
             union = other_partition.sizes[trial_to_target[iy]] + self.sizes[iy] - intersection
             IoU_reverse[iy] = intersection / union
+        #IoU_reverse_avg = torch.sum(IoU_reverse*self.sizes)/torch.sum(self.sizes)
+        IoU_reverse_avg = torch.mean(IoU_reverse)
+
+
 
         return Concordance(joint_distribution=pxy,
                            mutual_information=mutual_information,
                            delta_n=ny - nx,
-                           mean_IoU=torch.mean(IoU).item(),
-                           mean_IoU_reverse=torch.mean(IoU_reverse).item())
+                           mean_IoU=IoU_avg.item(),
+                           mean_IoU_reverse=IoU_reverse_avg.item())
 
 
 class DIST(NamedTuple):
