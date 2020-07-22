@@ -19,9 +19,8 @@ with torch.no_grad():
 
     class GraphSegmentation(object):
         """ Produce a consensus segmentation mask by finding communities on a graph.
-            Each node is a foreground pixel and each edge is the probabiliity that
-            spatially nearby pixels belong to the same object.
-
+            Each node is a foreground pixel and each edge is the similarity between spatially nearby pixels.
+            The similarity measures if the pixels belong to the same object.
 
             Typical usage:
             g = GraphSegmentation(tiling)
@@ -40,7 +39,7 @@ with torch.no_grad():
                      min_fg_prob: float = 0.1,
                      min_edge_weight: Optional[float] = 0.01,
                      max_edge_weight: Optional[float] = None,
-                     normalize_graph_edges: bool = False) -> None:
+                     normalize_graph_edges: bool = True) -> None:
             super().__init__()
 
             # size = (2*r+1)*(2*r+1), w, h. Each channel contains the edges between pixel_i and pixel_j
@@ -133,18 +132,17 @@ with torch.no_grad():
                 j_list += j.tolist()
 
             # Build the graph
-            sqrt_d = numpy.sqrt(sum_edges_at_vertex)
             vertex_ids = [n for n in range(self.n_fg_pixel)]
             edgelist = list(zip(i_list, j_list))
 
             if normalize_graph_edges:
+                sqrt_d = numpy.sqrt(sum_edges_at_vertex)
                 edge_weight = [e / (sqrt_d[i] * sqrt_d[j]) for e, i, j in zip(e_list, i_list, j_list)]
             else:
                 edge_weight = e_list
 
             return ig.Graph(vertex_attrs={"label": vertex_ids,
-                                          "size": [1] * self.n_fg_pixel,
-                                          "d": sum_edges_at_vertex},
+                                          "size": [1] * self.n_fg_pixel},
                             edges=edgelist,
                             edge_attrs={"weight": edge_weight},
                             graph_attrs={"total_edge_weight":  sum(edge_weight),
@@ -163,58 +161,45 @@ with torch.no_grad():
                 sub_vertex_list = vertex_labels[partition.membership == n].tolist()
                 yield self.graph.subgraph(vertices=sub_vertex_list)
 
-        # TODO make function which suggest the resolution parameter
-        # FROM HERE
 
+        def suggest_resolution_parameter(self, cpm_or_modularity: str = "cpm",
+                                         each_cc_separately: bool = True,
+                                         windows: Optional[tuple] = None):
 
-        ###        def find_partition_watershed(self, watershed_line: bool = False) -> Partition:
-###
-###            img_labels = skimage.segmentation.watershed(-self.img_to_flood.cpu().numpy(),  # minus b/c watershed starts from minima
-###                                                        markers=None,
-###                                                        connectivity=1,
-###                                                        offset=None,
-###                                                        mask=self.index_matrix.cpu().numpy() > 0,
-###                                                        compactness=0,
-###                                                        watershed_line=watershed_line)
-###
-###            sizes = list(numpy.bincount(img_labels.flatten())[1:])  # skip label=0 which is the background
-###            membership = list(img_labels[self.x_coordinate_fg_pixel, self.y_coordinate_fg_pixel])
-###
-###            return Partition(type="watershed",
-###                             sizes=sizes,
-###                             membership=membership,
-###                             params={"watershed_line": watershed_line})
+            FROM HERE
+            # TODO make function which suggest the resolution parameter
+            # FROM HERE
 
-        @functools.lru_cache(maxsize=10)
         def find_partition_leiden(self, resolution: int = 1.0,
-                                  CPM_or_modularity: str = "CPM",
-                                  each_cc_separately: bool = False) -> Partition:
+                                  cpm_or_modularity: str = "cpm",
+                                  each_cc_separately: bool = True) -> Partition:
+            """ The resolution parameter can be changed and should be around 1
+                cpm_or_modularity are equivaThe suggested para"""
 
-            if CPM_or_modularity == "CPM":
+            if cpm_or_modularity == "CPM":
                 partition_type = la.CPMVertexPartition
                 n = self.graph["total_nodes"]
                 overall_graph_density = self.graph["total_edge_weight"] * 2.0 / (n*(n-1))
                 resolution = overall_graph_density * resolution
-            elif CPM_or_modularity == "modularity":
+            elif cpm_or_modularity == "modularity":
                 partition_type = la.RBConfigurationVertexPartition
             else:
                 raise Exception("Warning!! Argument not recognized. \
                                 CPM_or_modularity can only be 'CPM' or 'modularity'")
 
             if each_cc_separately:
-                raise NotImplementedError
                 max_label = 0
                 membership = torch.zeros(self.n_fg_pixel, dtype=torch.long, device=self.device)
                 for n, g in enumerate(self.subgraphs_by_partition(partition=self.partition_connected_components)):
 
                     p = la.find_partition(graph=g,
                                           partition_type=partition_type,
-                                          initial_membership=None, # g.vs["initial_membership"]
+                                          initial_membership=None,
                                           weights=g.es['weight'],
                                           n_iterations=2,
                                           resolution_parameter=resolution)
 
-                    labels = torch.tensor(p.membership, device=self.device, dtype=torch.long) + 1  # bg=0, fg=1,2,3,...
+                    labels = torch.tensor(p.membership, device=self.device, dtype=torch.long) + 1
                     shifted_labels = labels + max_label
                     max_label += torch.max(labels)
                     membership[g.vs['label']] = shifted_labels
@@ -227,7 +212,7 @@ with torch.no_grad():
             else:
                 p = la.find_partition(graph=self.graph,
                                       partition_type=partition_type,
-                                      initial_membership=None,  # self.partition_sample_segmask.membership
+                                      initial_membership=None,
                                       weights=self.graph.es['weight'],
                                       n_iterations=2,
                                       resolution_parameter=resolution)

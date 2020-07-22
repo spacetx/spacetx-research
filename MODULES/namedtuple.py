@@ -11,8 +11,7 @@ class Concordance(NamedTuple):
     joint_distribution: torch.tensor
     mutual_information: float
     delta_n: int
-    mean_IoU: float
-    mean_IoU_reverse: float
+    iou: float
 
 
 class Partition(NamedTuple):
@@ -21,11 +20,17 @@ class Partition(NamedTuple):
     sizes: torch.tensor  # both for bg and fg. It is simply obtained by numpy.bincount(membership)
     params: dict
 
-    def filter_by_size(self, min_size: int):
-        """ If a cluster is too small, its label is set to zero (i.e. background value).
-            The subsequent labels are shifted so that there are no gaps in the labels number.
+    def filter_by_size(self, min_size: Optional[int] = None, max_size: Optional[int] = None):
+        """ If a cluster is too small or too large, its label is set to zero (i.e. background value).
+            The other labels are adjusted so that there are no gaps in the labels number.
+            Min_size and Max_size are integers specifying the number of pixels.
         """
-        my_filter = self.sizes > min_size
+        if (min_size is None) and (max_size is None):
+            raise Exception("At least one among min_size and max_size should be specified")
+        if (min_size is not None) and (max_size is not None):
+            assert max_size > min_size > 0, "Condition max_size > min_size > 0 failed."
+
+        my_filter = (self.sizes > min_size) * (self.sizes < max_size)
         count = torch.cumsum(my_filter, dim=-1)
         old_2_new = (count - count[0]) * my_filter  # this makes sure that label 0 is always mapped to 0
 
@@ -35,60 +40,59 @@ class Partition(NamedTuple):
         return self._replace(membership=new_membership, params=new_dict, sizes=torch.bincount(new_membership))
 
     def concordance_with_partition(self, other_partition) -> Concordance:
-        """ Compute Mutual_Information.
-            From the peaks of the join distribution extract the mapping between membership labels.
-            Compute Intersection over Union
+        """ Compute measure of concordance between two partitions:
+            joint_distribution
+            mutual_information
+            delta_n
+            iou
+
+            We use the peaks of the join distribution to extract the mapping between membership labels.
         """
 
         assert self.membership.shape == other_partition.membership.shape
         nx = len(other_partition.sizes)
-        px = other_partition.sizes.float() / torch.sum(other_partition.sizes)
-
         ny = len(self.sizes)
-        py = self.sizes.float() / torch.sum(self.sizes)
 
         pxy = torch.zeros((nx, ny), dtype=torch.float, device=self.membership.device)
         for ix in range(0, nx):
             counts = torch.bincount(self.membership[other_partition.membership == ix])
-            pxy[ix, :counts.shape[0]] = counts
+            pxy[ix, :counts.shape[0]] = counts.float()
         pxy /= torch.sum(pxy)
+        px = torch.sum(pxy, dim=-1)
+        py = torch.sum(pxy, dim=-2)
 
         # Compute the mutual information
-        log_term = torch.log(pxy) - torch.log(px.view(-1, 1) * py.view(1, -1))
-        log_term[pxy == 0] = 0
-        mutual_information = torch.sum(pxy * log_term).item()
+        term_xy = pxy * torch.log(pxy)
+        term_x = px * torch.log(px)
+        term_y = py * torch.log(py)
+        mutual_information = term_xy[pxy > 0].sum() - term_x[px > 0].sum() - term_y[py > 0].sum()
 
-        # Extract the most likely mapping and compute the two types of Intersection_over_Union
-        # The asymmetry to IoU is due to the fact that mappings target_to_trial and
-        # trial_to_target might be one to many
-        target_to_trial = torch.max(pxy, dim=-1)[1]
-        trial_to_target = torch.max(pxy, dim=-2)[1]
+        # Extract the most likely mappings
+        # print(nx, ny)
+        to_other = torch.max(pxy, dim=-2)[1]
+        from_other = torch.max(pxy, dim=-1)[1]
 
-        same = (target_to_trial[other_partition.membership.long()] == self.membership)
-        IoU = torch.zeros(nx, dtype=torch.float, device=self.membership.device)
-        for ix in range(0, nx):
-            intersection = torch.sum(same[other_partition.membership == ix]).float()
-            union = other_partition.sizes[ix] + self.sizes[target_to_trial[ix]] - intersection
-            IoU[ix] = intersection / union
-        #IoU_avg = torch.sum(IoU*other_partition.sizes)/torch.sum(other_partition.sizes)
-        IoU_avg = torch.mean(IoU)
+        # Find one-to-one correspondence among instance IDs
+        original_instance_id = torch.arange(ny, device=self.membership.device, dtype=torch.long)
+        is_id_one_to_one = (from_other[to_other[original_instance_id]] == original_instance_id)
 
-        same_reverse = other_partition.membership == (trial_to_target[self.membership.long()])
-        IoU_reverse = torch.zeros(ny, dtype=torch.float, device=self.membership.device)
-        for iy in range(0, ny):
-            intersection = torch.sum(same_reverse[self.membership == iy]).float()
-            union = other_partition.sizes[trial_to_target[iy]] + self.sizes[iy] - intersection
-            IoU_reverse[iy] = intersection / union
-        #IoU_reverse_avg = torch.sum(IoU_reverse*self.sizes)/torch.sum(self.sizes)
-        IoU_reverse_avg = torch.mean(IoU_reverse)
+        # Define a mapping that changes all bad (i.e. not unique or background) instance IDs to -1
+        original_to_good_id = original_instance_id
+        original_to_good_id[~is_id_one_to_one] = -1
+        original_to_good_id[0] = -1  # Exclude the background
+        # print(original_to_good_id)
 
-
+        # compute the intersection among all fg_pixels_with_unique_id
+        pixel_with_same_id = (to_other[self.membership] == other_partition.membership)
+        fg_pixels_with_unique_id = (original_to_good_id[self.membership] > 0)
+        intersection = torch.sum(pixel_with_same_id[fg_pixels_with_unique_id])
+        union = torch.sum(self.sizes[1:]) + torch.sum(other_partition.sizes[1:]) - intersection  # exclude background
+        iou = intersection.float()/union
 
         return Concordance(joint_distribution=pxy,
-                           mutual_information=mutual_information,
+                           mutual_information=mutual_information.item(),
                            delta_n=ny - nx,
-                           mean_IoU=IoU_avg.item(),
-                           mean_IoU_reverse=IoU_reverse_avg.item())
+                           iou=iou.item())
 
 
 class DIST(NamedTuple):
