@@ -2,6 +2,7 @@ from .utilities import *
 from .vae_parts import *
 from .namedtuple import *
 from typing import Union
+import time
 
 
 def pretty_print_metrics(epoch: int,
@@ -34,40 +35,32 @@ def save_everything(path: str,
                 'hyperparam_dict': hyperparams_dict}, path)
 
 
-def load_info(path: str,
-              load_params: bool = False,
-              load_epoch: bool = False,
-              load_history: bool = False) -> Checkpoint:
-
-    if torch.cuda.is_available():
-        resumed = torch.load(path) #, map_location="cuda:0")
-    else:
-        resumed = torch.load(path, map_location=torch.device('cpu'))
-
-    epoch = resumed['epoch'] if load_epoch else None
-    hyperparams_dict = resumed['hyperparam_dict'] if load_params else None
-    history_dict = resumed['history_dict'] if load_history else None
-
-    return Checkpoint(history_dict=history_dict, epoch=epoch, hyperparams_dict=hyperparams_dict)
-
-
-def load_ckpt(path: str, device: Optional[str]=None):
+def file2resumed(path: str, device: Optional[str]=None):
+    """ wrapper around torch.load """
     if device is None:
         resumed = torch.load(path)
     elif device == 'cuda':
         resumed = torch.load(path, map_location="cuda:0")
-        #device = torch.device("cuda")
-        #resumed = torch.load(path, map_location=device)
     elif device == 'cpu':
-        device = torch.device('cpu')
-        resumed = torch.load(path, map_location=device)
+        resumed = torch.load(path, map_location=torch.device('cpu'))
     else:
         raise Exception("device is not recognized")
-
     return resumed
 
 
-def load_model_optimizer(ckpt,
+def load_info(resumed,
+              load_params: bool = False,
+              load_epoch: bool = False,
+              load_history: bool = False) -> Checkpoint:
+
+    epoch = resumed['epoch'] if load_epoch else None
+    hyperparam_dict = resumed['hyperparam_dict'] if load_params else None
+    history_dict = resumed['history_dict'] if load_history else None
+
+    return Checkpoint(history_dict=history_dict, epoch=epoch, hyperparams_dict=hyperparam_dict)
+
+
+def load_model_optimizer(resumed,
                          model: Union[None, torch.nn.Module] = None,
                          optimizer: Union[None, torch.optim.Optimizer] = None,
                          overwrite_member_var: bool = False):
@@ -78,15 +71,15 @@ def load_model_optimizer(ckpt,
 
         # load member variables
         if overwrite_member_var:
-            for key, value in ckpt['model_member_var'].items():
+            for key, value in resumed['model_member_var'].items():
                 setattr(model, key, value)
 
         # load the modules
-        model.load_state_dict(ckpt['model_state_dict'])
+        model.load_state_dict(resumed['model_state_dict'])
         model.to(device)
 
     if optimizer is not None:
-        optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+        optimizer.load_state_dict(resumed['optimizer_state_dict'])
 
 
 def instantiate_optimizer(model: torch.nn.Module,
@@ -159,7 +152,6 @@ class CompositionalVae(torch.nn.Module):
             self.sigma_fg = self.sigma_fg.cuda()
             self.sigma_bg = self.sigma_bg.cuda()
 
-
     def compute_regularizations(self,
                                 inference: Inference,
                                 verbose: bool = False,
@@ -208,7 +200,7 @@ class CompositionalVae(torch.nn.Module):
 
         # Preparation
         batch_size, ch, w, h = imgs_in.shape
-        n_boxes = inference.big_mask.shape[-5] 
+        n_boxes = inference.big_mask.shape[-5]
         n_obj_counts = (inference.prob > 0.5).float().sum(-2).detach()  # sum over boxes dimension
         p_times_area_map = inference.p_map * inference.area_map
         mixing_k = inference.big_mask * inference.prob[..., None, None, None]
@@ -243,7 +235,7 @@ class CompositionalVae(torch.nn.Module):
         prob_total_av = torch.sum(inference.p_map)/ (batch_size * n_boxes)  # quickly converge to order 1
 
         # 4. compute the KL for each image
-        kl_zinstance_av = torch.mean(inference.kl_zinstance_each_obj)  # choose latent dim z so that this number is order 1. 
+        kl_zinstance_av = torch.mean(inference.kl_zinstance_each_obj)  # choose latent dim z so that this number is order 1.
         kl_zwhere_av = torch.sum(inference.kl_zwhere_map) / (batch_size * n_boxes * 4)  # order 1
         kl_logit_tot = torch.sum(inference.kl_logit_map) / batch_size  # this will be normalized by running average -> order 1
 
@@ -257,7 +249,6 @@ class CompositionalVae(torch.nn.Module):
             else:
                 ma_dict = input_dict
 
-
         # Note that I clamp in_place
         with torch.no_grad():
             f_balance = self.geco_balance_factor.data.clamp_(min=min(self.geco_dict["factor_balance_range"]),
@@ -266,7 +257,7 @@ class CompositionalVae(torch.nn.Module):
                                                                max=max(self.geco_dict["factor_sparsity_range"]))
 
         # 6. Loss_VAE
-        # TODO: 
+        # TODO:
         # 1. try: loss_vae = f_balance * (nll_av + reg_av) + (1.0-f_balance) * (kl_av + f_sparsity * sparsity_av)
         # 2. move reg_av to the other size, i.e. proportional to 1-f_balance
         kl_av = kl_zinstance_av + kl_zwhere_av + kl_logit_tot / (1E-3 + ma_dict["kl_logit_tot"])
@@ -274,8 +265,6 @@ class CompositionalVae(torch.nn.Module):
         assert nll_av.shape == reg_av.shape == kl_av.shape == sparsity_av.shape
 
         loss_vae = f_sparsity * sparsity_av + f_balance * (nll_av + reg_av) + (1.0 - f_balance) * kl_av
-
-
 
         # GECO BUSINESS
         if self.geco_dict["is_active"]:
@@ -318,21 +307,55 @@ class CompositionalVae(torch.nn.Module):
                                length_GP=inference.length_scale_GP.detach(),
                                n_obj_counts=n_obj_counts)
 
+    @staticmethod
+    def compute_similarity(mixing_k: torch.tensor, radius_nn: int = 2) -> Similarity:
+        """ Compute the similarity between two pixels by computing the cosine distance between mixing_k
+            describing the probabilityh that each pixel belong to a given foreground instance
 
+            INPUT: mixing_k of shape --> n_boxes, batch_shape, 1, w, h
+            OUTPUT: similarity of shape ------>   batch_shape, ch_out, w, h
+            where ch_out = ((2*radius + 1)**2 -1)//2
+            Each channel has the similarity between pixel and pixel shifted by dx,dy
+        """
+        time0 = time.time()
+        n_boxes, batch_shape, ch_in, w, h = mixing_k.shape
+        assert ch_in == 1
 
-    def segment(self, img,
+        # Pad width and height with zero before rolling to avoid spurious connections due to PBC
+        pad = radius_nn + 1
+        pad_mixing_k = F.pad(mixing_k, pad=[pad, pad, pad, pad], mode="constant", value=0.0)
+
+        # Prepare storage
+        ch_out = int(((2 * radius_nn + 1) ** 2 - 1)/2)  # this is the number of point NN points
+        ch_to_dxdy = []
+        similarity = torch.zeros((batch_shape, ch_out, w, h), device=mixing_k.device, dtype=mixing_k.dtype)
+
+        # compute dot product of the mixing_k between nearby vertices
+        for ch, rolled in enumerate(roller_2d(pad_mixing_k, radius=radius_nn)):
+            pad_mixing_k_shifted, dx, dy = rolled
+            ch_to_dxdy.append([dx, dy])
+            similarity[:, ch] = (pad_mixing_k *
+                                 pad_mixing_k_shifted).sum(dim=-5)[:, 0, pad:(pad + w), pad:(pad + h)]
+
+        print("--- similarity time %s ---" % (time.time() - time0))
+        return Similarity(data=similarity, ch_to_dxdy=ch_to_dxdy)
+
+    def segment(self, batch_imgs,
                 n_objects_max: Optional[int] = None,
                 prob_corr_factor: Optional[float] = None,
                 overlap_threshold: Optional[float] = None,
+                noisy_sampling: bool = True,
                 draw_boxes: bool = False,
-                noisy_sampling: bool = True):
+                radius_nn: int = 2) -> Segmentation:
+        """ Segment the batch of images """
 
         n_objects_max = self.input_img_dict["n_objects_max"] if n_objects_max is None else n_objects_max
         prob_corr_factor = getattr(self, "prob_corr_factor", 0.0) if prob_corr_factor is None else prob_corr_factor
         overlap_threshold = self.nms_dict["overlap_threshold"] if overlap_threshold is None else overlap_threshold
 
         with torch.no_grad():
-            inference = self.inference_and_generator(imgs_in=img,
+            time0 = time.time()
+            inference = self.inference_and_generator(imgs_in=batch_imgs,
                                                      generate_synthetic_data=False,
                                                      prob_corr_factor=prob_corr_factor,
                                                      overlap_threshold=overlap_threshold,
@@ -341,91 +364,148 @@ class CompositionalVae(torch.nn.Module):
                                                      noisy_sampling=noisy_sampling,
                                                      bg_is_zero=True,
                                                      bg_resolution=(1, 1))
+            time1 = time.time()
+            print("--- inference time %s ---" % (time1 - time0))
 
-            # make the segmentation mask (one integer for each object)
             mixing_k = inference.big_mask * inference.prob[..., None, None, None]
-            most_likely_instance, index = torch.max(mixing_k, dim=-5, keepdim=True)
-            integer_segmentation_mask = ((most_likely_instance > 0.5) * (index + 1)).squeeze(-5)  # bg = 0 fg = 1,2,3,...
 
-            if draw_boxes:
-                bounding_boxes = draw_bounding_boxes(prob=inference.prob,
-                                                     bounding_box=inference.bounding_box,
-                                                     width=integer_segmentation_mask.shape[-2],
-                                                     height=integer_segmentation_mask.shape[-1])
-            else:
-                bounding_boxes = torch.zeros_like(integer_segmentation_mask)
+            # Now compute fg_prob, integer_segmentation_mask, similarity
+            most_likely_mixing, index = torch.max(mixing_k, dim=-5, keepdim=True)  # 1, batch_size, 1, w, h
+            integer_mask = ((most_likely_mixing > 0.5) * (index + 1)).squeeze(-5).to(dtype=torch.int32)  # bg = 0 fg = 1,2,3,...
 
-        return bounding_boxes + integer_segmentation_mask
+            fg_prob = torch.sum(mixing_k, dim=-5)  # sum over instances
 
-    def segment_with_tiling(self, img: torch.Tensor,
+            bounding_boxes = draw_bounding_boxes(prob=inference.prob,
+                                                 bounding_box=inference.bounding_box,
+                                                 width=integer_mask.shape[-2],
+                                                 height=integer_mask.shape[-1]) if draw_boxes else None
+
+            return Segmentation(raw_image=batch_imgs,
+                                fg_prob=fg_prob,
+                                integer_mask=integer_mask,
+                                bounding_boxes=bounding_boxes,
+                                similarity=CompositionalVae.compute_similarity(mixing_k, radius_nn=radius_nn))
+
+    def segment_with_tiling(self,
+                            single_img: torch.Tensor,
                             crop_size: tuple,
                             stride: tuple,
                             n_objects_max_per_patch: Optional[int] = None,
                             prob_corr_factor: Optional[float] = None,
-                            overlap_threshold: Optional[float] = None):
+                            overlap_threshold: Optional[float] = None,
+                            radius_nn: int = 5,
+                            batch: int = 64) -> Segmentation:
+        """ Uses a sliding window approach to collect a co_objectiveness information
+            about the pixels of a large image """
 
         n_objects_max_per_patch = self.input_img_dict["n_objects_max"] if n_objects_max_per_patch is \
                                                                           None else n_objects_max_per_patch
         prob_corr_factor = getattr(self, "prob_corr_factor", 0.0) if prob_corr_factor is None else prob_corr_factor
         overlap_threshold = self.nms_dict["overlap_threshold"] if overlap_threshold is None else overlap_threshold
 
-        assert len(img.shape) == 3
-        w_img, h_img = img.shape[-2:]
+        assert crop_size[0] % stride[0] == 0, "crop and stride size are NOT compatible"
+        assert crop_size[1] % stride[1] == 0, "crop and stride size are NOT compatible"
+        assert len(single_img.shape) == 3  # ch, w, h
 
         with torch.no_grad():
 
-            iw_start = [x for x in range(0, crop_size[0], stride[0])]
-            ih_start = [x for x in range(0, crop_size[1], stride[1])]
-            ch = len(iw_start) * len(ih_start)
-            print("number of output_channels -->", ch)
+            w_img, h_img = single_img.shape[-2:]
+            n_prediction = (crop_size[0]//stride[0]) * (crop_size[1]//stride[1])
+            print(f'Each pixel will be segmented {n_prediction} times')
 
             pad_w = crop_size[0] - stride[0]
             pad_h = crop_size[1] - stride[1]
-            img_padded = F.pad(img.unsqueeze(0), pad=[pad_w, pad_w, pad_h, pad_h], mode='reflect')
+            pad_list = [pad_w, crop_size[0], pad_h, crop_size[1]]
+            try:
+                img_padded = F.pad(single_img.unsqueeze(0),
+                                   pad=pad_list, mode='reflect')  # 1, ch_in, w_pad, h_pad
+            except RuntimeError:
+                img_padded = F.pad(single_img.unsqueeze(0),
+                                   pad=pad_list, mode='constant', value=0)  # 1, ch_in, w_pad, h_pad
             w_paddded, h_padded = img_padded.shape[-2:]
-            segmentation = torch.zeros((ch, w_paddded, h_padded), device=img.device, dtype=torch.long)
 
-            # print("iw_start -->", iw_start)
-            # print("ih_start -->", ih_start)
+            # Build a list with the locations of the corner of the images
+            location_of_corner = []
+            for i in range(0, w_img + pad_w, stride[0]):
+                for j in range(0, h_img + pad_h, stride[1]):
+                    location_of_corner.append([i, j])
+            print(f'I am going to process {len(location_of_corner)} patches')
 
-            ch = -1
-            for iw in iw_start:
-                for ih in ih_start:
-                    ch += 1
-                    print("coordinate upper corner ->", iw, ih, "channel", ch)
+            # split the list in chunks of batch_size
+            ij_list_of_list = [location_of_corner[n:n + batch] for n in range(0, len(location_of_corner), batch)]
 
-                    # Make a batch of images with non-overlapping tiles
-                    crops = []
-                    location_of_corner = []
-                    for i in range(iw, w_img + iw, crop_size[0]):
-                        for j in range(ih, h_img + ih, crop_size[1]):
-                            crops.append(img_padded[..., i:(i + crop_size[0]), j:(j + crop_size[1])])
-                            location_of_corner.append([i, j])
-                    batch_of_imgs = torch.cat([img for img in crops], dim=0)
-                    print("batch_of_imgs.shape -->", batch_of_imgs.shape)
+            # Build a batch of images and process them
+            big_similarity, big_integer_mask = None, None
+            n_instances_tot = 0
+            for n, ij_list in enumerate(ij_list_of_list):
+                
+                # Build a batch of images
+                batch_imgs = torch.cat([img_padded[..., ij[0]:(ij[0] + crop_size[0]), ij[1]:(ij[1] + crop_size[1])]
+                                        for ij in ij_list], dim=0)
+                
+                if (n % 100 == 0) or (n == len(ij_list_of_list)-1):
+                    print(f'{n} out of {len(ij_list_of_list)-1} -> batch_of_imgs.shape = {batch_imgs.shape}') 
 
-                    # Segmentation
-                    integer_mask = self.segment(batch_of_imgs,
-                                                n_objects_max=n_objects_max_per_patch,
-                                                prob_corr_factor=prob_corr_factor,
-                                                overlap_threshold=overlap_threshold,
-                                                draw_boxes=False,
-                                                noisy_sampling=True).long()
+                # Segment the batch
+                time0 = time.time()
+                segmentation = self.segment(batch_imgs,
+                                            n_objects_max=n_objects_max_per_patch,
+                                            prob_corr_factor=prob_corr_factor,
+                                            overlap_threshold=overlap_threshold,
+                                            noisy_sampling=True,
+                                            draw_boxes=False,
+                                            radius_nn=radius_nn)
+                time1 = time.time()
+                print("--- all segmentation time %s ---" % (time1 - time0))
 
-                    # Shift the index of the integer_masks
-                    max_integer = torch.max(integer_mask.flatten(start_dim=1), dim=-1)[0]
-                    assert max_integer.shape[0] == batch_of_imgs.shape[0]
-                    integer_shift = torch.cumsum(max_integer, dim=0) - max_integer
-                    integer_mask_shifted = (integer_mask + integer_shift.view(-1,1,1,1)) * (integer_mask > 0).long()
-                    
-                    # Make a single large image with the results
-                    for n, locs in enumerate(location_of_corner):
-                        # print("ch, n, locs -->", ch, n, locs)
-                        segmentation[ch,
-                                     locs[0]:(locs[0] + crop_size[0]),
-                                     locs[1]:(locs[1] + crop_size[1])] = integer_mask_shifted[n, 0, :, :] #integer_mask[n, 0, :, :] 
+                if big_similarity is None:
+                    csr_similarity = None
+                    big_similarity = torch.zeros((segmentation.similarity.data.shape[-3], w_paddded, h_padded),
+                                                 device=segmentation.similarity.data.device,
+                                                 dtype=segmentation.similarity.data.dtype)
+                    big_fg_prob = torch.zeros((w_paddded, h_padded),
+                                              device=segmentation.fg_prob.device,
+                                              dtype=segmentation.fg_prob.dtype)
+                    big_integer_mask = torch.zeros((w_paddded, h_padded),
+                                                   device=segmentation.integer_mask.device,
+                                                   dtype=segmentation.integer_mask.dtype)
 
-        return segmentation[:, pad_w:pad_w + w_img, pad_h:pad_w + h_img]
+                for b, ij in enumerate(ij_list):
+
+                    big_similarity[:, ij[0]:(ij[0]+crop_size[0]),
+                                      ij[1]:(ij[1]+crop_size[1])] += segmentation.similarity.data[b, :, :, :]
+                    big_fg_prob[ij[0]:(ij[0]+crop_size[0]),
+                                ij[1]:(ij[1]+crop_size[1])] += segmentation.fg_prob[b, 0, :, :]
+
+                    # Find a set of not-overlapping tiles to obtain a sample segmentation (without graph clustering)
+                    if ((ij[0] - pad_w) % crop_size[0] == 0) and ((ij[1] - pad_h) % crop_size[1] == 0):
+                        n_instances = torch.max(segmentation.integer_mask[b])
+                        shifted_integer_mask = (segmentation.integer_mask[b] > 0) * \
+                                               (segmentation.integer_mask[b] + n_instances_tot)
+                        n_instances_tot += n_instances
+                        big_integer_mask[ij[0]:(ij[0]+crop_size[0]),
+                                         ij[1]:(ij[1]+crop_size[1])] = shifted_integer_mask
+
+                time2 = time.time()
+                print("--- all the rest %s ---" % (time2 - time1))
+
+            # Normalize the similarity
+            big_similarity_normalized = big_similarity[...,
+                                                       pad_w:pad_w + w_img,
+                                                       pad_h:pad_h + h_img].float()/n_prediction
+
+            # Remove possible missing values in the big_integer_mask
+            big_integer_mask = big_integer_mask[pad_w:pad_w + w_img, pad_h:pad_h + h_img]
+            original_type = big_integer_mask.dtype
+            bin_count = torch.bincount(big_integer_mask.flatten())
+            old2new_label = torch.cumsum(bin_count > 0, dim=0) - 1  # conversion old -> new
+            integer_mask_no_gaps = old2new_label[big_integer_mask.long()].to(original_type)
+
+            return Segmentation(raw_image=single_img[None],
+                                fg_prob=big_fg_prob[None, None, pad_w:pad_w + w_img, pad_h:pad_h + h_img],
+                                integer_mask=integer_mask_no_gaps[None, None],
+                                bounding_boxes=None,
+                                similarity=segmentation.similarity._replace(data=big_similarity_normalized[None]))
 
     # this is the generic function which has all the options unspecified
     def process_batch_imgs(self,
@@ -491,7 +571,7 @@ class CompositionalVae(torch.nn.Module):
                                        draw_image=draw_image,
                                        draw_boxes=draw_boxes,
                                        verbose=verbose,
-                                       noisy_sampling=True, #True if self.training else False,
+                                       noisy_sampling=True,  # True if self.training else False,
                                        prob_corr_factor=getattr(self, "prob_corr_factor", 0.0),
                                        overlap_threshold=self.nms_dict.get("overlap_threshold", 0.3),
                                        n_objects_max=self.input_img_dict["n_objects_max"],
@@ -517,4 +597,3 @@ class CompositionalVae(torch.nn.Module):
                                            n_objects_max=self.input_img_dict["n_objects_max"],
                                            bg_is_zero=True,
                                            bg_resolution=(2, 2))
-

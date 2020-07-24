@@ -1,8 +1,8 @@
 import torch
+import numpy
 import skimage.filters
 import skimage.exposure
 import skimage.transform
-import numpy as np
 import PIL.Image
 PIL.Image.MAX_IMAGE_PIXELS = None
 
@@ -23,13 +23,13 @@ def img_pre_processing(pilfile, reduction_factor=1, remove_background=True):
     pilresize = pilfile.convert("F").resize((w_new, h_new), resample=PIL.Image.BILINEAR)
         
     # compute OTSU threshold
-    img_np = np.array(pilresize)
+    img_np = numpy.array(pilresize)
     # mask = (img_np != 0)
     image_thresh = skimage.filters.threshold_otsu(img_np)
         
     # Rescale foreground intensity in (0,1)
     if remove_background:
-        ql, qr = np.percentile(img_np[img_np > image_thresh].flatten(), q=(0, 100))  # note that the statistics are compute on the foreground only
+        ql, qr = numpy.percentile(img_np[img_np > image_thresh].flatten(), q=(0, 100))  # note that the statistics are compute on the foreground only
         img_tmp = skimage.exposure.rescale_intensity(img_np, in_range=(ql, qr), out_range=(0.0, 1.0))
     else:
         img_tmp = skimage.exposure.rescale_intensity(img_np, in_range="image", out_range=(0.0, 1.0))
@@ -40,18 +40,18 @@ def img_pre_processing(pilfile, reduction_factor=1, remove_background=True):
 def sum_in_windows(img, window_size: int=80):
     """ returns the sum inside a square of size=window_size with center located at (i,j) """
     w, h = img.shape[-2:]
-    img_pad = np.pad(img, pad_width=window_size//2, mode='constant', constant_values=0)
+    img_pad = numpy.pad(img, pad_width=window_size//2, mode='constant', constant_values=0)
     assert (img == img_pad[window_size//2:window_size//2+w,window_size//2:window_size//2+h]).all()
 
-    cum = np.cumsum(np.cumsum(img_pad, axis=0), axis=1)
+    cum = numpy.cumsum(numpy.cumsum(img_pad, axis=0), axis=1)
     
     # roll
-    px = np.roll(cum, +window_size//2, axis=0)
-    mx = np.roll(cum, -window_size//2, axis=0)
-    px_py = np.roll(px, +window_size//2, axis=1)
-    px_my = np.roll(px, -window_size//2, axis=1)
-    mx_py = np.roll(mx, +window_size//2, axis=1)
-    mx_my = np.roll(mx, -window_size//2, axis=1)
+    px = numpy.roll(cum, +window_size//2, axis=0)
+    mx = numpy.roll(cum, -window_size//2, axis=0)
+    px_py = numpy.roll(px, +window_size//2, axis=1)
+    px_my = numpy.roll(px, -window_size//2, axis=1)
+    mx_py = numpy.roll(mx, +window_size//2, axis=1)
+    mx_my = numpy.roll(mx, -window_size//2, axis=1)
     
     # compute sum in square
     tmp = (px_py - px_my - mx_py + mx_my)

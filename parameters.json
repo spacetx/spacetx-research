@@ -4,9 +4,9 @@
 
  "wdl.file_train" : "gs://ld-data-bucket/Allen_smFISH/smFISH_stitched_OLEH.tif",
  "wdl.file_test" : "gs://ld-results-bucket/ckpt/dummy_1.pkl",
- "wdl.file_ckpt" : "gs://ld-results-bucket/ckpt/v7_ckp_2000.pkl",
+ "wdl.file_ckpt" : "gs://ld-results-bucket/ckpt/to_segment_ckp.pkl",
  "wdl.bucket_output" : "gs://ld-results-bucket",
- "wdl.dir_output" : "merfish_segment",
+ "wdl.dir_output" : "merfish_segment_june27_v2",
 
  "wdl.notebook_name": "MAIN.ipynb",
  "wdl.git_repo": "https://github.com/spacetx/spacetx-research.git",

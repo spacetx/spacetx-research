@@ -77,8 +77,8 @@ class Moving_Average_Calculator:
 
         Usage:
         MA = Moving_Average_Calculator(beta = 0.99)
-        input_dict = { "x" : 100+i+np.random.randn(),
-                   "y" : 50+i+np.random.randn()}
+        input_dict = { "x" : 100+i+numpy.random.randn(),
+                   "y" : 50+i+numpy.random.randn()}
         MA(input_dict)
     """
 

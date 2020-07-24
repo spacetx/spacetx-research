@@ -1,7 +1,7 @@
 import torch
+import numpy
 from .unet_parts import DownBlock, DoubleConvolutionBlock, UpBlock
 from .encoders_decoders import Encoder1by1, MLP_1by1, PredictBackground
-import numpy as np
 from collections import deque
 from .namedtuple import UNEToutput
 
@@ -161,8 +161,8 @@ class UNet(torch.nn.Module):
         p = s_p_k[1]
         k = s_p_k[2]
 
-        w_out = np.floor((w_in - k + 2 * p) / s) + 1
-        h_out = np.floor((h_in - k + 2 * p) / s) + 1
+        w_out = numpy.floor((w_in - k + 2 * p) / s) + 1
+        h_out = numpy.floor((h_in - k + 2 * p) / s) + 1
 
         pad_w = ((w_out - 1) * s - w_in + k) / 2
         pad_h = ((h_out - 1) * s - h_in + k) / 2
