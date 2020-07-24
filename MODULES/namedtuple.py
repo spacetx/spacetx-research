@@ -1,10 +1,29 @@
 import torch
 import numpy
 from typing import NamedTuple, Optional, Tuple
+import skimage.color
+import matplotlib.pyplot as plt
 
 #  ----------------------------------------------------------------  #
 #  ------- Stuff defined in terms of native types -----------------  #
 #  ----------------------------------------------------------------  #
+
+
+class Suggestion(NamedTuple):
+    best_resolution: float
+    best_index: int
+    sweep_resolution: numpy.ndarray
+    sweep_iou: numpy.ndarray
+    sweep_delta_n: numpy.ndarray
+    sweep_seg_mask: numpy.ndarray
+
+    def show_best(self, figsize: tuple = (20, 20), fontsize: int = 20):
+        figure, ax = plt.subplots(figsize=figsize)
+        ax.imshow(skimage.color.label2rgb(label=self.sweep_seg_mask[self.best_index], bg_label=0))
+        ax.set_title('resolution = {0:.3f}, iou = {1:.3f}, delta_n = {2:3d}'.format(self.best_resolution,
+                                                                                    self.sweep_iou[self.best_index],
+                                                                                    self.sweep_delta_n[self.best_index]),
+                     fontsize=fontsize)
 
 
 class Concordance(NamedTuple):
@@ -20,24 +39,62 @@ class Partition(NamedTuple):
     sizes: torch.tensor  # both for bg and fg. It is simply obtained by numpy.bincount(membership)
     params: dict
 
+    @staticmethod
+    def is_old_2_new_identity(old_2_new: torch.tensor):
+        diff = old_2_new - torch.arange(old_2_new.shape[0], device=old_2_new.device, dtype=old_2_new.dtype)
+        check = (diff.abs().sum().item() == 0)
+        return check
+
+    def filter_by_vertex(self, keep_vertex: torch.tensor):
+        """ Put all the bad vertices in the background cluster """
+        if sum(keep_vertex) == torch.numel(keep_vertex):
+            # keep all vertex. Nothing to do
+            return self
+        else:
+            my_filter = torch.bincount(self.membership * keep_vertex) > 0
+            count = torch.cumsum(my_filter, dim=-1)
+            old_2_new = (count - count[0]) * my_filter
+
+            if Partition.is_old_2_new_identity(old_2_new):
+                return self
+            else:
+                new_membership = old_2_new[self.membership]
+                new_dict = self.params
+                new_dict["filter_by_vertex"] = True
+                return self._replace(membership=new_membership,
+                                     params=new_dict,
+                                     sizes=torch.bincount(new_membership))
+
     def filter_by_size(self, min_size: Optional[int] = None, max_size: Optional[int] = None):
         """ If a cluster is too small or too large, its label is set to zero (i.e. background value).
             The other labels are adjusted so that there are no gaps in the labels number.
             Min_size and Max_size are integers specifying the number of pixels.
         """
         if (min_size is None) and (max_size is None):
-            raise Exception("At least one among min_size and max_size should be specified")
-        if (min_size is not None) and (max_size is not None):
+            return self
+        elif (min_size is not None) and (max_size is not None):
             assert max_size > min_size > 0, "Condition max_size > min_size > 0 failed."
+            my_filter = (self.sizes > min_size) * (self.sizes < max_size)
+        elif min_size is not None:
+            assert min_size > 0, "Condition min_size > 0 failed."
+            my_filter = (self.sizes > min_size)
+        elif max_size is not None:
+            assert max_size > 0, "Condition max_size > 0 failed."
+            my_filter = (self.sizes < max_size)
+        else:
+            raise Exception("you should never be here!!")
 
-        my_filter = (self.sizes > min_size) * (self.sizes < max_size)
         count = torch.cumsum(my_filter, dim=-1)
         old_2_new = (count - count[0]) * my_filter  # this makes sure that label 0 is always mapped to 0
 
-        new_dict = self.params
-        new_dict["filter_by_size"] = min_size
-        new_membership = old_2_new[self.membership]
-        return self._replace(membership=new_membership, params=new_dict, sizes=torch.bincount(new_membership))
+        if Partition.is_old_2_new_identity(old_2_new):
+            # nothing to do
+            return self
+        else:
+            new_dict = self.params
+            new_dict["filter_by_size"] = (min_size, max_size)
+            new_membership = old_2_new[self.membership]
+            return self._replace(membership=new_membership, params=new_dict, sizes=torch.bincount(new_membership))
 
     def concordance_with_partition(self, other_partition) -> Concordance:
         """ Compute measure of concordance between two partitions:

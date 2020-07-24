@@ -327,59 +327,15 @@ class CompositionalVae(torch.nn.Module):
 
         # Prepare storage
         ch_out = int(((2 * radius_nn + 1) ** 2 - 1)/2)  # this is the number of point NN points
+        ch_to_dxdy = []
+        similarity = torch.zeros((batch_shape, ch_out, w, h), device=mixing_k.device, dtype=mixing_k.dtype)
 
-        #edges_type = 'hard'
-        #edges_type = 'dot_product'
-        #edges_type = "exp_l2_norm"
-        edges_type = "exp_l1_norm"
-
-        if edges_type == 'hard':
-            print(edges_type)
-            pad_is_instance = pad_mixing_k > 0.5
-            ch_to_dxdy = []
-            similarity = torch.zeros((batch_shape, ch_out, w, h), device=mixing_k.device, dtype=torch.uint8)
-            for ch, rolled in enumerate(roller_2d(pad_is_instance, radius=radius_nn)):
-                pad_is_instance_shifted, dx, dy = rolled
-                ch_to_dxdy.append([dx, dy])
-                similarity[:, ch] = (pad_is_instance *
-                                     pad_is_instance_shifted).sum(dim=-5)[:, 0, pad:(pad + w), pad:(pad + h)]
-
-        elif edges_type == 'dot_product':
-            print(edges_type)
-            ch_to_dxdy = []
-            similarity = torch.zeros((batch_shape, ch_out, w, h), device=mixing_k.device, dtype=mixing_k.dtype)
-            for ch, rolled in enumerate(roller_2d(pad_mixing_k, radius=radius_nn)):
-                pad_mixing_k_shifted, dx, dy = rolled
-                ch_to_dxdy.append([dx, dy])
-                similarity[:, ch] = (pad_mixing_k *
-                                     pad_mixing_k_shifted).sum(dim=-5)[:, 0, pad:(pad + w), pad:(pad + h)]
-
-        elif edges_type == 'exp_l2_norm':
-            raise NotImplementedError
-            print(edges_type)
-            ch_to_dxdy = []
-            similarity = torch.zeros((batch_shape, ch_out, w, h), device=mixing_k.device, dtype=mixing_k.dtype)
-            for ch, rolled in enumerate(roller_2d(pad_mixing_k, radius=radius_nn)):
-                pad_mixing_k_shifted, dx, dy = rolled
-                ch_to_dxdy.append([dx, dy])
-                l2_norm = (pad_mixing_k - pad_mixing_k_shifted).pow(2).sum(dim=-5).sqrt()
-                similarity[:, ch] = l2_norm[:, 0, pad:(pad + w), pad:(pad + h)]
-                # print("debug", dx, dy, torch.max(similarity[:, ch]))
-
-        elif edges_type == 'exp_l1_norm':
-            raise NotImplementedError
-            print(edges_type)
-            ch_to_dxdy = []
-            similarity = torch.zeros((batch_shape, ch_out, w, h), device=mixing_k.device, dtype=mixing_k.dtype)
-            for ch, rolled in enumerate(roller_2d(pad_mixing_k, radius=radius_nn)):
-                pad_mixing_k_shifted, dx, dy = rolled
-                ch_to_dxdy.append([dx, dy])
-                l1_norm = (pad_mixing_k - pad_mixing_k_shifted).abs().sum(dim=-5)
-                similarity[:, ch] = l1_norm[:, 0, pad:(pad + w), pad:(pad + h)]
-                # print("debug", dx, dy, torch.max(similarity[:, ch]))
-
-        else:
-            raise Exception("not recognized edges_type")
+        # compute dot product of the mixing_k between nearby vertices
+        for ch, rolled in enumerate(roller_2d(pad_mixing_k, radius=radius_nn)):
+            pad_mixing_k_shifted, dx, dy = rolled
+            ch_to_dxdy.append([dx, dy])
+            similarity[:, ch] = (pad_mixing_k *
+                                 pad_mixing_k_shifted).sum(dim=-5)[:, 0, pad:(pad + w), pad:(pad + h)]
 
         print("--- similarity time %s ---" % (time.time() - time0))
         return Similarity(data=similarity, ch_to_dxdy=ch_to_dxdy)
