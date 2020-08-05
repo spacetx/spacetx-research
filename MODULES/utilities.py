@@ -257,7 +257,7 @@ class RandomCrop(object):
         return i, j
 
     def __call__(self, img: torch.Tensor, roi_mask: Optional[torch.Tensor] = None):
-        batch_size = img.shape[0]
+        batch_size = img.shape[-4]
 
         if roi_mask is None:
 
@@ -268,9 +268,8 @@ class RandomCrop(object):
 
         else:
 
-            assert len(img.shape) == len(roi_mask.shape) == 4
+            assert len(img.shape) == len(roi_mask.shape)
             assert img.shape[-2:] == roi_mask.shape[-2:]
-            assert img.shape[0] == roi_mask.shape[0]
 
             ij_list = []
             fraction_list = []
@@ -345,6 +344,7 @@ class LoaderInMemory(object):
             return self.img[index], self.labels[index], index
         else:
             if self.roi_mask is None:
+                
                 return self.data_augmentation(self.img[index], None), self.labels[index], index
             else:
                 return self.data_augmentation(self.img[index], self.roi_mask[index]), self.labels[index], index
