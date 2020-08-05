@@ -19,11 +19,13 @@ def downsample_and_upsample(x: torch.Tensor, low_resolution: tuple, high_resolut
 
 
 def save_obj(obj, path):
+    # TODO: use torch save
     with open(path, 'wb') as f:
         pickle.dump(obj, f, pickle.HIGHEST_PROTOCOL)
 
 
 def load_obj(path):
+    # TODO: use torch load
     with open(path, 'rb') as f:
         return pickle.load(f)
 
@@ -297,11 +299,17 @@ class LoaderInMemory(object):
                  img: torch.Tensor,
                  roi_mask: Optional[torch.Tensor] = None,
                  labels: Optional[torch.Tensor] = None,
+                 expand_batch_size_factor: int = 1,
                  data_augmentation: Optional[Callable] = None,
                  pin_in_cuda_memory=False,
                  drop_last=False,
                  batch_size=4,
                  shuffle=False):
+        
+        if (data_augmentation is None) and (expand_batch_size_factor > 1):
+            raise Exception("expand_batch_size_factor > 1 makes sense only with a data augmentation strategy. \
+                            Otherwise the dataset will consist of identical copies")
+        
 
         self.pin_in_cuda_memory = pin_in_cuda_memory
         self.drop_last = drop_last
@@ -314,6 +322,9 @@ class LoaderInMemory(object):
             self.labels = -1*torch.ones(img.shape[0]).cpu().detach() if labels is None else labels
             if self.pin_in_cuda_memory:
                 self.labels = self.labels.cuda()
+            self.img = self.img.expand(expand_batch_size_factor,-1,-1,-1)
+            self.labels = self.labels.expand(expand_batch_size_factor)
+            assert self.labels.shape[0] == self.img.shape[0]
 
             if roi_mask is None:
                 self.roi_mask = None
@@ -321,6 +332,10 @@ class LoaderInMemory(object):
                 assert len(img.shape) == len(roi_mask.shape)
                 assert img.shape[0] == roi_mask.shape[0]
                 self.roi_mask = roi_mask.cuda().detach() if self.pin_in_cuda_memory else roi_mask.cpu().detach()
+                self.roi_mask = self.roi_mask.expand(expand_batch_size_factor,-1,-1,-1)
+                assert self.roi_mask.shape[0] == self.img.shape[0]
+                assert len(self.roi_mask.shape) == len(self.img.shape)
+            
 
     def __getitem__(self, index):
         assert isinstance(index, torch.Tensor)
@@ -358,7 +373,7 @@ class LoaderInMemory(object):
         #print("torch.min(img)", torch.min(self.img))
         # grab one minibatch
         img, labels, index = next(self.__iter__())
-        print("MINIBATCH: img.shapes ->", img.shape, labels, index)
+        print("MINIBATCH: img.shapes labels.shape, index.shape ->", img.shape, labels.shape, index.shape)
         return show_batch(img[:8], n_col=4, n_padding=4, pad_value=1, figsize=(24, 24))
 
     def load(self, batch_size=None, index=None):
