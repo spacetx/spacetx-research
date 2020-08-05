@@ -4,9 +4,29 @@ from typing import NamedTuple, Optional, Tuple
 import skimage.color
 import matplotlib.pyplot as plt
 
+
 #  ----------------------------------------------------------------  #
-#  ------- Stuff defined in terms of native types -----------------  #
+#  ------- Stuff Related to PreProcessing -------------------------  #
 #  ----------------------------------------------------------------  #
+
+class ImageBbox(NamedTuple):
+    """ Follows Scikit Image convention. Pixels belonging to the bounding box are in the half-open interval:
+        [min_row;max_row) and [min_col;max_col). """
+    min_row: int
+    min_col: int
+    max_row: int
+    max_col: int
+
+
+class PreProcess(NamedTuple):
+    img: torch.Tensor
+    roi_mask: torch.Tensor
+    bbox_original: ImageBbox
+    bbox_crop: ImageBbox
+
+#  --------------------------------------------------------------------------------------  #
+#  ------- Stuff Related to PostProcessing (i.e. Graph Clustering Based on Modularity) --  #
+#  --------------------------------------------------------------------------------------  #
 
 
 class Suggestion(NamedTuple):
@@ -26,7 +46,7 @@ class Suggestion(NamedTuple):
                      fontsize=fontsize)
 
 
-class Concordance(NamedTuple):
+class ConcordancePartition(NamedTuple):
     joint_distribution: torch.tensor
     mutual_information: float
     delta_n: int
@@ -96,7 +116,7 @@ class Partition(NamedTuple):
             new_membership = old_2_new[self.membership]
             return self._replace(membership=new_membership, params=new_dict, sizes=torch.bincount(new_membership))
 
-    def concordance_with_partition(self, other_partition) -> Concordance:
+    def concordance_with_partition(self, other_partition) -> ConcordancePartition:
         """ Compute measure of concordance between two partitions:
             joint_distribution
             mutual_information
@@ -146,10 +166,39 @@ class Partition(NamedTuple):
         union = torch.sum(self.sizes[1:]) + torch.sum(other_partition.sizes[1:]) - intersection  # exclude background
         iou = intersection.float()/union
 
-        return Concordance(joint_distribution=pxy,
-                           mutual_information=mutual_information.item(),
-                           delta_n=ny - nx,
-                           iou=iou.item())
+        return ConcordancePartition(joint_distribution=pxy,
+                                    mutual_information=mutual_information.item(),
+                                    delta_n=ny - nx,
+                                    iou=iou.item())
+
+
+class Similarity(NamedTuple):
+    data: torch.tensor  # *, nn, w, h where nn = ((2*r+1)^2 -1)//2
+    ch_to_dxdy: list  # [(dx0,dy0),(dx1,dy1),....]  of lenght nn
+
+    def reduce_similarity_radius(self, new_radius: int):
+
+        # Check which element should be selected
+        to_select = [(abs(dxdy[0]) <= new_radius and abs(dxdy[1]) <= new_radius) for dxdy in self.ch_to_dxdy]
+        all_true = sum(to_select) == len(to_select)
+        if all_true:
+            raise Exception("new radius should be smaller than current radius. No subsetting left to do")
+
+        # Subsample the ch_to_dxdy
+        new_ch_to_dxdy = []
+        for selected, dxdy in zip(to_select, self.ch_to_dxdy):
+            if selected:
+                new_ch_to_dxdy.append(dxdy)
+
+        # Subsample the similarity matrix
+        index = torch.arange(len(to_select), dtype=torch.long)[to_select]
+
+        return Similarity(data=torch.index_select(self.data, dim=-3, index=index), ch_to_dxdy=new_ch_to_dxdy)
+
+
+#  ----------------------------------------------------------------  #
+#  ------- Stuff Related to Processing (i.e. CompositionalVAE) ----  #
+#  ----------------------------------------------------------------  #
 
 
 class DIST(NamedTuple):
@@ -180,35 +229,6 @@ class Checkpoint(NamedTuple):
     history_dict: dict
 
 
-class Similarity(NamedTuple):
-    data: torch.tensor  # *, nn, w, h where nn = ((2*r+1)^2 -1)//2
-    ch_to_dxdy: list  # [(dx0,dy0),(dx1,dy1),....]  of lenght nn
-
-    def reduce_similarity_radius(self, new_radius: int):
-
-        # Check which element should be selected
-        to_select = [(abs(dxdy[0]) <= new_radius and abs(dxdy[1]) <= new_radius) for dxdy in self.ch_to_dxdy]
-        all_true = sum(to_select) == len(to_select)
-        if all_true:
-            raise Exception("new radius should be smaller than current radius. No subsetting left to do")
-
-        # Subsample the ch_to_dxdy
-        new_ch_to_dxdy = []
-        for selected, dxdy in zip(to_select, self.ch_to_dxdy):
-            if selected:
-                new_ch_to_dxdy.append(dxdy)
-
-        # Subsample the similarity matrix
-        index = torch.arange(len(to_select), dtype=torch.long)[to_select]
-
-        return Similarity(data=torch.index_select(self.data, dim=-3, index=index), ch_to_dxdy=new_ch_to_dxdy)
-
-
-#  ----------------------------------------------------------------  #
-#  -------Stuff defined in term of other sutff --------------------  #
-#  ----------------------------------------------------------------  #
-
-
 class Segmentation(NamedTuple):
     """ Where * is the batch dimension which might be NOT present """
     raw_image: torch.Tensor  # *,ch,w,h
@@ -235,9 +255,10 @@ class Inference(NamedTuple):
     big_bg: torch.Tensor
     big_img: torch.Tensor
     big_mask: torch.Tensor
-    big_mask_NON_interacting: torch.Tensor
+    big_mask_NON_interacting: torch.Tensor  # Use exclusively to compute overlap penalty
     prob: torch.Tensor
     bounding_box: BB
+    zinstance_each_obj: torch.Tensor
     kl_zinstance_each_obj: torch.Tensor
     kl_zwhere_map: torch.Tensor
     kl_logit_map: torch.Tensor
@@ -245,7 +266,7 @@ class Inference(NamedTuple):
 
 class MetricMiniBatch(NamedTuple):
     loss: torch.Tensor
-    nll: torch.Tensor
+    mse: torch.Tensor
     reg: torch.Tensor
     kl_tot: torch.Tensor
     kl_instance: torch.Tensor
@@ -262,19 +283,15 @@ class MetricMiniBatch(NamedTuple):
 
 
 class RegMiniBatch(NamedTuple):
-    # cost_fg_pixel_fraction: torch.Tensor
     cost_overlap: torch.Tensor
     cost_vol_absolute: torch.Tensor
-    # cost_volume_mask_fraction: torch.Tensor
-    # cost_prob_map_integral: torch.Tensor
-    # cost_prob_map_fraction: torch.Tensor
-    # cost_prob_map_TV: torch.Tensor
+    cost_total: torch.Tensor
 
 
 class Metric_and_Reg(NamedTuple):
     # MetricMiniBatch (in the same order as underlying class)
     loss: torch.Tensor
-    nll: torch.Tensor
+    mse: torch.Tensor
     reg: torch.Tensor
     kl_tot: torch.Tensor
     kl_instance: torch.Tensor
@@ -289,13 +306,9 @@ class Metric_and_Reg(NamedTuple):
     length_GP: torch.Tensor
     n_obj_counts: torch.Tensor
     # RegMiniBatch (in the same order as underlying class)
-    # cost_fg_pixel_fraction: torch.Tensor
     cost_overlap: torch.Tensor
     cost_vol_absolute: torch.Tensor
-    # cost_volume_mask_fraction: torch.Tensor
-    # cost_prob_map_integral: torch.Tensor
-    # cost_prob_map_fraction: torch.Tensor
-    # cost_prob_map_TV: torch.Tensor
+    cost_total: torch.Tensor
 
     @classmethod
     def from_merge(cls, metrics, regularizations):

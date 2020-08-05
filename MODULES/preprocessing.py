@@ -1,17 +1,15 @@
-import collections
 import skimage.exposure
 import numpy as np
+from .namedtuple import ImageBbox
 import PIL.Image
 PIL.Image.MAX_IMAGE_PIXELS = None
-
-BBOX = collections.namedtuple("BBOX","min_row, min_col, max_row, max_col")
 
 
 def pil_to_numpy(pilfile, mode: str = 'L', reduction_factor: int = 1):
     """ Open file using pillow, and return numpy array with shape:
         w,h,channel if channel > 1
         w,h         if channel ==1.
-        Mode can be: 'L', 'RGB', 'I'
+        Mode can be: 'L', 'RGB', 'I', 'F'
         See https://pillow.readthedocs.io/en/3.0.x/handbook/concepts.html
     """
     assert (mode == 'L' or mode == 'RGB' or mode == 'I' or mode == 'F')
@@ -87,10 +85,10 @@ def find_bbox(mask):
     min_row = row.shape[0] - max(np.arange(start=row.shape[0], stop=0, step=-1) * row)
     max_col = max(np.arange(col.shape[0]) * col) + 1
     min_col = col.shape[0] - max(np.arange(start=col.shape[0], stop=0, step=-1) * col)
-    return BBOX(min_row=min_row,
-                min_col=min_col,
-                max_row=max_row,
-                max_col=max_col)
+    return ImageBbox(min_row=min_row,
+                     min_col=min_col,
+                     max_row=max_row,
+                     max_col=max_col)
 
 
 #####def normalize_tensor(image, scale_each_image=False, scale_each_channel=False, in_place=False):

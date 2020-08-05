@@ -326,8 +326,11 @@ class Inference_and_Generation(torch.nn.Module):
                          big_mask=big_mask,
                          big_mask_NON_interacting=big_mask_NON_interacting,
                          big_img=big_img,
+                         # the sample of the 3 latent variables
                          prob=prob_few,
                          bounding_box=bounding_box_few,
+                         zinstance_each_obj=zinstance_few.sample,
+                         # the kl of the 3 latent variables
                          kl_logit_map=logit_map.kl,
                          kl_zwhere_map=zwhere_map.kl,
                          kl_zinstance_each_obj=zinstance_few.kl)
