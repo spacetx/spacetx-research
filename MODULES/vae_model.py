@@ -501,6 +501,7 @@ class CompositionalVae(torch.nn.Module):
                            generate_synthetic_data: bool,
                            topk_only: bool,
                            draw_image: bool,
+                           draw_bg: bool,
                            draw_boxes: bool,
                            verbose: bool,
                            noisy_sampling: bool,
@@ -541,6 +542,8 @@ class CompositionalVae(torch.nn.Module):
                                     bounding_box=results.bounding_box,
                                     big_mask=results.big_mask,
                                     big_img=results.big_img,
+                                    big_bg=results.big_bg,
+                                    draw_bg=draw_bg,
                                     draw_boxes=draw_boxes)
             else:
                 imgs_rec = torch.zeros_like(imgs_in)
@@ -550,6 +553,7 @@ class CompositionalVae(torch.nn.Module):
     def forward(self,
                 imgs_in: torch.tensor,
                 draw_image: bool = False,
+                draw_bg: bool = False,
                 draw_boxes: bool = False,
                 verbose: bool = False):
 
@@ -557,6 +561,7 @@ class CompositionalVae(torch.nn.Module):
                                        generate_synthetic_data=False,
                                        topk_only=False,
                                        draw_image=draw_image,
+                                       draw_bg=draw_bg,
                                        draw_boxes=draw_boxes,
                                        verbose=verbose,
                                        noisy_sampling=True,  # True if self.training else False,

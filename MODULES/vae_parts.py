@@ -312,6 +312,7 @@ class Inference_and_Generation(torch.nn.Module):
         ch_size = big_stuff.shape[-3]
         big_weight, big_img = torch.split(big_stuff, split_size_or_sections=(1, ch_size-1), dim=-3)
 
+
         # -----------------------
         # 7. From weight to masks
         # ------------------------

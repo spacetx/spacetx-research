@@ -401,6 +401,12 @@ class SpecialDataSet(object):
         index = torch.randperm(self.__len__()).long() if shuffle else torch.arange(self.__len__()).long()
         for pos in range(0, n_max, batch_size):
             yield self.__getitem__(index[pos:pos + batch_size])
+            
+    def load(self, batch_size=None, index=None):
+        if (batch_size is None and index is None) or (batch_size is not None and index is not None):
+            raise Exception("Only one between batch_size and index must be specified")
+        index = torch.randint(low=0, high=self.__len__(), size=(batch_size,)).long() if index is None else index
+        return self.__getitem__(index)
 
     def check_batch(self, batch_size: int = 8):
         print("Dataset lenght:", self.__len__())
@@ -551,9 +557,7 @@ def compute_average_intensity_in_box(imgs: torch.Tensor, bounding_box: BB) -> to
     x3 = (bounding_box.bx + 0.5 * bounding_box.bw).long().clamp(min=0, max=w)
     y1 = (bounding_box.by - 0.5 * bounding_box.bh).long().clamp(min=0, max=h)
     y3 = (bounding_box.by + 0.5 * bounding_box.bh).long().clamp(min=0, max=h)
-    assert x1.shape == x3.shape == y1.shape == y3.shape
-    print(x1.shape)
-    assert 1==2
+    assert x1.shape == x3.shape == y1.shape == y3.shape  # n_boxes, batch_size
 
     # compute the area
     # Note that this way penalizes boxes that go out-of-bound
@@ -569,10 +573,14 @@ def compute_average_intensity_in_box(imgs: torch.Tensor, bounding_box: BB) -> to
 
     #mask_x1 = (x1 > 0).view(1,-1,1)
     #mask_y1 = (y1 > 0).view(1,)
-    tot_intensity = cum[b_index, x3, y3] + cum[b_index, x1-1, y1-1] - cum[b_index, x1-1, y3] - cum[b_index, x3, y1-1]
-
-    # return the average intensity
-    assert tot_intensity.shape == x1.shape
+    x1_ge_1 = (x1 >= 1).float()
+    x3_ge_1 = (x3 >= 1).float()
+    y1_ge_1 = (y1 >= 1).float()
+    y3_ge_1 = (y3 >= 1).float()
+    tot_intensity = cum[b_index, x3-1, y3-1]*x3_ge_1*y3_ge_1 + \
+                    cum[b_index, x1-1, y1-1]*x1_ge_1*y1_ge_1 - \
+                    cum[b_index, x1-1, y3-1]*x1_ge_1*y3_ge_1 - \
+                    cum[b_index, x3-1, y1-1]*x3_ge_1*y1_ge_1
     return tot_intensity / area
 
 
@@ -580,19 +588,24 @@ def draw_img(prob: torch.tensor,
              bounding_box: BB,
              big_mask: torch.tensor,
              big_img: torch.tensor,
+             big_bg: torch.tensor,
+             draw_bg: bool,
              draw_boxes: bool) -> torch.tensor:
 
     assert len(prob.shape) == 2  # boxes, batch
     assert len(big_mask.shape) == len(big_img.shape) == 5  # boxes, batch, ch, w, h
 
-    rec_imgs_no_bb = torch.sum(prob[..., None, None, None] * big_mask * big_img, dim=-5)  # sum over boxes
+    rec_imgs_no_bb = (prob[..., None, None, None] * big_mask * big_img).sum(dim=-5)  # sum over boxes
+    fg_mask = (prob[..., None, None, None] * big_mask).sum(dim=-5) # sum over boxes    
+    background = (1-fg_mask) * big_bg if draw_bg else torch.zeros_like(big_bg)
+    
     width, height = rec_imgs_no_bb.shape[-2:]
 
     bounding_boxes = draw_bounding_boxes(prob=prob,
                                          bounding_box=bounding_box,
                                          width=width,
                                          height=height) if draw_boxes else torch.zeros_like(rec_imgs_no_bb)
-    return bounding_boxes + rec_imgs_no_bb
+    return bounding_boxes + rec_imgs_no_bb + background
 
 
 def draw_bounding_boxes(prob: Optional[torch.Tensor], bounding_box: BB, width: int, height: int) -> torch.Tensor:

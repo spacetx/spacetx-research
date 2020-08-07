@@ -38,8 +38,8 @@ class UNet(torch.nn.Module):
         # Up path
         self.up_path = torch.nn.ModuleList()
         for i in range(0, self.n_max_pool):
-            j = int(j / 2)
-            ch = int(ch / 2)
+            j = int(j // 2)
+            ch = int(ch // 2)
             self.ch_list.append(ch)
             self.j_list.append(j)
             self.up_path.append(UpBlock(self.ch_list[-2], self.ch_list[-1]))
@@ -117,9 +117,9 @@ class UNet(torch.nn.Module):
 
         for k in range(nj):
             j = self.j_list[k]
-            index_w = 1 + ((counter_w / j) % 2)  # either 1 or 2
+            index_w = 1 + ((counter_w // j) % 2)  # either 1 or 2
             dx = index_w.float().view(w_raw, 1)
-            index_h = 1 + ((counter_h / j) % 2)  # either 1 or 2
+            index_h = 1 + ((counter_h // j) % 2)  # either 1 or 2
             dy = index_h.float().view(1, h_raw)
             check_board[k, 0, 0, :, :] = 0.25 * (dy * dx)  # dx*dy=1,2,4 multiply by 0.25 to have (0,1)
 
