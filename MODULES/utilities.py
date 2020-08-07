@@ -10,7 +10,6 @@ from torch.distributions.utils import broadcast_all
 from typing import Union, Callable, Optional, List, Tuple
 from .namedtuple import BB, DIST
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader
 
 
 def downsample_and_upsample(x: torch.Tensor, low_resolution: tuple, high_resolution: tuple):

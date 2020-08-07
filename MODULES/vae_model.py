@@ -389,7 +389,7 @@ class CompositionalVae(torch.nn.Module):
                             prob_corr_factor: Optional[float] = None,
                             overlap_threshold: Optional[float] = None,
                             radius_nn: int = 5,
-                            batch: int = 64) -> Segmentation:
+                            batch_size: int = 32) -> Segmentation:
         """ Uses a sliding window approach to collect a co_objectiveness information
             about the pixels of a large image """
 
@@ -411,6 +411,10 @@ class CompositionalVae(torch.nn.Module):
             pad_w = crop_size[0] - stride[0]
             pad_h = crop_size[1] - stride[1]
             pad_list = [pad_w, crop_size[0], pad_h, crop_size[1]]
+
+            # Padding duplicates the image. For large images this is not tolerable.
+            # Make sure that this duplication happens on CPU not GPU where RAM is scarce.
+            single_img = single_img.cpu()
             try:
                 img_padded = F.pad(single_img.unsqueeze(0),
                                    pad=pad_list, mode='reflect')  # 1, ch_in, w_pad, h_pad
@@ -427,7 +431,8 @@ class CompositionalVae(torch.nn.Module):
             print(f'I am going to process {len(location_of_corner)} patches')
 
             # split the list in chunks of batch_size
-            ij_list_of_list = [location_of_corner[n:n + batch] for n in range(0, len(location_of_corner), batch)]
+            ij_list_of_list = [location_of_corner[n:n + batch_size] for n in range(0,
+                                                                                   len(location_of_corner), batch_size)]
 
             # Build a batch of images and process them
             big_similarity, big_integer_mask = None, None
@@ -437,12 +442,12 @@ class CompositionalVae(torch.nn.Module):
                 # Build a batch of images
                 batch_imgs = torch.cat([img_padded[..., ij[0]:(ij[0] + crop_size[0]), ij[1]:(ij[1] + crop_size[1])]
                                         for ij in ij_list], dim=0)
-                
+
                 if (n % 100 == 0) or (n == len(ij_list_of_list)-1):
                     print(f'{n} out of {len(ij_list_of_list)-1} -> batch_of_imgs.shape = {batch_imgs.shape}') 
 
-                # Segment the batch
-                segmentation = self.segment(batch_imgs,
+                # Segment the batch (and move to CPU or GPU depending where the model lives)
+                segmentation = self.segment(batch_imgs.to(self.sigma_fg.device),
                                             n_objects_max=n_objects_max_per_patch,
                                             prob_corr_factor=prob_corr_factor,
                                             overlap_threshold=overlap_threshold,
@@ -451,22 +456,23 @@ class CompositionalVae(torch.nn.Module):
                                             radius_nn=radius_nn)
 
                 if big_similarity is None:
+                    # Instantiete these big objects on CPU
                     big_similarity = torch.zeros((segmentation.similarity.data.shape[-3], w_paddded, h_padded),
-                                                 device=segmentation.similarity.data.device,
+                                                 device=torch.device('cpu'),
                                                  dtype=segmentation.similarity.data.dtype)
                     big_fg_prob = torch.zeros((w_paddded, h_padded),
-                                              device=segmentation.fg_prob.device,
+                                              device=torch.device('cpu'),
                                               dtype=segmentation.fg_prob.dtype)
                     big_integer_mask = torch.zeros((w_paddded, h_padded),
-                                                   device=segmentation.integer_mask.device,
+                                                   device=torch.device('cpu'),
                                                    dtype=segmentation.integer_mask.dtype)
 
                 for b, ij in enumerate(ij_list):
 
                     big_similarity[:, ij[0]:(ij[0]+crop_size[0]),
-                                      ij[1]:(ij[1]+crop_size[1])] += segmentation.similarity.data[b, :, :, :]
+                                      ij[1]:(ij[1]+crop_size[1])] += segmentation.similarity.data[b, :, :, :].cpu()
                     big_fg_prob[ij[0]:(ij[0]+crop_size[0]),
-                                ij[1]:(ij[1]+crop_size[1])] += segmentation.fg_prob[b, 0, :, :]
+                                ij[1]:(ij[1]+crop_size[1])] += segmentation.fg_prob[b, 0, :, :].cpu()
 
                     # Find a set of not-overlapping tiles to obtain a sample segmentation (without graph clustering)
                     if ((ij[0] - pad_w) % crop_size[0] == 0) and ((ij[1] - pad_h) % crop_size[1] == 0):
@@ -475,7 +481,7 @@ class CompositionalVae(torch.nn.Module):
                                                (segmentation.integer_mask[b] + n_instances_tot)
                         n_instances_tot += n_instances
                         big_integer_mask[ij[0]:(ij[0]+crop_size[0]),
-                                         ij[1]:(ij[1]+crop_size[1])] = shifted_integer_mask
+                                         ij[1]:(ij[1]+crop_size[1])] = shifted_integer_mask.cpu()
 
             # Normalize the similarity
             big_similarity_normalized = big_similarity[...,
