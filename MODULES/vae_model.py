@@ -574,15 +574,17 @@ class CompositionalVae(torch.nn.Module):
 
     def generate(self,
                  imgs_in: torch.tensor,
+                 draw_bg: bool = False,
                  draw_boxes: bool = False,
                  verbose: bool = False):
 
         with torch.no_grad():
-
+            
             return self.process_batch_imgs(imgs_in=torch.zeros_like(imgs_in),
                                            generate_synthetic_data=True,
                                            topk_only=False,
                                            draw_image=True,
+                                           draw_bg=draw_bg,
                                            draw_boxes=draw_boxes,
                                            verbose=verbose,
                                            noisy_sampling=True,
