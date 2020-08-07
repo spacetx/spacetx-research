@@ -38,34 +38,29 @@ class UNet(torch.nn.Module):
         # Up path
         self.up_path = torch.nn.ModuleList()
         for i in range(0, self.n_max_pool):
-            j = int(j / 2)
-            ch = int(ch / 2)
+            j = int(j // 2)
+            ch = int(ch // 2)
             self.ch_list.append(ch)
             self.j_list.append(j)
             self.up_path.append(UpBlock(self.ch_list[-2], self.ch_list[-1]))
-
-        # Compute s_p_k
-        self.s_p_k = list()
-        for module in self.down_path:
-            self.s_p_k = module.__add_to_spk_list__(self.s_p_k)
-        for module in self.up_path:
-            self.s_p_k = module.__add_to_spk_list__(self.s_p_k)
 
         # Prediction maps
         self.pred_features = MLP_1by1(ch_in=self.ch_list[-1],
                                       ch_out=self.n_ch_output_features,
                                       ch_hidden=-1)  # this means there is NO hidden layer
 
-        self.encode_zwhere = Encoder1by1(ch_in=self.ch_list[-self.level_zwhere_and_logit_output - 1],
+        self.ch_in_zwhere = min(20, self.ch_list[-self.level_zwhere_and_logit_output - 1])
+        self.encode_zwhere = Encoder1by1(ch_in=self.ch_in_zwhere,
                                          dim_z=self.dim_zwhere,
                                          ch_hidden=None)  # this means there is ONE hidden layer of automatic size
 
-        self.encode_logit = Encoder1by1(ch_in=self.ch_list[-self.level_zwhere_and_logit_output - 1],
+        self.ch_in_logit = min(20, self.ch_list[-self.level_zwhere_and_logit_output - 1])
+        self.encode_logit = Encoder1by1(ch_in=self.ch_in_logit,
                                         dim_z=self.dim_logit,
                                         ch_hidden=None)  # this means there is ONE hidden layer of automatic size
 
         # I don't need all the channels to predict the background. Few channels are enough
-        self.ch_in_bg = min(5, self.ch_list[-self.level_background_output - 1])
+        self.ch_in_bg = min(10, self.ch_list[-self.level_background_output - 1])
         self.pred_background = PredictBackground(ch_in=self.ch_in_bg,
                                                  ch_out=self.ch_raw_image,
                                                  ch_hidden=-1)  # this means there is NO hidden layer
@@ -92,8 +87,8 @@ class UNet(torch.nn.Module):
         for i, up in enumerate(self.up_path):
             dist_to_end_of_net = self.n_max_pool - i
             if dist_to_end_of_net == self.level_zwhere_and_logit_output:
-                zwhere = self.encode_zwhere(x)
-                logit = self.encode_logit(x)
+                zwhere = self.encode_zwhere(x[..., :self.ch_in_zwhere, :, :])
+                logit = self.encode_logit(x[..., :self.ch_in_logit, :, :])
             if dist_to_end_of_net == self.level_background_output:
                 zbg = self.pred_background(x[..., :self.ch_in_bg, :, :])  # only few channels needed for predicting bg
 
@@ -110,6 +105,7 @@ class UNet(torch.nn.Module):
                           features=features)
 
     def show_grid(self, ref_image):
+        """ overimpose a grid the size of the corresponding resolution of each unet layer """
 
         assert len(ref_image.shape) == 4
         batch, ch, w_raw, h_raw = ref_image.shape
@@ -121,9 +117,9 @@ class UNet(torch.nn.Module):
 
         for k in range(nj):
             j = self.j_list[k]
-            index_w = 1 + ((counter_w / j) % 2)  # either 1 or 2
+            index_w = 1 + ((counter_w // j) % 2)  # either 1 or 2
             dx = index_w.float().view(w_raw, 1)
-            index_h = 1 + ((counter_h / j) % 2)  # either 1 or 2
+            index_h = 1 + ((counter_h // j) % 2)  # either 1 or 2
             dy = index_h.float().view(1, h_raw)
             check_board[k, 0, 0, :, :] = 0.25 * (dy * dx)  # dx*dy=1,2,4 multiply by 0.25 to have (0,1)
 
@@ -134,41 +130,3 @@ class UNet(torch.nn.Module):
         # ref_image of shape ----->         batch, ch, w_raw, h_raw
         return ref_image + check_board
 
-    def describe_receptive_field(self, image):
-        """ Show the value of ch_w_h_j_rf_loc as the tensor moves thorugh the net.
-            Here:
-            a. w,h are the width and height
-            b. j is grid spacing
-            c. rf is the maximum theoretical receptive field
-            d. wloc,hloc are the location of the center of the first cell
-        """
-        w, h = image.shape[-2:]
-        j = 1
-        rf = 1
-        w_loc = 0.5
-        h_loc = 0.5
-        current_layer = (w, h, j, rf, w_loc, h_loc)
-        i = -1
-        for i in range(0, len(self.s_p_k)):
-            print("At layer l= ", i, " we have w_h_j_rf_wloc_hloc= ", current_layer)
-            current_layer = self.out_from_in(self.s_p_k[i], current_layer)
-        print("At layer l= ", i + 1, " we have w_h_j_rf_wloc_hloc= ", current_layer)
-
-    @staticmethod
-    def out_from_in(s_p_k, layer_in):
-        w_in, h_in, j_in, rf_in, wloc_in, hloc_in = layer_in
-        s = s_p_k[0]
-        p = s_p_k[1]
-        k = s_p_k[2]
-
-        w_out = numpy.floor((w_in - k + 2 * p) / s) + 1
-        h_out = numpy.floor((h_in - k + 2 * p) / s) + 1
-
-        pad_w = ((w_out - 1) * s - w_in + k) / 2
-        pad_h = ((h_out - 1) * s - h_in + k) / 2
-
-        j_out = j_in * s
-        rf_out = rf_in + (k - 1) * j_in
-        wloc_out = wloc_in + ((k - 1) / 2 - pad_w) * j_in
-        hloc_out = hloc_in + ((k - 1) / 2 - pad_h) * j_in
-        return int(w_out), int(h_out), j_out, int(rf_out), wloc_out, hloc_out

@@ -312,6 +312,7 @@ class Inference_and_Generation(torch.nn.Module):
         ch_size = big_stuff.shape[-3]
         big_weight, big_img = torch.split(big_stuff, split_size_or_sections=(1, ch_size-1), dim=-3)
 
+
         # -----------------------
         # 7. From weight to masks
         # ------------------------
@@ -326,8 +327,11 @@ class Inference_and_Generation(torch.nn.Module):
                          big_mask=big_mask,
                          big_mask_NON_interacting=big_mask_NON_interacting,
                          big_img=big_img,
+                         # the sample of the 3 latent variables
                          prob=prob_few,
                          bounding_box=bounding_box_few,
+                         zinstance_each_obj=zinstance_few.sample,
+                         # the kl of the 3 latent variables
                          kl_logit_map=logit_map.kl,
                          kl_zwhere_map=zwhere_map.kl,
                          kl_zinstance_each_obj=zinstance_few.kl)

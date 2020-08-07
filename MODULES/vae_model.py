@@ -9,9 +9,9 @@ def pretty_print_metrics(epoch: int,
                          metric: tuple,
                          is_train: bool = True) -> str:
     if is_train:
-        s = 'Train [epoch {0:4d}] loss={1[loss]:.3f}, nll={1[nll]:.3f}, reg={1[reg]:.3f}, kl_tot={1[kl_tot]:.3f}, sparsity={1[sparsity]:.3f}, acc={1[accuracy]:.3f}, fg_fraction={1[fg_fraction]:.3f}, geco_sp={1[geco_sparsity]:.3f}, geco_bal={1[geco_balance]:.3f}'.format(epoch, metric)
+        s = 'Train [epoch {0:4d}] loss={1[loss]:.3f}, mse={1[mse]:.3f}, reg={1[reg]:.3f}, kl_tot={1[kl_tot]:.3f}, sparsity={1[sparsity]:.3f}, fg_fraction={1[fg_fraction]:.3f}, geco_sp={1[geco_sparsity]:.3f}, geco_bal={1[geco_balance]:.3f}'.format(epoch, metric)
     else:
-        s = 'Test  [epoch {0:4d}] loss={1[loss]:.3f}, nll={1[nll]:.3f}, reg={1[reg]:.3f}, kl_tot={1[kl_tot]:.3f}, sparsity={1[sparsity]:.3f}, acc={1[accuracy]:.3f}, fg_fraction={1[fg_fraction]:.3f}, geco_sp={1[geco_sparsity]:.3f}, geco_bal={1[geco_balance]:.3f}'.format(epoch, metric)
+        s = 'Test  [epoch {0:4d}] loss={1[loss]:.3f}, mse={1[mse]:.3f}, reg={1[reg]:.3f}, kl_tot={1[kl_tot]:.3f}, sparsity={1[sparsity]:.3f}, fg_fraction={1[fg_fraction]:.3f}, geco_sp={1[geco_sparsity]:.3f}, geco_bal={1[geco_balance]:.3f}'.format(epoch, metric)
     return s
     
 
@@ -134,10 +134,10 @@ class CompositionalVae(torch.nn.Module):
         # Raw image parameters
         self.dict_soft_constraints = params["soft_constraint"]
         self.nms_dict = params["nms"]
-        self.sigma_fg = torch.tensor(params["loss"]["fg_std"])[..., None, None]  # add singleton for width, height
-        self.sigma_bg = torch.tensor(params["loss"]["bg_std"])[..., None, None]  # add singleton for width, height
+        self.sigma_fg = torch.tensor(params["GECO_loss"]["fg_std"])[..., None, None]  # add singleton for width, height
+        self.sigma_bg = torch.tensor(params["GECO_loss"]["bg_std"])[..., None, None]  # add singleton for width, height
 
-        self.geco_dict = params["GECO"]
+        self.geco_dict = params["GECO_loss"]
         self.input_img_dict = params["input_image"]
 
         self.geco_sparsity_factor = torch.nn.Parameter(data=torch.tensor(self.geco_dict["factor_sparsity_range"][1]),
@@ -185,18 +185,23 @@ class CompositionalVae(torch.nn.Module):
                                                             chosen=chosen)
         cost_volume_absolute_times_prob = torch.sum(cost_volume_absolute * inference.prob, dim=-2)  # sum over boxes
 
+
         # Note that before returning I am computing the mean over the batch_size (which is the only dimension left)
-        # assert cost_fg_pixel_fraction.shape == cost_overlap.shape
-        return RegMiniBatch(cost_overlap=cost_overlap.mean(),
-                            cost_vol_absolute=cost_volume_absolute_times_prob.mean())
-    
-    def NLL_MSE(self, output: torch.tensor, target: torch.tensor, sigma: torch.tensor) -> torch.Tensor:
+        minibatch_mean_cost_overlap = cost_overlap.mean()
+        minibatch_mean_cost_volume_absolute_times_prob = cost_volume_absolute_times_prob.mean()
+        minibatch_mean_total_cost = minibatch_mean_cost_overlap + minibatch_mean_cost_volume_absolute_times_prob
+        return RegMiniBatch(cost_overlap=minibatch_mean_cost_overlap,
+                            cost_vol_absolute=minibatch_mean_cost_volume_absolute_times_prob,
+                            cost_total=minibatch_mean_total_cost)
+
+    @staticmethod
+    def NLL_MSE(output: torch.tensor, target: torch.tensor, sigma: torch.tensor) -> torch.Tensor:
         return ((output-target)/sigma).pow(2)
 
     def compute_metrics(self,
                         imgs_in: torch.Tensor,
                         inference: Inference,
-                        reg: RegMiniBatch) -> MetricMiniBatch:
+                        reg_av: torch.Tensor) -> MetricMiniBatch:
 
         # Preparation
         batch_size, ch, w, h = imgs_in.shape
@@ -211,15 +216,9 @@ class CompositionalVae(torch.nn.Module):
         # 1. Observation model
         # if the observation_std is fixed then normalization 1.0/sqrt(2*pi*sigma^2) is irrelevant.
         # We are better off using MeanSquareError metric
-        nll_k = self.NLL_MSE(output=inference.big_img, target=imgs_in, sigma=self.sigma_fg)
-        nll_bg = self.NLL_MSE(output=inference.big_bg, target=imgs_in, sigma=self.sigma_bg)  # batch_size, ch, w, h
-        nll_av = (torch.sum(mixing_k * nll_k, dim=-5) + mixing_bg * nll_bg).mean()  # mean over batch_size, ch, w, h
-
-        # 2. Regularizations
-        reg_av: torch.Tensor = torch.zeros(1, device=imgs_in.device, dtype=imgs_in.dtype)  # shape: 1
-        for f in reg._fields:
-            reg_av += getattr(reg, f)
-        reg_av = reg_av.mean()  # shape []
+        mse_k = CompositionalVae.NLL_MSE(output=inference.big_img, target=imgs_in, sigma=self.sigma_fg)
+        mse_bg = CompositionalVae.NLL_MSE(output=inference.big_bg, target=imgs_in, sigma=self.sigma_bg)  # batch_size, ch, w, h
+        mse_av = (torch.sum(mixing_k * mse_k, dim=-5) + mixing_bg * mse_bg).mean()  # mean over batch_size, ch, w, h
 
         # 2. Sparsity should encourage:
         # 1. small probabilities
@@ -255,6 +254,7 @@ class CompositionalVae(torch.nn.Module):
                                                              max=max(self.geco_dict["factor_balance_range"]))
             f_sparsity = self.geco_sparsity_factor.data.clamp_(min=min(self.geco_dict["factor_sparsity_range"]),
                                                                max=max(self.geco_dict["factor_sparsity_range"]))
+            one_minus_f_balance = torch.ones_like(f_balance) - f_balance
 
         # 6. Loss_VAE
         # TODO:
@@ -262,9 +262,9 @@ class CompositionalVae(torch.nn.Module):
         # 2. move reg_av to the other size, i.e. proportional to 1-f_balance
         kl_av = kl_zinstance_av + kl_zwhere_av + kl_logit_tot / (1E-3 + ma_dict["kl_logit_tot"])
         sparsity_av = fg_fraction_mask_av + fg_fraction_box_av + prob_total_av
-        assert nll_av.shape == reg_av.shape == kl_av.shape == sparsity_av.shape
+        assert mse_av.shape == reg_av.shape == kl_av.shape == sparsity_av.shape
 
-        loss_vae = f_sparsity * sparsity_av + f_balance * (nll_av + reg_av) + (1.0 - f_balance) * kl_av
+        loss_vae = f_sparsity * sparsity_av + f_balance * (mse_av + reg_av) + one_minus_f_balance * kl_av
 
         # GECO BUSINESS
         if self.geco_dict["is_active"]:
@@ -272,15 +272,15 @@ class CompositionalVae(torch.nn.Module):
                 # If fg_fraction_av > max(target) -> tmp1 > 0 -> delta_1 < 0 -> too much fg -> increase sparsity
                 # If fg_fraction_av < min(target) -> tmp2 > 0 -> delta_1 > 0 -> too little fg -> decrease sparsity
                 fg_fraction_av = torch.mean(mixing_fg)
-                tmp1 = max(0, fg_fraction_av - max(self.geco_dict["target_fg_fraction"]))
-                tmp2 = max(0, min(self.geco_dict["target_fg_fraction"]) - fg_fraction_av)
-                delta_1 = torch.tensor(tmp2 - tmp1, dtype=loss_vae.dtype, device=loss_vae.device, requires_grad=False)
+                tmp1 = (fg_fraction_av - max(self.geco_dict["target_fg_fraction"])).clamp(min=0)
+                tmp2 = (min(self.geco_dict["target_fg_fraction"]) - fg_fraction_av).clamp(min=0)
+                delta_1 = (tmp2 - tmp1).requires_grad_(False).to(loss_vae.device)
 
                 # If nll_av > max(target) -> tmp3 > 0 -> delta_2 < 0 -> bad reconstruction -> increase f_balance
                 # If nll_av < min(target) -> tmp4 > 0 -> delta_2 > 0 -> too good reconstruction -> decrease f_balance
-                tmp3 = max(0, nll_av - max(self.geco_dict["target_nll"]))
-                tmp4 = max(0, min(self.geco_dict["target_nll"]) - nll_av)
-                delta_2 = torch.tensor(tmp4 - tmp3, dtype=loss_vae.dtype, device=loss_vae.device, requires_grad=False)
+                tmp3 = (mse_av - max(self.geco_dict["target_mse"])).clamp(min=0)
+                tmp4 = (min(self.geco_dict["target_mse"]) - mse_av).clamp(min=0)
+                delta_2 = (tmp4 - tmp3).requires_grad_(False).to(loss_vae.device)
 
             loss_1 = self.geco_sparsity_factor * delta_1
             loss_2 = self.geco_balance_factor * delta_2
@@ -292,7 +292,7 @@ class CompositionalVae(torch.nn.Module):
 
         # add everything you want as long as there is one loss
         return MetricMiniBatch(loss=loss_av,
-                               nll=nll_av.detach(),
+                               mse=mse_av.detach(),
                                reg=reg_av.detach(),
                                kl_tot=kl_av.detach(),
                                kl_instance=kl_zinstance_av.detach(),
@@ -308,7 +308,7 @@ class CompositionalVae(torch.nn.Module):
                                n_obj_counts=n_obj_counts)
 
     @staticmethod
-    def compute_similarity(mixing_k: torch.tensor, radius_nn: int = 2) -> Similarity:
+    def compute_similarity(mixing_k: torch.tensor, radius_nn: int = 5) -> Similarity:
         """ Compute the similarity between two pixels by computing the cosine distance between mixing_k
             describing the probabilityh that each pixel belong to a given foreground instance
 
@@ -317,7 +317,6 @@ class CompositionalVae(torch.nn.Module):
             where ch_out = ((2*radius + 1)**2 -1)//2
             Each channel has the similarity between pixel and pixel shifted by dx,dy
         """
-        time0 = time.time()
         n_boxes, batch_shape, ch_in, w, h = mixing_k.shape
         assert ch_in == 1
 
@@ -337,7 +336,6 @@ class CompositionalVae(torch.nn.Module):
             similarity[:, ch] = (pad_mixing_k *
                                  pad_mixing_k_shifted).sum(dim=-5)[:, 0, pad:(pad + w), pad:(pad + h)]
 
-        print("--- similarity time %s ---" % (time.time() - time0))
         return Similarity(data=similarity, ch_to_dxdy=ch_to_dxdy)
 
     def segment(self, batch_imgs,
@@ -346,7 +344,7 @@ class CompositionalVae(torch.nn.Module):
                 overlap_threshold: Optional[float] = None,
                 noisy_sampling: bool = True,
                 draw_boxes: bool = False,
-                radius_nn: int = 2) -> Segmentation:
+                radius_nn: int = 5) -> Segmentation:
         """ Segment the batch of images """
 
         n_objects_max = self.input_img_dict["n_objects_max"] if n_objects_max is None else n_objects_max
@@ -354,7 +352,6 @@ class CompositionalVae(torch.nn.Module):
         overlap_threshold = self.nms_dict["overlap_threshold"] if overlap_threshold is None else overlap_threshold
 
         with torch.no_grad():
-            time0 = time.time()
             inference = self.inference_and_generator(imgs_in=batch_imgs,
                                                      generate_synthetic_data=False,
                                                      prob_corr_factor=prob_corr_factor,
@@ -364,8 +361,6 @@ class CompositionalVae(torch.nn.Module):
                                                      noisy_sampling=noisy_sampling,
                                                      bg_is_zero=True,
                                                      bg_resolution=(1, 1))
-            time1 = time.time()
-            print("--- inference time %s ---" % (time1 - time0))
 
             mixing_k = inference.big_mask * inference.prob[..., None, None, None]
 
@@ -447,7 +442,6 @@ class CompositionalVae(torch.nn.Module):
                     print(f'{n} out of {len(ij_list_of_list)-1} -> batch_of_imgs.shape = {batch_imgs.shape}') 
 
                 # Segment the batch
-                time0 = time.time()
                 segmentation = self.segment(batch_imgs,
                                             n_objects_max=n_objects_max_per_patch,
                                             prob_corr_factor=prob_corr_factor,
@@ -455,11 +449,8 @@ class CompositionalVae(torch.nn.Module):
                                             noisy_sampling=True,
                                             draw_boxes=False,
                                             radius_nn=radius_nn)
-                time1 = time.time()
-                print("--- all segmentation time %s ---" % (time1 - time0))
 
                 if big_similarity is None:
-                    csr_similarity = None
                     big_similarity = torch.zeros((segmentation.similarity.data.shape[-3], w_paddded, h_padded),
                                                  device=segmentation.similarity.data.device,
                                                  dtype=segmentation.similarity.data.dtype)
@@ -486,9 +477,6 @@ class CompositionalVae(torch.nn.Module):
                         big_integer_mask[ij[0]:(ij[0]+crop_size[0]),
                                          ij[1]:(ij[1]+crop_size[1])] = shifted_integer_mask
 
-                time2 = time.time()
-                print("--- all the rest %s ---" % (time2 - time1))
-
             # Normalize the similarity
             big_similarity_normalized = big_similarity[...,
                                                        pad_w:pad_w + w_img,
@@ -513,6 +501,7 @@ class CompositionalVae(torch.nn.Module):
                            generate_synthetic_data: bool,
                            topk_only: bool,
                            draw_image: bool,
+                           draw_bg: bool,
                            draw_boxes: bool,
                            verbose: bool,
                            noisy_sampling: bool,
@@ -543,7 +532,7 @@ class CompositionalVae(torch.nn.Module):
 
         metrics = self.compute_metrics(imgs_in=imgs_in,
                                        inference=results,
-                                       reg=regularizations)
+                                       reg_av=regularizations.cost_total)
 
         all_metrics = Metric_and_Reg.from_merge(metrics=metrics, regularizations=regularizations)
 
@@ -553,6 +542,8 @@ class CompositionalVae(torch.nn.Module):
                                     bounding_box=results.bounding_box,
                                     big_mask=results.big_mask,
                                     big_img=results.big_img,
+                                    big_bg=results.big_bg,
+                                    draw_bg=draw_bg,
                                     draw_boxes=draw_boxes)
             else:
                 imgs_rec = torch.zeros_like(imgs_in)
@@ -562,6 +553,7 @@ class CompositionalVae(torch.nn.Module):
     def forward(self,
                 imgs_in: torch.tensor,
                 draw_image: bool = False,
+                draw_bg: bool = False,
                 draw_boxes: bool = False,
                 verbose: bool = False):
 
@@ -569,6 +561,7 @@ class CompositionalVae(torch.nn.Module):
                                        generate_synthetic_data=False,
                                        topk_only=False,
                                        draw_image=draw_image,
+                                       draw_bg=draw_bg,
                                        draw_boxes=draw_boxes,
                                        verbose=verbose,
                                        noisy_sampling=True,  # True if self.training else False,
@@ -576,19 +569,22 @@ class CompositionalVae(torch.nn.Module):
                                        overlap_threshold=self.nms_dict.get("overlap_threshold", 0.3),
                                        n_objects_max=self.input_img_dict["n_objects_max"],
                                        bg_is_zero=self.input_img_dict.get("bg_is_zero", True),
-                                       bg_resolution=self.input_img_dict.get("bg_resolution", (2, 2)))
+                                       bg_resolution=self.input_img_dict.get("background_resolution_before_upsampling",
+                                                                             (2, 2)))
 
     def generate(self,
                  imgs_in: torch.tensor,
+                 draw_bg: bool = False,
                  draw_boxes: bool = False,
                  verbose: bool = False):
 
         with torch.no_grad():
-
+            
             return self.process_batch_imgs(imgs_in=torch.zeros_like(imgs_in),
                                            generate_synthetic_data=True,
                                            topk_only=False,
                                            draw_image=True,
+                                           draw_bg=draw_bg,
                                            draw_boxes=draw_boxes,
                                            verbose=verbose,
                                            noisy_sampling=True,

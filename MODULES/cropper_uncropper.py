@@ -35,8 +35,8 @@ class Cropper(object):
                                                    dtype=big_stuff.dtype,
                                                    device=big_stuff.device).view([-1] + small_dependent_dim)
 
-        grid = F.affine_grid(affine, list(cropped_images.shape))
-        cropped_images = F.grid_sample(big_stuff, grid, mode='bilinear', padding_mode='reflection')
+        grid = F.affine_grid(affine, list(cropped_images.shape), align_corners=True)
+        cropped_images = F.grid_sample(big_stuff, grid, mode='bilinear', padding_mode='reflection', align_corners=True)
         return cropped_images.view(independent_dim + small_dependent_dim)
 
     @staticmethod
@@ -95,9 +95,9 @@ class Uncropper(object):
         uncropped_stuff: torch.Tensor = torch.zeros(independent_dim + large_dependent_dim,
                                                     dtype=small_stuff.dtype,
                                                     device=small_stuff.device).view([-1] + large_dependent_dim)
-        grid = F.affine_grid(affine_matrix.view(-1, 2, 3), list(uncropped_stuff.shape))
+        grid = F.affine_grid(affine_matrix.view(-1, 2, 3), list(uncropped_stuff.shape), align_corners=True)
         uncropped_stuff = F.grid_sample(small_stuff.view([-1] + small_dependent_dim), grid,
-                                        mode='bilinear', padding_mode='zeros')
+                                        mode='bilinear', padding_mode='zeros', align_corners=True)
         return uncropped_stuff.view(independent_dim + large_dependent_dim)
 
     @staticmethod

@@ -1,8 +1,8 @@
 import torch
-import json
-import PIL.Image 
+import PIL.Image
 import PIL.ImageDraw 
 import pickle
+import json
 import numpy
 from torchvision import utils
 from matplotlib import pyplot as plt
@@ -10,7 +10,7 @@ from torch.distributions.utils import broadcast_all
 from typing import Union, Callable, Optional, List, Tuple
 from .namedtuple import BB, DIST
 import torch.nn.functional as F
-from itertools import chain
+from torch.utils.data import Dataset, DataLoader
 
 
 def downsample_and_upsample(x: torch.Tensor, low_resolution: tuple, high_resolution: tuple):
@@ -20,11 +20,13 @@ def downsample_and_upsample(x: torch.Tensor, low_resolution: tuple, high_resolut
 
 
 def save_obj(obj, path):
+    # TODO: use torch save
     with open(path, 'wb') as f:
         pickle.dump(obj, f, pickle.HIGHEST_PROTOCOL)
 
 
 def load_obj(path):
+    # TODO: use torch load
     with open(path, 'rb') as f:
         return pickle.load(f)
 
@@ -53,6 +55,7 @@ def roller_2d(x: torch.tensor, radius: int = 2):
     """ Performs rolling of the last two spatial dimensions.
         For each point consider half a square. Each pair of points will appear once.
         Number of channels: [(2r+1)**2 - 1]/2
+        For example for a radius = 2 the full square is 5x5. The number of pairs is: 12
     """
     for dx in range(0, radius + 1):
         x_tmp = torch.roll(x, dx, dims=-2)
@@ -234,142 +237,192 @@ def flatten_list(my_list: List[List]) -> list:
     return flat_list
 
 
-##class MyBatchSampler(Sampler):
-##    def __init__(self, dataset, batch_size=4, drop_last=False, shuffle=False):
-##        self.len = len(dataset)
-##        self.drop_last = drop_last
-##        self.batch_size = batch_size
-##        self.shuffle = shuffle
-##        self.n_max = self.len - (self.len % self.batch_size) if self.drop_last else self.len
-##
-##    def __iter__(self):
-##        index = torch.randperm(self.len).numpy() if self.shuffle else torch.arange(self.len).numpy()
-##        return (index[pos:pos+self.batch_size] for pos in range(0, self.n_max, self.batch_size))
-##
-##    def __len__(self):
-##        return self.n_max
+class ConditionalRandomCrop(torch.nn.Module):
+    """ Crop a torch Tensor at random locations to obtain output of given size.
+        The random crop is accepted only if it is inside the Region Of Interest (ROI) """
 
-
-class ManyRandomCropsTensor(object):
-    """Crop a torch Tensor at random locations to obtain output of given size """
-
-    def __init__(self, desired_w, desired_h, n_crops=1, fg_mask=None, fg_fraction_threshold=None):
+    def __init__(self, desired_w, desired_h, min_roi_fraction: float = 0.0, n_crops_per_image: int = 1):
+        super().__init__()
         self.desired_w = desired_w
         self.desired_h = desired_h
-        self.fg_mask = fg_mask.float()
-        self.augmentation_factor = n_crops
-        self.fg_fraction_threshold = 0.01 if fg_fraction_threshold is None else fg_fraction_threshold
+        self.min_roi_fraction = min_roi_fraction
+        self.desired_area = desired_w * desired_h
+        self.n_crops_per_image = n_crops_per_image
 
     @staticmethod
-    def get_params(w_raw, h_raw, w_desired, h_desired):
+    def get_smallest_corner_for_crop(w_raw: int, h_raw: int, w_desired: int, h_desired: int):
         assert w_desired <= w_raw
         assert h_desired <= h_raw
 
         if w_raw == w_desired and h_raw == h_desired:
             return 0, 0
-        i = torch.randint(low=0, high=w_raw-w_desired, size=[1])
-        j = torch.randint(low=0, high=h_raw-h_desired, size=[1])
-        return i, j
+        else:
+            i = torch.randint(low=0, high=w_raw - w_desired + 1, size=[1]).item()
+            j = torch.randint(low=0, high=h_raw - h_desired + 1, size=[1]).item()
+            return i, j
 
-    def __call__(self, img):
-        assert isinstance(img, torch.Tensor)
+    def get_index(self,
+                  img: torch.Tensor,
+                  roi_mask: Optional[torch.Tensor] = None,
+                  cum_sum_roi_mask: Optional[torch.Tensor] = None,
+                  n_crops_per_image: Optional[int] = None):
+        """ img.shape: *,c,w,h where * might or might not be present
+            roi_mask:  *,1,w,h where * might or might not be present
+            cum_sum_roi_mask: *,1,w,h where * might or might not be present
 
-        crops = []
-        while len(crops) < self.augmentation_factor:
-            i, j = self.get_params(w_raw=img.shape[-2],
-                                   h_raw=img.shape[-1],
-                                   w_desired=self.desired_w,
-                                   h_desired=self.desired_h)
+            return a list of images
+        """
+        n_crops_per_image = self.n_crops_per_image if n_crops_per_image is None else n_crops_per_image
 
-            if self.fg_mask is None or torch.mean(self.fg_mask[..., i:(i+self.desired_w),
-                                                               j:(j+self.desired_h)], 
-                                                  dim=(-1, -2)) > self.fg_fraction_threshold:
-                crops.append(img[..., i:(i+self.desired_w), j:(j+self.desired_h)])
+        if roi_mask is not None and cum_sum_roi_mask is not None:
+            raise Exception("Only one between roi_mask and cum_sum_roi_mask can be specified")
 
-        return torch.cat([crop for crop in crops], dim=0)
+        if len(img.shape) == 3:
+            img = img.unsqueeze(0)
+        if cum_sum_roi_mask is not None and len(cum_sum_roi_mask.shape) == 3:
+            cum_sum_roi_mask = cum_sum_roi_mask.unsqueeze(0)
+        if roi_mask is not None and len(roi_mask.shape) == 3:
+            roi_mask = roi_mask.unsqueeze(0)
+
+        assert len(img.shape) == 4
+        assert (roi_mask is None or len(roi_mask.shape) == 4)
+        assert (cum_sum_roi_mask is None or len(cum_sum_roi_mask.shape) == 4)
+
+        with torch.no_grad():
+
+            bij_list = []
+            for b in range(img.shape[0]):
+                for n in range(n_crops_per_image):
+                    fraction = 0
+                    while fraction < self.min_roi_fraction:
+                        i, j = self.get_smallest_corner_for_crop(w_raw=img[b].shape[-2],
+                                                                 h_raw=img[b].shape[-1],
+                                                                 w_desired=self.desired_w,
+                                                                 h_desired=self.desired_h)
+
+                        if cum_sum_roi_mask is not None:
+                            term1 = cum_sum_roi_mask[b, 0, i + self.desired_w - 1, j + self.desired_h - 1].item()
+                            term2 = 0 if i < 1 else cum_sum_roi_mask[b, 0, i - 1, j + self.desired_h - 1].item()
+                            term3 = 0 if j < 1 else cum_sum_roi_mask[b, 0, i + self.desired_w - 1, j - 1].item()
+                            term4 = 0 if (i < 1 or j < 1) else cum_sum_roi_mask[b, 0, i - 1, j - 1].item()
+                            fraction = float(term1 - term2 - term3 + term4) / self.desired_area
+                        elif roi_mask is not None:
+                            fraction = roi_mask[b, 0, i:i+self.desired_w,
+                                       j:j+self.desired_h].sum().float()/self.desired_area
+                        else:
+                            fraction = 1.0
+
+                    bij_list.append([b, i, j])
+        return bij_list
+
+    def crop_from_list(self, img: torch.Tensor, bij_list: list):
+        return torch.stack([img[b, :, i:i+self.desired_w, j:j+self.desired_h] for b, i, j in bij_list], dim=-4)
+
+    def forward(self,
+                img: torch.Tensor,
+                roi_mask: Optional[torch.Tensor] = None,
+                cum_sum_roi_mask: Optional[torch.Tensor] = None,
+                n_crops_per_image: Optional[int] = None):
+
+        n_crops_per_image = self.n_crops_per_image if n_crops_per_image is None else n_crops_per_image
+        bij_list = self.get_index(img, roi_mask, cum_sum_roi_mask, n_crops_per_image)
+        return self.crop_from_list(img, bij_list)
 
 
-class LoaderInMemory(object):
-    def __init__(self, x=torch.Tensor,
-                 y=None,
-                 data_augmentation=None,
-                 transform_y=False,
-                 pin_in_cuda_memory=False,
+class SpecialDataSet(object):
+    def __init__(self,
+                 img: torch.Tensor,
+                 roi_mask: Optional[torch.Tensor] = None,
+                 labels: Optional[torch.Tensor] = None,
+                 data_augmentation: Optional[ConditionalRandomCrop] = None,
+                 device: str = 'cpu',
                  drop_last=False,
                  batch_size=4,
                  shuffle=False):
+        """ :param device: 'cpu' or 'cuda:0'
+            Dataset returns random crops of a given size inside the Region Of Interest.
+            The function getitem returns imgs, labels and indeces
+        """
+        assert len(img.shape) == 4
+        assert (roi_mask is None or len(roi_mask.shape) == 4)
+        assert (labels is None or labels.shape[0] == img.shape[0])
 
-        self.pin_in_cuda_memory = pin_in_cuda_memory
         self.drop_last = drop_last
         self.batch_size = batch_size
         self.shuffle = shuffle
-        self.data_augmentation = data_augmentation
-        self.augmentation_factor = 1 if self.data_augmentation is None else self.data_augmentation.augmentation_factor
-        self.transform_y = transform_y
-        if y is None:
-            y = -1 * torch.ones(x.shape[0])
-        assert x.shape[0] == y.shape[0]
-        assert len(x.shape) == 4  # batch, ch, w, h
 
-        with torch.no_grad():
-            self.x = x.cuda().detach() if self.pin_in_cuda_memory else x.cpu().detach()
-            self.y = y.cuda().detach() if self.pin_in_cuda_memory else y.cpu().detach()
-
-    def __getitem__(self, index):
-        #print("index, augmentation_is_none", index, self.data_augmentation is None)
-        assert isinstance(index, torch.Tensor)
-        index = index.view(-1)  # batch size
-
-        if self.data_augmentation is None:  
-            return [self.x[index], self.y[index], index]
+        # Expand the dataset so that I can do one crop per image
+        if data_augmentation is None:
+            new_batch_size = img.shape[0]
+            self.data_augmentaion = None
         else:
-            if self.transform_y:
-                x_new = self.data_augmentation(self.x[index])
-                y_new = self.data_augmentation(self.y[index])
-                index_new = index.repeat(self.data_augmentation.augmentation_factor)
-                return [x_new, y_new, index_new]
-            else:
-                x_new = self.data_augmentation(self.x[index])
-                y_new = self.y[index].repeat(self.data_augmentation.augmentation_factor)
-                index_new = index.repeat(self.data_augmentation.augmentation_factor)
-                return [x_new, y_new, index_new]
+            new_batch_size = img.shape[0] * data_augmentation.n_crops_per_image
+            self.data_augmentaion = data_augmentation
+
+        self.img = img.to(device).detach().expand(new_batch_size, -1, -1, -1)
+
+        if labels is None:
+            self.labels = -1*torch.ones(self.img.shape[0], device=device).detach()
+        else:
+            self.labels = labels.to(device).detach()
+        self.labels = self.labels.expand(new_batch_size)
+
+        if roi_mask is None:
+            self.cum_roi_mask = None
+        else:
+            self.cum_roi_mask = roi_mask.to(device).detach().cumsum(dim=-1).cumsum(dim=-2).expand(new_batch_size, -1, -1, -1)
 
     def __len__(self):
-        return self.x.shape[0]
+        return self.img.shape[0]
+
+    def __getitem__(self, index: torch.Tensor):
+        assert isinstance(index, torch.Tensor)
+
+        if self.data_augmentaion is None:
+            return self.img[index], self.labels[index], index
+        else:
+
+            bij_list = []
+            for i in index:
+                bij_list += self.data_augmentaion.get_index(img=self.img[i],
+                                                            cum_sum_roi_mask=self.cum_roi_mask[i],
+                                                            n_crops_per_image=1)
+
+            return self.data_augmentaion.crop_from_list(self.img, bij_list), self.labels[index], index
 
     def __iter__(self, batch_size=None, drop_last=None, shuffle=None):
         # If not specified use defaults
         batch_size = self.batch_size if batch_size is None else batch_size
         drop_last = self.drop_last if drop_last is None else drop_last
         shuffle = self.shuffle if shuffle is None else shuffle
-        batch_size_eff = max(1, batch_size // self.augmentation_factor)
 
         # Actual generation of iterator
-        n_max = max(1, self.__len__() - (self.__len__() % batch_size_eff) if drop_last else self.__len__())
+        n_max = max(1, self.__len__() - (self.__len__() % batch_size) if drop_last else self.__len__())
         index = torch.randperm(self.__len__()).long() if shuffle else torch.arange(self.__len__()).long()
-        return (self.__getitem__(index=index[pos:pos + batch_size_eff]) for pos in range(0, n_max, batch_size_eff))
-
-    def check_batch(self):
-        print("Dataset lenght:", self.__len__())
-        print("imgs.shape", self.x.shape)
-        print("type(imgs)", type(self.x))
-        print("imgs.device", self.x.device)
-        print("torch.max(imgs)", torch.max(self.x))
-        print("torch.min(imgs)", torch.min(self.x))
-        # grab one minibatch
-        x, y, index = next(self.__iter__())
-        print("x,y,index shapes ->", x.shape, y.shape, index.shape)
-        return show_batch(x[:8], n_col=4, n_padding=4, pad_value=1, figsize=(24,24))
-
+        for pos in range(0, n_max, batch_size):
+            yield self.__getitem__(index[pos:pos + batch_size])
+            
     def load(self, batch_size=None, index=None):
         if (batch_size is None and index is None) or (batch_size is not None and index is not None):
             raise Exception("Only one between batch_size and index must be specified")
         index = torch.randint(low=0, high=self.__len__(), size=(batch_size,)).long() if index is None else index
         return self.__getitem__(index)
 
+    def check_batch(self, batch_size: int = 8):
+        print("Dataset lenght:", self.__len__())
+        print("img.shape", self.img.shape)
+        print("img.dtype", self.img.dtype)
+        print("img.device", self.img.device)
+        index = torch.randperm(self.__len__(), out=None, dtype=torch.long, device=self.img.device, requires_grad=False)
+        # grab one minibatch
+        img, labels, index = self.__getitem__(index[:batch_size])
+        print("MINIBATCH: img.shapes labels.shape, index.shape ->", img.shape, labels.shape, index.shape)
+        print("MINIBATCH: min and max of minibatch", torch.min(img), torch.max(img))
+        return show_batch(img, n_col=4, n_padding=4, pad_value=1, figsize=(24, 24))
+
 
 def process_one_epoch(model: torch.nn.Module,
-                      dataloader: LoaderInMemory,
+                      dataloader: SpecialDataSet,
                       optimizer: Optional[torch.optim.Optimizer] = None,
                       weight_clipper: Optional[Callable[[None], None]] = None,
                       verbose: bool = False) -> dict:
@@ -379,8 +432,8 @@ def process_one_epoch(model: torch.nn.Module,
     dict_metric_av: dict = {}
 
     for i, data in enumerate(dataloader):
-        x, y, index = data
-        metrics = model.forward(imgs_in=x).metrics  # the forward function returns metric and other stuff
+        imgs, labels, index = data
+        metrics = model.forward(imgs_in=imgs).metrics  # the forward function returns metric and other stuff
         if verbose:
             print("i = %3d train_loss=%.5f" % (i, metrics.loss))
 
@@ -392,14 +445,14 @@ def process_one_epoch(model: torch.nn.Module,
             for key in metrics._fields:
                 # print(key, getattr(metrics, key))
                 if key == 'n_obj_counts':
-                    counts = getattr(metrics, 'n_obj_counts').view_as(y)
+                    counts = getattr(metrics, 'n_obj_counts').view_as(labels)
                 else:
                     value = getattr(metrics, key).item() * len(index)
                     dict_metric_av[key] = value + dict_metric_av.get(key, 0.0)
 
             # Accumulate counting accuracy
-            index_wrong_tmp = (y != counts).cpu()
-            index_right_tmp = (y == counts).cpu()
+            index_wrong_tmp = (labels != counts).cpu()
+            index_right_tmp = (labels == counts).cpu()
             indices_wrong_examples = index[index_wrong_tmp].tolist()
             indices_right_examples = index[index_right_tmp].tolist()
             dict_accumulate_accuracy = accumulate_counting_accuracy(indices_wrong_examples=indices_wrong_examples,
@@ -500,11 +553,11 @@ def compute_average_intensity_in_box(imgs: torch.Tensor, bounding_box: BB) -> to
     batch_size, w, h = cum.shape
 
     # compute the x1,y1,x3,y3
-    x1 = torch.clamp((bounding_box.bx - 0.5 * bounding_box.bw).long(), min=0, max=w - 1)
-    x3 = torch.clamp((bounding_box.bx + 0.5 * bounding_box.bw).long(), min=0, max=w - 1)
-    y1 = torch.clamp((bounding_box.by - 0.5 * bounding_box.bh).long(), min=0, max=h - 1)
-    y3 = torch.clamp((bounding_box.by + 0.5 * bounding_box.bh).long(), min=0, max=h - 1)
-    assert x1.shape == x3.shape == y1.shape == y3.shape
+    x1 = (bounding_box.bx - 0.5 * bounding_box.bw).long().clamp(min=0, max=w)
+    x3 = (bounding_box.bx + 0.5 * bounding_box.bw).long().clamp(min=0, max=w)
+    y1 = (bounding_box.by - 0.5 * bounding_box.bh).long().clamp(min=0, max=h)
+    y3 = (bounding_box.by + 0.5 * bounding_box.bh).long().clamp(min=0, max=h)
+    assert x1.shape == x3.shape == y1.shape == y3.shape  # n_boxes, batch_size
 
     # compute the area
     # Note that this way penalizes boxes that go out-of-bound
@@ -518,10 +571,16 @@ def compute_average_intensity_in_box(imgs: torch.Tensor, bounding_box: BB) -> to
                            dtype=x1.dtype).view(1, -1).expand(n_boxes, -1)
     assert b_index.shape == x1.shape
 
-    tot_intensity = cum[b_index, x3, y3] + cum[b_index, x1, y1] - cum[b_index, x1, y3] - cum[b_index, x3, y1]
-
-    # return the average intensity
-    assert tot_intensity.shape == x1.shape
+    #mask_x1 = (x1 > 0).view(1,-1,1)
+    #mask_y1 = (y1 > 0).view(1,)
+    x1_ge_1 = (x1 >= 1).float()
+    x3_ge_1 = (x3 >= 1).float()
+    y1_ge_1 = (y1 >= 1).float()
+    y3_ge_1 = (y3 >= 1).float()
+    tot_intensity = cum[b_index, x3-1, y3-1]*x3_ge_1*y3_ge_1 + \
+                    cum[b_index, x1-1, y1-1]*x1_ge_1*y1_ge_1 - \
+                    cum[b_index, x1-1, y3-1]*x1_ge_1*y3_ge_1 - \
+                    cum[b_index, x3-1, y1-1]*x3_ge_1*y1_ge_1
     return tot_intensity / area
 
 
@@ -529,19 +588,24 @@ def draw_img(prob: torch.tensor,
              bounding_box: BB,
              big_mask: torch.tensor,
              big_img: torch.tensor,
+             big_bg: torch.tensor,
+             draw_bg: bool,
              draw_boxes: bool) -> torch.tensor:
 
     assert len(prob.shape) == 2  # boxes, batch
     assert len(big_mask.shape) == len(big_img.shape) == 5  # boxes, batch, ch, w, h
 
-    rec_imgs_no_bb = torch.sum(prob[..., None, None, None] * big_mask * big_img, dim=-5)  # sum over boxes
+    rec_imgs_no_bb = (prob[..., None, None, None] * big_mask * big_img).sum(dim=-5)  # sum over boxes
+    fg_mask = (prob[..., None, None, None] * big_mask).sum(dim=-5) # sum over boxes    
+    background = (1-fg_mask) * big_bg if draw_bg else torch.zeros_like(big_bg)
+    
     width, height = rec_imgs_no_bb.shape[-2:]
 
     bounding_boxes = draw_bounding_boxes(prob=prob,
                                          bounding_box=bounding_box,
                                          width=width,
                                          height=height) if draw_boxes else torch.zeros_like(rec_imgs_no_bb)
-    return bounding_boxes + rec_imgs_no_bb
+    return bounding_boxes + rec_imgs_no_bb + background
 
 
 def draw_bounding_boxes(prob: Optional[torch.Tensor], bounding_box: BB, width: int, height: int) -> torch.Tensor:
