@@ -538,7 +538,7 @@ def plot_grid(img, figsize=None):
         axes[row, col].imshow(img[n])
 
 
-def compute_average_intensity_in_box(imgs: torch.Tensor, bounding_box: BB) -> torch.Tensor:
+def compute_average_in_box(imgs: torch.Tensor, bounding_box: BB) -> torch.Tensor:
     """ Input batch of images: batch_size x ch x w x h
         z_where collections of [bx,by,bw,bh]
         bx.shape = batch x n_box
@@ -547,15 +547,15 @@ def compute_average_intensity_in_box(imgs: torch.Tensor, bounding_box: BB) -> to
         av_intensity = n_box x batch_size
     """
     # cumulative sum in width and height, standard sum in channels
-    cum = torch.sum(torch.cumsum(torch.cumsum(imgs, dim=-1), dim=-2), dim=-3)
-    assert len(cum.shape) == 3
-    batch_size, w, h = cum.shape
+    cum_sum = torch.cumsum(torch.cumsum(imgs.sum(dim=-3), dim=-1), dim=-2)
+    assert len(cum_sum.shape) == 3
+    batch_size, w, h = cum_sum.shape
 
     # compute the x1,y1,x3,y3
-    x1 = (bounding_box.bx - 0.5 * bounding_box.bw).long().clamp(min=0, max=w)
-    x3 = (bounding_box.bx + 0.5 * bounding_box.bw).long().clamp(min=0, max=w)
-    y1 = (bounding_box.by - 0.5 * bounding_box.bh).long().clamp(min=0, max=h)
-    y3 = (bounding_box.by + 0.5 * bounding_box.bh).long().clamp(min=0, max=h)
+    x1 = (bounding_box.bx - 0.5 * bounding_box.bw).long().clamp(min=0, max=w+1)
+    x3 = (bounding_box.bx + 0.5 * bounding_box.bw).long().clamp(min=0, max=w+1)
+    y1 = (bounding_box.by - 0.5 * bounding_box.bh).long().clamp(min=0, max=h+1)
+    y3 = (bounding_box.by + 0.5 * bounding_box.bh).long().clamp(min=0, max=h+1)
     assert x1.shape == x3.shape == y1.shape == y3.shape  # n_boxes, batch_size
 
     # compute the area
@@ -570,16 +570,14 @@ def compute_average_intensity_in_box(imgs: torch.Tensor, bounding_box: BB) -> to
                            dtype=x1.dtype).view(1, -1).expand(n_boxes, -1)
     assert b_index.shape == x1.shape
 
-    #mask_x1 = (x1 > 0).view(1,-1,1)
-    #mask_y1 = (y1 > 0).view(1,)
     x1_ge_1 = (x1 >= 1).float()
     x3_ge_1 = (x3 >= 1).float()
     y1_ge_1 = (y1 >= 1).float()
     y3_ge_1 = (y3 >= 1).float()
-    tot_intensity = cum[b_index, x3-1, y3-1]*x3_ge_1*y3_ge_1 + \
-                    cum[b_index, x1-1, y1-1]*x1_ge_1*y1_ge_1 - \
-                    cum[b_index, x1-1, y3-1]*x1_ge_1*y3_ge_1 - \
-                    cum[b_index, x3-1, y1-1]*x3_ge_1*y1_ge_1
+    tot_intensity = cum_sum[b_index, x3-1, y3-1] * x3_ge_1 * y3_ge_1 + \
+                    cum_sum[b_index, x1-1, y1-1] * x1_ge_1 * y1_ge_1 - \
+                    cum_sum[b_index, x1-1, y3-1] * x1_ge_1 * y3_ge_1 - \
+                    cum_sum[b_index, x3-1, y1-1] * x3_ge_1 * y1_ge_1
     return tot_intensity / area
 
 

@@ -4,7 +4,7 @@ from .cropper_uncropper import Uncropper, Cropper
 from .non_max_suppression import NonMaxSuppression
 from .unet_model import UNet
 from .encoders_decoders import EncoderConv, DecoderConv, Decoder1by1Linear, EncoderConvLeaky, DecoderConvLeaky
-from .utilities import compute_average_intensity_in_box, compute_ranking
+from .utilities import compute_average_in_box, compute_ranking
 from .utilities import sample_and_kl_diagonal_normal, sample_and_kl_multivariate_normal
 from .utilities import downsample_and_upsample
 from .namedtuple import Inference, BB, NMSoutput, UNEToutput, ZZ, DIST
@@ -246,8 +246,7 @@ class Inference_and_Generation(torch.nn.Module):
             if (prob_corr_factor > 0) and (prob_corr_factor <= 1.0) and not generate_synthetic_data:
 
                 # probability correction if necessary
-                av_intensity: torch.Tensor = compute_average_intensity_in_box(torch.abs(imgs_in - big_bg),
-                                                                              bounding_box_all)
+                av_intensity: torch.Tensor = compute_average_in_box((imgs_in - big_bg).pow(2), bounding_box_all)
                 assert len(av_intensity.shape) == 2
                 n_boxes_all, batch_size = av_intensity.shape
                 ranking: torch.Tensor = compute_ranking(av_intensity)  # n_boxes_all, batch. It is in [0,n_box_all-1]
@@ -311,7 +310,6 @@ class Inference_and_Generation(torch.nn.Module):
                                      height_big=height_raw_image)  # shape: n_box, batch, ch, w, h
         ch_size = big_stuff.shape[-3]
         big_weight, big_img = torch.split(big_stuff, split_size_or_sections=(1, ch_size-1), dim=-3)
-
 
         # -----------------------
         # 7. From weight to masks
