@@ -177,77 +177,52 @@ class Partition(NamedTuple):
 class SparseSimilarity(NamedTuple):
     csr_matrix: scipy.sparse.csr_matrix
     index_matrix: Optional[torch.tensor]
-    type: str = "sparse"
 
 
-class DenseSimilarity(NamedTuple):
-    data: torch.tensor  # *, nn, w, h where nn = ((2*r+1)^2 -1)//2
-    ch_to_dxdy: list  # [(dx0,dy0),(dx1,dy1),....]  of lenght nn
-    type: str = "dense"
-
-#    def reduce_similarity_radius(self, new_radius: int):
-#
-#        # Check which element should be selected
-#        to_select = [(abs(dxdy[0]) <= new_radius and abs(dxdy[1]) <= new_radius) for dxdy in self.ch_to_dxdy]
-#        all_true = sum(to_select) == len(to_select)
-#        if all_true:
-#            raise Exception("new radius should be smaller than current radius. No subsetting left to do")
-#
-#        # Subsample the ch_to_dxdy
-#        new_ch_to_dxdy = []
-#        for selected, dxdy in zip(to_select, self.ch_to_dxdy):
-#            if selected:
-#                new_ch_to_dxdy.append(dxdy)
-#
-#        # Subsample the similarity matrix
-#        index = torch.arange(len(to_select), dtype=torch.long)[to_select]
-#
-#        return DenseSimilarity(data=torch.index_select(self.data, dim=-3, index=index), ch_to_dxdy=new_ch_to_dxdy)
-
-    def to_sparse_similarity(self, index_matrix: torch.Tensor,
-                             index_max: Optional[int] = None,
-                             min_edge_weight: float = 0.01) -> SparseSimilarity:
-        """ Create a sparse CSR matrix:
-            CSR = csr_matrix((data, (row_ind, col_ind)), [shape = (M, N)])
-            where data, row_ind and col_ind satisfy the relationship a[row_ind[k], col_ind[k]] = data[k]
-            The batch dimension will be summed.
-            Only pixel with index_matrix >= 0 will be used.
-            Therefore index_matrix can be used to pass a fg_mask
-            (i.e. just set the value outside the mask to -1 to exclude)
-        """
-
-        assert len(index_matrix.shape) == len(self.data.shape) == 4
-        b, ch, w, h = self.data.shape
-        assert (b, 1, w, h) == index_matrix.shape
-
-        index_max = torch.max(index_matrix)[0].item() if index_max is None else index_max
-        radius = numpy.max(self.ch_to_dxdy)
-        pad_list = [radius + 1] * 4
-        pad_index_matrix = F.pad(index_matrix, pad=pad_list, mode="constant", value=-1)
-        pad_weight = F.pad(self.data, pad=pad_list, mode="constant", value=0.0).to(pad_index_matrix.device)
-
-        # Prepare the storage
-        i_list, j_list, e_list = [], [], []  # i,j are verteces, e=edges
-
-        for ch, dxdy in enumerate(self.ch_to_dxdy):
-            pad_index_matrix_shifted = torch.roll(torch.roll(pad_index_matrix, dxdy[0], dims=-2), dxdy[1],
-                                                  dims=-1)
-
-            data = pad_weight[:, ch, :, :].flatten()
-            row_ind = pad_index_matrix[:, 0, :, :].flatten()
-            col_ind = pad_index_matrix_shifted[:, 0, :, :].flatten()
-            
-            # Do not add loops.
-            my_filter = (row_ind >= 0) * (col_ind >= 0) * (data > min_edge_weight)
-
-            e_list += data[my_filter].tolist()
-            i_list += row_ind[my_filter].tolist()
-            j_list += col_ind[my_filter].tolist()
-
-        return SparseSimilarity(csr_matrix=scipy.sparse.csr_matrix((e_list, (i_list, j_list)),
-                                                                   shape=(index_max, index_max)),
-                                index_matrix=None)
-
+###    def to_sparse_similarity(self, index_matrix: torch.Tensor,
+###                             index_max: Optional[int] = None,
+###                             min_edge_weight: float = 0.01) -> SparseSimilarity:
+###        """ Create a sparse CSR matrix:
+###            CSR = csr_matrix((data, (row_ind, col_ind)), [shape = (M, N)])
+###            where data, row_ind and col_ind satisfy the relationship a[row_ind[k], col_ind[k]] = data[k]
+###            The batch dimension will be summed.
+###            Only pixel with index_matrix >= 0 will be used.
+###            Therefore index_matrix can be used to pass a fg_mask
+###            (i.e. just set the value outside the mask to -1 to exclude)
+###        """
+###
+###        assert len(index_matrix.shape) == len(self.data.shape) == 4
+###        b, ch, w, h = self.data.shape
+###        assert (b, 1, w, h) == index_matrix.shape
+###
+###        index_max = torch.max(index_matrix)[0].item() if index_max is None else index_max
+###        radius = numpy.max(self.ch_to_dxdy)
+###        pad_list = [radius + 1] * 4
+###        pad_index_matrix = F.pad(index_matrix, pad=pad_list, mode="constant", value=-1)
+###        pad_weight = F.pad(self.data, pad=pad_list, mode="constant", value=0.0).to(pad_index_matrix.device)
+###
+###        # Prepare the storage
+###        i_list, j_list, e_list = [], [], []  # i,j are verteces, e=edges
+###
+###        for ch, dxdy in enumerate(self.ch_to_dxdy):
+###            pad_index_matrix_shifted = torch.roll(torch.roll(pad_index_matrix, dxdy[0], dims=-2), dxdy[1],
+###                                                  dims=-1)
+###
+###            data = pad_weight[:, ch, :, :].flatten()
+###            row_ind = pad_index_matrix[:, 0, :, :].flatten()
+###            col_ind = pad_index_matrix_shifted[:, 0, :, :].flatten()
+###
+###            # Do not add loops.
+###            my_filter = (row_ind >= 0) * (col_ind >= 0) * (data > min_edge_weight)
+###
+###            e_list += data[my_filter].tolist()
+###            i_list += row_ind[my_filter].tolist()
+###            j_list += col_ind[my_filter].tolist()
+###
+###        return SparseSimilarity(csr_matrix=scipy.sparse.csr_matrix((e_list, (i_list, j_list)),
+###                                                                   shape=(index_max, index_max)),
+###                                index_matrix=None)
+###
 
 #  ----------------------------------------------------------------  #
 #  ------- Stuff Related to Processing (i.e. CompositionalVAE) ----  #
@@ -288,7 +263,7 @@ class Segmentation(NamedTuple):
     fg_prob: torch.Tensor  # *,1,w,h
     integer_mask: torch.Tensor  # *,1,w,h
     bounding_boxes: Optional[torch.Tensor]  # *,3,w,h
-    similarity: Union[DenseSimilarity, SparseSimilarity]
+    similarity: Optional[SparseSimilarity] = None
 
 
 class UNEToutput(NamedTuple):

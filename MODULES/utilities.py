@@ -371,8 +371,10 @@ class SpecialDataSet(object):
         self.labels = self.labels.expand(new_batch_size)
 
         if roi_mask is None:
+            self.roi_mask = None
             self.cum_roi_mask = None
         else:
+            self.roi_mask = roi_mask.to(device).detach().expand(new_batch_size, -1, -1, -1)
             self.cum_roi_mask = roi_mask.to(device).detach().cumsum(dim=-1).cumsum(dim=-2).expand(new_batch_size, -1, -1, -1)
 
     def __len__(self):
@@ -560,10 +562,10 @@ def compute_average_in_box(imgs: torch.Tensor, bounding_box: BB) -> torch.Tensor
     batch_size, w, h = cum_sum.shape
 
     # compute the x1,y1,x3,y3
-    x1 = (bounding_box.bx - 0.5 * bounding_box.bw).long().clamp(min=0, max=w+1)
-    x3 = (bounding_box.bx + 0.5 * bounding_box.bw).long().clamp(min=0, max=w+1)
-    y1 = (bounding_box.by - 0.5 * bounding_box.bh).long().clamp(min=0, max=h+1)
-    y3 = (bounding_box.by + 0.5 * bounding_box.bh).long().clamp(min=0, max=h+1)
+    x1 = (bounding_box.bx - 0.5 * bounding_box.bw).long().clamp(min=0, max=w)
+    x3 = (bounding_box.bx + 0.5 * bounding_box.bw).long().clamp(min=0, max=w)
+    y1 = (bounding_box.by - 0.5 * bounding_box.bh).long().clamp(min=0, max=h)
+    y3 = (bounding_box.by + 0.5 * bounding_box.bh).long().clamp(min=0, max=h)
     assert x1.shape == x3.shape == y1.shape == y3.shape  # n_boxes, batch_size
 
     # compute the area
