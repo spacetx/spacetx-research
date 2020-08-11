@@ -308,42 +308,72 @@ class CompositionalVae(torch.nn.Module):
                                n_obj_counts=n_obj_counts)
 
     @staticmethod
-    def compute_similarity(mixing_k: torch.tensor, radius_nn: int = 5) -> DenseSimilarity:
-        """ Compute the similarity between two pixels by computing the cosine distance between mixing_k
-            describing the probabilityh that each pixel belong to a given foreground instance
+    def compute_similarity(mixing_k: torch.tensor, 
+                           batch_of_index: torch.tensor, 
+                           radius_nn: int, 
+                           min_value: float = 0.01) -> torch.sparse.FloatTensor:
+        """ Compute the similarity between two pixels by computing the product of mixing_k
+            describing the probability that each pixel belong to a given foreground instance
 
             INPUT: mixing_k of shape --> n_boxes, batch_shape, 1, w, h
-            OUTPUT: similarity of shape ------>   batch_shape, ch_out, w, h
-            where ch_out = ((2*radius + 1)**2 -1)//2
-            Each channel has the similarity between pixel and pixel shifted by dx,dy
+            OUTPUT: similarity of shape ------>   batch_shape, nnz, 2 
         """
-        n_boxes, batch_shape, ch_in, w, h = mixing_k.shape
-        assert ch_in == 1
+        with torch.no_grad():
+            
+            n_boxes, batch_shape, ch_in, w, h = mixing_k.shape
+            assert ch_in == 1
+            assert (batch_shape, 1, w, h) == batch_of_index.shape
 
-        # Pad width and height with zero before rolling to avoid spurious connections due to PBC
-        pad = radius_nn + 1
-        pad_mixing_k = F.pad(mixing_k, pad=[pad, pad, pad, pad], mode="constant", value=0.0)
+            # Pad width and height with zero before rolling to avoid spurious connections due to PBC
+            pad = radius_nn + 1
+            pad_mixing_k = F.pad(mixing_k, pad=[pad, pad, pad, pad], mode="constant", value=0.0)
+            pad_index = F.pad(batch_of_index, pad=[pad, pad, pad, pad], mode="constant", value=-1)
+        
+        
+            for pad_mixing_k_shifted, pad_index_shifted in roller_2d(a=pad_mixing_k, 
+                                                                     b=pad_index, 
+                                                                     radius=radius_nn):
+                v = (pad_mixing_k * pad_mixing_k_shifted).sum(dim=-5)[:, 0, pad:(pad + w), pad:(pad + h)]  # shape: batch, w, h
+                i = batch_of_index[:, 0] # shape: batch, w, h
+                j = pad_index_shifted[:, 0, pad:(pad + w), pad:(pad + h)] # shape: batch, w, h
+                
+                mask = (v > min_value) * (i >= 0) * (j >= 0)
+                
+                print(v[mask].shape)
+                print(i[mask].shape)
+                print(j[mask].shape)
+                
+                assert 1==2
+                
+                
+                
+                
+                
+        
+        
+      #  # Prepare storage
+      #  
+      #  
+      #  ch_out = int(((2 * radius_nn + 1) ** 2 - 1)/2)  # this is the number of point NN points
+      #  ch_to_dxdy = []
+      #  similarity = torch.zeros((batch_shape, ch_out, w, h), device=mixing_k.device, dtype=mixing_k.dtype)
+#
+      #  # compute dot product of the mixing_k between nearby vertices
+      #  for ch, rolled in enumerate(roller_2d(pad_mixing_k, radius=radius_nn)):
+      #      pad_mixing_k_shifted, dx, dy = rolled
+      #      ch_to_dxdy.append([dx, dy])
+      #      similarity[:, ch] = (pad_mixing_k *
+      #                           pad_mixing_k_shifted).sum(dim=-5)[:, 0, pad:(pad + w), pad:(pad + h)]
+#
+      #  return DenseSimilarity(data=similarity, ch_to_dxdy=ch_to_dxdy)
 
-        # Prepare storage
-        ch_out = int(((2 * radius_nn + 1) ** 2 - 1)/2)  # this is the number of point NN points
-        ch_to_dxdy = []
-        similarity = torch.zeros((batch_shape, ch_out, w, h), device=mixing_k.device, dtype=mixing_k.dtype)
-
-        # compute dot product of the mixing_k between nearby vertices
-        for ch, rolled in enumerate(roller_2d(pad_mixing_k, radius=radius_nn)):
-            pad_mixing_k_shifted, dx, dy = rolled
-            ch_to_dxdy.append([dx, dy])
-            similarity[:, ch] = (pad_mixing_k *
-                                 pad_mixing_k_shifted).sum(dim=-5)[:, 0, pad:(pad + w), pad:(pad + h)]
-
-        return DenseSimilarity(data=similarity, ch_to_dxdy=ch_to_dxdy)
-
-    def segment(self, batch_imgs,
+    def segment(self, batch_imgs: torch.tensor,
                 n_objects_max: Optional[int] = None,
                 prob_corr_factor: Optional[float] = None,
                 overlap_threshold: Optional[float] = None,
                 noisy_sampling: bool = True,
                 draw_boxes: bool = False,
+                batch_of_index: Optional[torch.tensor] = None
                 radius_nn: int = 5) -> Segmentation:
         """ Segment the batch of images """
 
@@ -375,11 +405,18 @@ class CompositionalVae(torch.nn.Module):
                                                  width=integer_mask.shape[-2],
                                                  height=integer_mask.shape[-1]) if draw_boxes else None
 
+            if batch_of_index is None:
+                similarity = None
+            else:
+                similarity = CompositionalVae.compute_similarity(mixing_k=mixing_k, 
+                                                                 batch_of_index=batch_of_index,
+                                                                 radius=radius)
+                                                                     
             return Segmentation(raw_image=batch_imgs,
                                 fg_prob=fg_prob,
                                 integer_mask=integer_mask,
                                 bounding_boxes=bounding_boxes,
-                                similarity=CompositionalVae.compute_similarity(mixing_k, radius_nn=radius_nn))
+                                similarity=similarity)
 
     def segment_with_tiling(self,
                             single_img: torch.Tensor,

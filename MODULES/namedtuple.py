@@ -224,7 +224,7 @@ class DenseSimilarity(NamedTuple):
         radius = numpy.max(self.ch_to_dxdy)
         pad_list = [radius + 1] * 4
         pad_index_matrix = F.pad(index_matrix, pad=pad_list, mode="constant", value=-1)
-        pad_weight = F.pad(self.data, pad=pad_list, mode="constant", value=0.0)
+        pad_weight = F.pad(self.data, pad=pad_list, mode="constant", value=0.0).to(pad_index_matrix.device)
 
         # Prepare the storage
         i_list, j_list, e_list = [], [], []  # i,j are verteces, e=edges
@@ -236,7 +236,7 @@ class DenseSimilarity(NamedTuple):
             data = pad_weight[:, ch, :, :].flatten()
             row_ind = pad_index_matrix[:, 0, :, :].flatten()
             col_ind = pad_index_matrix_shifted[:, 0, :, :].flatten()
-
+            
             # Do not add loops.
             my_filter = (row_ind >= 0) * (col_ind >= 0) * (data > min_edge_weight)
 

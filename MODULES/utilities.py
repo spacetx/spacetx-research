@@ -19,15 +19,13 @@ def downsample_and_upsample(x: torch.Tensor, low_resolution: tuple, high_resolut
 
 
 def save_obj(obj, path):
-    # TODO: use torch save
     with open(path, 'wb') as f:
-        pickle.dump(obj, f, pickle.HIGHEST_PROTOCOL)
+        torch.save(obj, f)
 
 
 def load_obj(path):
-    # TODO: use torch load
     with open(path, 'rb') as f:
-        return pickle.load(f)
+        return torch.load(f)
 
 
 def load_json_as_dict(path):
@@ -50,18 +48,24 @@ def reset_parameters(parent_module, verbose):
             pass
 
 
-def roller_2d(x: torch.tensor, radius: int = 2):
+def roller_2d(a: torch.tensor, b: Optional[torch.tensor] = None, radius: int = 2):
     """ Performs rolling of the last two spatial dimensions.
         For each point consider half a square. Each pair of points will appear once.
         Number of channels: [(2r+1)**2 - 1]/2
         For example for a radius = 2 the full square is 5x5. The number of pairs is: 12
     """
+    dxdy_list = []
     for dx in range(0, radius + 1):
-        x_tmp = torch.roll(x, dx, dims=-2)
         for dy in range(-radius, radius + 1):
             if dx == 0 and dy <= 0:
                 continue
-            yield torch.roll(x_tmp, dy, dims=-1), dx, dy
+            dxdy_list.append(dx,dy)
+    print(dxdy)
+    
+    for dxdy in dxdy_list:
+        a_tmp = torch.roll(torch.roll(a, dxdy[0], dims=-2), dxdy[1], dims=-1)
+        b_tmp = None if b is None else torch.roll(torch.roll(b, dxdy[0], dims=-2), dxdy[1], dims=-1)
+        yield a_tmp, b_tmp
 
 
 def are_broadcastable(a: torch.Tensor, b: torch.Tensor) -> bool:
@@ -499,11 +503,11 @@ def show_batch(images: torch.Tensor,
     if normalize_range is None:
         grid = utils.make_grid(images, n_col, n_padding, normalize=False, pad_value=pad_value)
     else:
-        grid = utils.make_grid(images, n_col, n_padding, normalize=True, range=(0.0, 1.0),
+        grid = utils.make_grid(images, n_col, n_padding, normalize=True, range=normalize_range,
                                scale_each=False, pad_value=pad_value)
         
     fig = plt.figure(figsize=figsize)
-    plt.imshow(grid.detach().numpy().transpose((1, 2, 0)))
+    plt.imshow(grid.detach().permute(1,2,0).squeeze(-1).numpy())
     if isinstance(title, str):
         plt.title(title)
     plt.close(fig)
@@ -530,12 +534,16 @@ def plot_grid(img, figsize=None):
     N = img.shape[-3]
 
     MAX_row = N // 4
-
-    figure, axes = plt.subplots(ncols=4, nrows=MAX_row, figsize=figsize)
-    for n in range(4 * MAX_row):
-        row = n // 4
-        col = n % 4
-        axes[row, col].imshow(img[n])
+    if MAX_row <= 1:
+        figure, axes = plt.subplots(ncols=N, figsize=figsize)
+        for n in range(N):
+            axes[n].imshow(img[n])
+    else:
+        figure, axes = plt.subplots(ncols=4, nrows=MAX_row, figsize=figsize)
+        for n in range(4 * MAX_row):
+            row = n // 4
+            col = n % 4
+            axes[row, col].imshow(img[n])
 
 
 def compute_average_in_box(imgs: torch.Tensor, bounding_box: BB) -> torch.Tensor:
