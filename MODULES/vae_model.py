@@ -578,8 +578,8 @@ class CompositionalVae(torch.nn.Module):
                                                                              start_x[k]:start_x[k]+dx[k],
                                                                              start_y[k]:start_y[k]+dy[k]].cpu()
             # End of loop over batches
-            # Now normalize the similarity
             sparse_similarity_matrix.div_(n_prediction)
+            big_fg_prob.div_(n_prediction)
 
             # Remove possible missing values in the big_integer_mask
             if torch.cuda.is_available():

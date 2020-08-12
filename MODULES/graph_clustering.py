@@ -4,8 +4,7 @@ import skimage.segmentation
 import skimage.color
 import leidenalg as la
 import igraph as ig
-from MODULES.namedtuple import Segmentation, Partition, DenseSimilarity
-from MODULES.namedtuple import SparseSimilarity, Suggestion, ConcordancePartition
+from MODULES.namedtuple import Segmentation, Partition, SparseSimilarity, Suggestion, ConcordancePartition
 from typing import Optional, List, Union
 from matplotlib import pyplot as plt
 
@@ -42,25 +41,20 @@ with torch.no_grad():
             b, c, ni, nj = segmentation.integer_mask.shape
             assert b == c == 1
             assert (1, 1, ni, nj) == segmentation.fg_prob.shape
-            vertex_mask = segmentation.fg_prob[0, 0] > min_fg_prob
 
-            self.n_fg_pixel = torch.sum(vertex_mask).item()
-            i_matrix, j_matrix = torch.meshgrid([torch.arange(ni, dtype=torch.long, device=self.device),
-                                                 torch.arange(nj, dtype=torch.long, device=self.device)])
-            self.i_coordinate_fg_pixel = i_matrix[vertex_mask]
-            self.j_coordinate_fg_pixel = j_matrix[vertex_mask]
-            self.index_matrix = -1 * torch.ones_like(i_matrix)
-            self.index_matrix[self.i_coordinate_fg_pixel,
-                              self.j_coordinate_fg_pixel] = torch.arange(self.n_fg_pixel,
-                                                                         dtype=torch.long,
-                                                                         device=self.device)
+            self.index_matrix = None
+            self.n_fg_pixel = None
+            self.i_coordinate_fg_pixel = None
+            self.j_coordinate_fg_pixel = None
+            self.graph = self.similarity_2_graph(similarity=segmentation.similarity,
+                                                 fg_prob=segmentation.fg_prob,
+                                                 min_fg_prob=min_fg_prob,
+                                                 min_edge_weight=min_edge_weight,
+                                                 normalize_graph_edges=normalize_graph_edges)
 
             # Connected Component partition
             self._partition_connected_components = None
             self._partition_sample_segmask = None
-            self.graph = self.similarity_2_graph(similarity=segmentation.similarity,
-                                                 min_edge_weight=min_edge_weight,
-                                                 normalize_graph_edges=normalize_graph_edges)
 
         @property
         def partition_connected_components(self):
@@ -87,63 +81,66 @@ with torch.no_grad():
                                                            params={})
             return self._partition_sample_segmask
 
-        def similarity_2_graph(self, similarity: Union[DenseSimilarity, SparseSimilarity],
+        def similarity_2_graph(self, similarity: SparseSimilarity,
+                               fg_prob: torch.tensor,
+                               min_fg_prob: float,
                                min_edge_weight: float,
                                normalize_graph_edges: bool = True) -> ig.Graph:
+            """ Create the graph from the sparse similarity matrix """
 
-            if similarity.type == "dense":
-                sp_similarity = similarity.to_sparse_similarity(index_matrix=self.index_matrix,
-                                                                index_max=self.n_fg_pixel,
-                                                                min_edge_weight=min_edge_weight)
-                coo_matrix = sp_similarity.csr_matrix.tocoo(copy=False)
-                v = torch.tensor(coo_matrix.data, dtype=torch.float, device=self.device)
-                i = torch.tensor(coo_matrix.row, dtype=torch.long, device=self.device)
-                j = torch.tensor(coo_matrix.col, dtype=torch.long, device=self.device)
+            # Map the location with small fg_prob to index = -1
+            vertex_mask = fg_prob[0, 0] > min_fg_prob
+            n_max = torch.max(similarity.index_matrix).item()
+            transform_index = -1 * torch.ones(n_max + 1, dtype=torch.long, device=self.device)
+            transform_index[similarity.index_matrix[vertex_mask]] = similarity.index_matrix[vertex_mask]
 
-            elif similarity.type == "sparse":
-                assert similarity.index_matrix.shape == self.index_matrix.shape
+            # Do the remapping
+            sparse_matrix = similarity.sparse_matrix.to(self.device)
+            v_tmp = sparse_matrix._values()
+            ij_tmp = transform_index[sparse_matrix._indices()]
 
-                coo_matrix = similarity.csr_matrix.tocoo(copy=False)
-                old_row = torch.tensor(coo_matrix.row, dtype=torch.long, device=self.device)
-                old_col = torch.tensor(coo_matrix.col, dtype=torch.long, device=self.device)
+            # Do the filtering
+            my_filter = (v_tmp > min_edge_weight) * (ij_tmp[0, :] >= 0) * (ij_tmp[1, :] >= 0)
+            v = v_tmp[my_filter]
+            ij = ij_tmp[:, my_filter]
 
-                # New to re-label the vertices
-                n_max = torch.max(similarity.index_matrix).item()
-                old_2_new = -1 * torch.ones(n_max + 1, dtype=torch.long)
-                mask_tmp = similarity.index_matrix >= 0
-                old_2_new[similarity.index_matrix[mask_tmp]] = self.index_matrix[mask_tmp]
+            # Shift the labels so that there are no gaps
+            ij_present = (torch.bincount(ij.view(-1)) > 0)
+            medium_2_new = (torch.cumsum(ij_present, dim=-1) * ij_present) - 1
+            ij_new = medium_2_new[ij]
+            self.n_fg_pixel = ij_present.sum().item()
 
-                v_tmp = torch.tensor(coo_matrix.data, dtype=torch.float, device=self.device)
-                i_tpm = old_2_new[old_row]
-                j_tmp = old_2_new[old_col]
-                my_filter = (i_tpm >= 0) * (j_tmp >= 0) * (v_tmp >= min_edge_weight)
+            # Make a transformation of the index_matrix
+            transform_index.fill_(-1)
+            transform_index[sparse_matrix._indices()[:, my_filter]] = ij_new
+            self.index_matrix = transform_index[similarity.index_matrix]
+            ni, nj = self.index_matrix.shape[-2:]
 
-                v = v_tmp[my_filter]
-                i = i_tpm[my_filter]
-                j = j_tmp[my_filter]
+            i_matrix, j_matrix = torch.meshgrid([torch.arange(ni, dtype=torch.long, device=self.device),
+                                                 torch.arange(nj, dtype=torch.long, device=self.device)])
+            self.i_coordinate_fg_pixel = i_matrix[self.index_matrix >= 0]
+            self.j_coordinate_fg_pixel = j_matrix[self.index_matrix >= 0]
 
-            else:
-                raise Exception("similarity type not recognized")
+            # Check
+            # tmp = -1 * torch.ones_like(self.index_matrix)
+            # tmp[self.i_coordinate_fg_pixel,
+            #    self.j_coordinate_fg_pixel] = torch.arange(self.n_fg_pixel,
+            #                                               dtype=torch.long,
+            #                                               device=self.device)
+            # assert (tmp == self.index_matrix).all()
 
-            # Now can build the graph
-            sum_edges_at_vertex = torch.zeros(self.n_fg_pixel, device=self.device, dtype=torch.float)
-            vertex_ids = [n for n in range(self.n_fg_pixel)]
-            for n in vertex_ids:
-                sum_edges_at_vertex[n] = v[i == n].sum() + v[j == n].sum()
-
+            # Normalize the edges if necessary
             if normalize_graph_edges:
-                sqrt_d = torch.sqrt(sum_edges_at_vertex)
-                edge_weight = v/(sqrt_d[i]*sqrt_d[j])
-                total_edge_weight = torch.sum(edge_weight).item()
-                e_list = edge_weight.tolist()
-            else:
-                total_edge_weight = torch.sum(v).item()
-                e_list = v.tolist()
+                sqrt_sum_edges_at_vertex = torch.zeros(self.n_fg_pixel, device=self.device, dtype=torch.float)
+                for n in range(self.n_fg_pixel):
+                    sqrt_sum_edges_at_vertex[n] = v[ij_new[0] == n].sum() + v[ij_new[1] == n].sum()
+                sqrt_sum_edges_at_vertex.sqrt_()
+                v.div_(sqrt_sum_edges_at_vertex[ij_new[0]]*sqrt_sum_edges_at_vertex[ij_new[1]])
+            total_edge_weight = v.sum().item()
 
-            edgelist = list(zip(i, j))
-            return ig.Graph(vertex_attrs={"label": vertex_ids},
-                            edges=edgelist,
-                            edge_attrs={"weight": e_list},
+            return ig.Graph(vertex_attrs={"label": numpy.arange(self.n_fg_pixel, dtype=numpy.int64)},
+                            edges=ij_new.permute(1, 0).cpu().numpy(),
+                            edge_attrs={"weight": v.cpu().numpy()},
                             graph_attrs={"total_edge_weight": total_edge_weight,
                                          "total_nodes": self.n_fg_pixel},
                             directed=False)
@@ -169,19 +166,18 @@ with torch.no_grad():
                                               include_bg: bool = False) -> List[ig.Graph]:
             """ same covention as scikit image: window = (min_row, min_col, max_row, max_col) """
 
-            vertex_labels = torch.tensor(self.graph.vs["label"],
-                                         device=self.device,
-                                         dtype=torch.long)
-
             if (partition is None) and (window is None):
                 # nothing to do
                 for i in range(1):
                     yield self.graph
+
             elif (partition is None) and (window is not None):
                 # return a single graph
-                vertex_in_window = self.is_vertex_in_window(window)
+                mask_vertex_in_window = self.is_vertex_in_window(window)  # torch.bool
+                vertex_label = torch.tensor(self.graph.vs["label"], dtype=torch.long, device=self.device)
                 for i in range(1):
-                    yield self.graph.subgraph(vertices=vertex_labels[vertex_in_window].tolist())
+                    yield self.graph.subgraph(vertices=vertex_label[mask_vertex_in_window])
+
             elif partition is not None:
                 # return many graphs
 
@@ -190,11 +186,11 @@ with torch.no_grad():
                 else:
                     vertex_in_window = self.is_vertex_in_window(window)
 
+                vertex_label = torch.tensor(self.graph.vs["label"], dtype=torch.long, device=self.device)
                 n_start = 0 if include_bg else 1
                 for n in range(n_start, len(partition.sizes)):
                     vertex_mask = (partition.membership == n) * vertex_in_window
-                    sub_vertex_list = vertex_labels[vertex_mask].tolist()
-                    yield self.graph.subgraph(vertices=sub_vertex_list)
+                    yield self.graph.subgraph(vertices=vertex_label[vertex_mask])
 
         def suggest_resolution_parameter(self,
                                          window: Optional[tuple] = None,
@@ -214,7 +210,11 @@ with torch.no_grad():
                 on a windows of the original image. If window is None the entire image is used. This might be very slow
 
                 The suggested resolution parameter is NOT necessarily optimal.
-                Try smaller values to undersegment and larger value to oversegment. """
+                Try smaller values to undersegment and larger value to oversegment.
+
+                window = (min_row, min_col, max_row, max_col)
+
+            """
 
             # filter by window
             if window is None:
