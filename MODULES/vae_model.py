@@ -308,20 +308,22 @@ class CompositionalVae(torch.nn.Module):
                                n_obj_counts=n_obj_counts)
 
     @staticmethod
-    def compute_similarity(mixing_k: torch.tensor, 
-                           batch_of_index: torch.tensor, 
-                           radius_nn: int, 
-                           min_threshold: float = 0.01) -> torch.sparse.FloatTensor:
+    def compute_sparse_similarity_matrix(mixing_k: torch.tensor,
+                                         batch_of_index: torch.tensor,
+                                         max_index: int,
+                                         radius_nn: int,
+                                         min_threshold: float = 0.01) -> torch.sparse.FloatTensor:
         """ Compute the similarity between two pixels by computing the product of mixing_k
             describing the probability that each pixel belong to a given foreground instance
-            If the similarity is less that the similarity_threshold the value is not recorded (i.e. effectivdely zero)
-            but saves memory.
+            If the similarity is less than min_threshold the value is not recorded (i.e. effectively zero)
+            to save memory.
 
             INPUT: mixing_k of shape --> n_boxes, batch_shape, 1, w, h
-            OUTPUT: similarity of shape ------>   batch_shape, nnz, 2 
+            OUTPUT: sparse tensor fo size (max_index, max_index)
         """
         with torch.no_grad():
-            
+
+            # start_time = time.time()
             n_boxes, batch_shape, ch_in, w, h = mixing_k.shape
             assert ch_in == 1
             assert (batch_shape, 1, w, h) == batch_of_index.shape
@@ -330,39 +332,26 @@ class CompositionalVae(torch.nn.Module):
             pad = radius_nn + 1
             pad_mixing_k = F.pad(mixing_k, pad=[pad, pad, pad, pad], mode="constant", value=0.0)
             pad_index = F.pad(batch_of_index, pad=[pad, pad, pad, pad], mode="constant", value=-1)
-        
-            print("HERE")
+            row = batch_of_index[:, 0]  # shape: batch, w, h
+            row_ge_0 = (row >= 0)
 
-            for pad_mixing_k_shifted, pad_index_shifted in roller_2d(a=pad_mixing_k, 
+            sparse_similarity = torch.sparse.FloatTensor(max_index, max_index)
+            for pad_mixing_k_shifted, pad_index_shifted in roller_2d(a=pad_mixing_k,
                                                                      b=pad_index, 
                                                                      radius=radius_nn):
                 v = (pad_mixing_k * pad_mixing_k_shifted).sum(dim=-5)[:, 0, pad:(pad + w), pad:(pad + h)]  # shape: batch, w, h
-                i = batch_of_index[:, 0] # shape: batch, w, h
-                j = pad_index_shifted[:, 0, pad:(pad + w), pad:(pad + h)] # shape: batch, w, h
+                col = pad_index_shifted[:, 0, pad:(pad + w), pad:(pad + h)]  # shape: batch, w, h
                 
-                mask = (v > min_value) * (i >= 0) * (j >= 0)
-                
-                print(v[mask].shape)
-                print(i[mask].shape)
-                print(j[mask].shape)
-                
-                assert 1==2
+                mask = (v > min_threshold) * (col >= 0) * row_ge_0
 
-      #  # Prepare storage
-      #  
-      #  
-      #  ch_out = int(((2 * radius_nn + 1) ** 2 - 1)/2)  # this is the number of point NN points
-      #  ch_to_dxdy = []
-      #  similarity = torch.zeros((batch_shape, ch_out, w, h), device=mixing_k.device, dtype=mixing_k.dtype)
-#
-      #  # compute dot product of the mixing_k between nearby vertices
-      #  for ch, rolled in enumerate(roller_2d(pad_mixing_k, radius=radius_nn)):
-      #      pad_mixing_k_shifted, dx, dy = rolled
-      #      ch_to_dxdy.append([dx, dy])
-      #      similarity[:, ch] = (pad_mixing_k *
-      #                           pad_mixing_k_shifted).sum(dim=-5)[:, 0, pad:(pad + w), pad:(pad + h)]
-#
-      #  return DenseSimilarity(data=similarity, ch_to_dxdy=ch_to_dxdy)
+                index_tensor = torch.stack((row[mask], col[mask]), dim=0)
+                tmp_similarity = torch.sparse.FloatTensor(index_tensor, v[mask],
+                                                          torch.Size([max_index, max_index]))
+                sparse_similarity.add_(tmp_similarity)
+                sparse_similarity = sparse_similarity.coalesce()
+
+            # print("similarity time", time.time()-start_time)
+            return sparse_similarity
 
     def segment(self, batch_imgs: torch.tensor,
                 n_objects_max: Optional[int] = None,
@@ -371,9 +360,11 @@ class CompositionalVae(torch.nn.Module):
                 noisy_sampling: bool = True,
                 draw_boxes: bool = False,
                 batch_of_index: Optional[torch.tensor] = None,
+                max_index: Optional[int] = None,
                 radius_nn: int = 5) -> Segmentation:
         """ Segment the batch of images """
 
+        # start_time = time.time()
         n_objects_max = self.input_img_dict["n_objects_max"] if n_objects_max is None else n_objects_max
         prob_corr_factor = getattr(self, "prob_corr_factor", 0.0) if prob_corr_factor is None else prob_corr_factor
         overlap_threshold = self.nms_dict["overlap_threshold"] if overlap_threshold is None else overlap_threshold
@@ -402,8 +393,9 @@ class CompositionalVae(torch.nn.Module):
                                                  width=integer_mask.shape[-2],
                                                  height=integer_mask.shape[-1]) if draw_boxes else None
 
+            # print("inference time", time.time()-start_time)
+
             if batch_of_index is None:
-                print("not computing similarity")
                 return Segmentation(raw_image=batch_imgs,
                                     fg_prob=fg_prob,
                                     integer_mask=integer_mask,
@@ -411,16 +403,19 @@ class CompositionalVae(torch.nn.Module):
                                     similarity=None)
 
             else:
-                print("computing similarity")
+                max_index = torch.max(batch_of_index) if max_index is None else max_index
+                similarity_matrix = CompositionalVae.compute_sparse_similarity_matrix(mixing_k=mixing_k,
+                                                                                      batch_of_index=batch_of_index,
+                                                                                      max_index=max_index,
+                                                                                      radius_nn=radius_nn,
+                                                                                      min_threshold=0.1)
                 return Segmentation(raw_image=batch_imgs,
                                     fg_prob=fg_prob,
                                     integer_mask=integer_mask,
                                     bounding_boxes=bounding_boxes,
-                                    similarity=CompositionalVae.compute_similarity(mixing_k=mixing_k,
-                                                                                   batch_of_index=batch_of_index,
-                                                                                   radius_nn=radius_nn,
-                                                                                   min_threshold=0.1))
-                                                                     
+                                    similarity=SparseSimilarity(sparse_matrix=similarity_matrix,
+                                                                index_matrix=None))
+
     def segment_with_tiling(self,
                             single_img: torch.Tensor,
                             roi_mask: Optional[torch.Tensor],
@@ -434,7 +429,7 @@ class CompositionalVae(torch.nn.Module):
         """ Uses a sliding window approach to collect a co_objectiveness information
             about the pixels of a large image """
         if roi_mask is not None:
-            cum_roi_mask = torch.cumsum(torch.cumsum(roi_mask, dim=-1), dim=-2)
+            cum_roi_mask = torch.cumsum(torch.cumsum(roi_mask, dim=-1), dim=-2).cpu()
             assert len(cum_roi_mask.shape) == len(single_img.shape)
             assert cum_roi_mask.shape[-2:] == single_img.shape[-2:]
             print("cum_roi_mask.shape ->", cum_roi_mask.shape)
@@ -458,6 +453,11 @@ class CompositionalVae(torch.nn.Module):
             n_prediction = (crop_size[0]//stride[0]) * (crop_size[1]//stride[1])
             print(f'Each pixel will be segmented {n_prediction} times')
 
+            max_index = w_img * h_img
+            single_index_matrix = torch.arange(max_index,
+                                               dtype=torch.long,
+                                               device=torch.device('cpu')).view(w_img, h_img)
+
             pad_w = crop_size[0] - stride[0]
             pad_h = crop_size[1] - stride[1]
 
@@ -469,139 +469,132 @@ class CompositionalVae(torch.nn.Module):
 
             # Identify the starting points
             ij_tmp = torch.tensor(location_of_corner, device=single_img.device, dtype=torch.long)  # shape: N, 2
+            x1 = ij_tmp[..., 0].clamp(min=0)
+            y1 = ij_tmp[..., 1].clamp(min=0)
             x3 = (ij_tmp[..., 0] + crop_size[0]).clamp(max=w_img)
             y3 = (ij_tmp[..., 1] + crop_size[1]).clamp(max=h_img)
-            x1 = ij_tmp[..., 0]
-            y1 = ij_tmp[..., 1]
-            x1_gt_0 = (x1 > 0)
-            y1_gt_0 = (y1 > 0)
-            x1.clamp_(min=0)
-            y1.clamp_(min=0)
-            dx = x3 - x1
-            dy = y3 - y1
+            dx = x3 - x1  # this is <= crop_size[0]
+            dy = y3 - y1  # this is <= crop_size[1]
             start_x = (crop_size[0] - dx) * (x1 == 0)
-            start_y = (crop_size[0] - dy) * (y1 == 0)
+            start_y = (crop_size[1] - dy) * (y1 == 0)
 
             if cum_roi_mask is not None:
                 # Exclude stuff if outside the roi_mask
                 integral = cum_roi_mask[0, x3-1, y3-1] - \
-                           cum_roi_mask[0, x1-1, y3-1] * x1_gt_0 - \
-                           cum_roi_mask[0, x3-1, y1-1] * y1_gt_0 + \
-                           cum_roi_mask[0, x1-1, y1-1] * x1_gt_0 * y1_gt_0
+                           cum_roi_mask[0, x1-1, y3-1] * (x1 > 0) - \
+                           cum_roi_mask[0, x3-1, y1-1] * (y1 > 0) + \
+                           cum_roi_mask[0, x1-1, y1-1] * (x1 > 0) * (y1 > 0)
                 fraction = integral.float() / (crop_size[0] * crop_size[1])
-                filter = fraction > 0.01  # if there is more than 1% ROI the patch will be processed.
+                mask = fraction > 0.01  # if there is more than 1% ROI the patch will be processed.
 
-                dx = dx[filter]
-                dy = dy[filter]
-                start_x = start_x[filter]
-                start_y = start_y[filter]
-                end_x = start_x + dx
-                end_y = start_y + dy
-                x1 = x1[filter]
-                x3 = x3[filter]
-                y1 = y1[filter]
-                y3 = y3[filter]
+                dx = dx[mask]
+                dy = dy[mask]
+                start_x = start_x[mask]
+                start_y = start_y[mask]
+                x1 = x1[mask]
+                x3 = x3[mask]
+                y1 = y1[mask]
+                y3 = y3[mask]
 
             print(f'I am going to process {start_x.shape[0]} patches')
             if not (start_x.shape[0] >= 1):
-                raise Exception("No patches will be anlyzed. Something went wrong!")
-
-            # Prepare storage
-            n_instances_tot = 0
-            big_integer_mask, big_fg_prob = None, None
-            index_max = w_img * h_img
-
-            # TODO: use roi mask to make a smaller single_index_matrix......
-            single_index_matrix = torch.arange(index_max,
-                                               dtype=torch.long,
-                                               device=single_img.device).view(w_img, h_img)
-
-
-
-            big_csr_similarity = scipy.sparse.csr_matrix((index_max, index_max), dtype=float)
+                raise Exception("No patches will be analyzed. Something went wrong!")
 
             # split the list in chunks of batch_size
-            list_k_start = range(0, start_x.shape[0], batch_size)
-            for n, k_start in enumerate(list_k_start):
-                k_end = min(k_start + batch_size, start_x.shape[0])
+            k_list_of_tensor = torch.split(torch.arange(0, start_x.shape[0],
+                                                        dtype=torch.long,
+                                                        device=torch.device('cpu')),
+                                           split_size_or_sections=batch_size,
+                                           dim=0)
 
-                # Prepare batch of images
-                batch_imgs = torch.empty((k_end-k_start, single_img.shape[-3], crop_size[0], crop_size[1]),
-                                         device=single_img.device,
-                                         dtype=single_img.dtype)
-                batch_of_index = torch.empty((k_end-k_start, 1, crop_size[0], crop_size[1]),
-                                             device=single_index_matrix.device,
-                                             dtype=single_index_matrix.dtype)
-                print(k_start, k_end)
-                for k in range(k_start, k_end):
-                    print(k)
-                    batch_imgs[k, :, start_x[k]:end_x[k],
-                                     start_y[k]:end_y[k]] = single_img[:, x1[k]:x3[k], y1[k]:y3[k]]
+            # Prepare storage and counters
+            not_coalesced_counter = 0
+            n_instances_tot = 0
+            big_integer_mask, big_fg_prob = None, None
+            sparse_similarity_matrix = torch.sparse.FloatTensor(max_index, max_index).cpu()
+            batch_imgs = torch.empty((batch_size, single_img.shape[-3], crop_size[0], crop_size[1]),
+                                     device=single_img.device,
+                                     dtype=single_img.dtype)
+            batch_of_index = torch.empty((batch_size, 1, crop_size[0], crop_size[1]),
+                                         device=single_index_matrix.device,
+                                         dtype=single_index_matrix.dtype)
 
-                    batch_of_index[k, 0, start_x[k]:end_x[k],
-                                         start_y[k]:end_y[k]] = single_index_matrix[x1[k]:x3[k], y1[k]:y3[k]]
+            # Prepare batch of images
+            for n_batches, k_tensor in enumerate(k_list_of_tensor):
+
+                # Pack the data into batch
+                batch_of_index.fill_(0.0)
+                batch_of_index.fill_(-1)
+                for n, k in enumerate(k_tensor):
+                    batch_imgs[n, :, start_x[k]:start_x[k]+dx[k],
+                                     start_y[k]:start_y[k]+dy[k]] = single_img[:, x1[k]:x3[k], y1[k]:y3[k]]
+
+                    batch_of_index[n, 0, start_x[k]:start_x[k]+dx[k],
+                                         start_y[k]:start_y[k]+dy[k]] = single_index_matrix[x1[k]:x3[k], y1[k]:y3[k]]
 
                 # print progress
-                if (n % 100 == 0) or (n == len(list_k_start)-1):
-                    print(f'{n} out of {len(list_k_start)-1} -> batch_of_imgs.shape = {batch_imgs.shape}')
+                if (n_batches % 100 == 0) or (n_batches == len(k_list_of_tensor)-1):
+                    print(f'{n_batches} out of {len(k_list_of_tensor)-1} -> batch_of_imgs.shape = {batch_imgs.shape}')
 
                 # Segment the batch (and move to CPU or GPU depending where the model lives)
-                segmentation = self.segment(batch_imgs.to(self.sigma_fg.device),
+                # Note that the last batch might be smaller than batch_size therefore use slicing
+                assert max_index > torch.max(batch_of_index)
+                segmentation = self.segment(batch_imgs=batch_imgs[:k_tensor.shape[0]].to(self.sigma_fg.device),
                                             n_objects_max=n_objects_max_per_patch,
                                             prob_corr_factor=prob_corr_factor,
                                             overlap_threshold=overlap_threshold,
                                             noisy_sampling=True,
                                             draw_boxes=False,
-                                            batch_of_index=batch_of_index,
+                                            batch_of_index=batch_of_index[:k_tensor.shape[0]].to(self.sigma_fg.device),
+                                            max_index=max_index,
                                             radius_nn=radius_nn)
-                print(segmentation._fields)
-                assert 1==2
 
-#### big_csr_similarity += segmentation.similarity.to_sparse_similarity(index_matrix=batch_of_index,
-####                                                                                   index_max=index_max).csr_matrix
-####
-####                if big_fg_prob is None:
-####                    # Probability and integer mask are dense tensor
-####                    big_fg_prob = torch.zeros((w_img, h_img),
-####                                              device=segmentation.fg_prob.device,
-####                                              dtype=segmentation.fg_prob.dtype)
-####                    big_integer_mask = torch.zeros((w_img, h_img),
-####                                                   device=segmentation.integer_mask.device,
-####                                                   dtype=segmentation.integer_mask.dtype)
-####
-####                for k in range(len(ij_list)):
-####
-####                    big_fg_prob[x1[k]:x3[k],
-####                                y1[k]:y3[k]] += segmentation.fg_prob[k, 0,
-####                                                                     start_x[k]:start_x[k]+dx[k],
-####                                                                     start_y[k]:start_y[k]+dy[k]]
-####
-####                    # Find a set of not-overlapping tiles to obtain a sample segmentation (without graph clustering)
-####                    if (x1[k] % crop_size[0] == 0) and (y1[k] % crop_size[1] == 0):
-####                        n_instances = torch.max(segmentation.integer_mask[k])
-####                        shifted_integer_mask = (segmentation.integer_mask[k] > 0) * \
-####                                               (segmentation.integer_mask[k] + n_instances_tot)
-####                        n_instances_tot += n_instances
-####                        big_integer_mask[x1[k]:x3[k],
-####                                         y1[k]:y3[k]] = shifted_integer_mask[0,
-####                                                                             start_x[k]:start_x[k]+dx[k],
-####                                                                             start_y[k]:start_y[k]+dy[k]]
-####            # Normalize the similarity
-####            big_csr_similarity /= n_prediction
-####
-####            # Remove possible missing values in the big_integer_mask
-####            original_type = big_integer_mask.dtype
-####            bin_count = torch.bincount(big_integer_mask.flatten())
-####            old2new_label = torch.cumsum(bin_count > 0, dim=0) - 1  # conversion old -> new
-####            integer_mask_no_gaps = old2new_label[big_integer_mask.long()].to(original_type)
-#####
-####            return Segmentation(raw_image=single_img[None],
-####                                fg_prob=big_fg_prob[None, None],
-####                                integer_mask=integer_mask_no_gaps[None, None],
-####                                bounding_boxes=None,
-####                                similarity=SparseSimilarity(csr_matrix=big_csr_similarity,
-####                                                            index_matrix=single_index_matrix))
-####
+                if big_fg_prob is None:
+                    # Probability and integer mask are dense tensor
+                    big_fg_prob = torch.zeros((w_img, h_img),
+                                              device=torch.device('cpu'),
+                                              dtype=segmentation.fg_prob.dtype)
+                    big_integer_mask = torch.zeros((w_img, h_img),
+                                                   device=torch.device('cpu'),
+                                                   dtype=segmentation.integer_mask.dtype)
+
+                # Unpack the data from batch
+                sparse_similarity_matrix.add_(segmentation.similarity.sparse_matrix.cpu())
+                sparse_similarity_matrix = sparse_similarity_matrix.coalesce()
+
+                fg_prob = segmentation.fg_prob.cpu()
+                for n, k in enumerate(k_tensor):
+                    big_fg_prob[x1[k]:x3[k], y1[k]:y3[k]] += fg_prob[n, 0, start_x[k]:start_x[k]+dx[k],
+                                                                           start_y[k]:start_y[k]+dy[k]]
+
+                    # Find a set of not-overlapping tiles to obtain a sample segmentation (without graph clustering)
+                    if (x1[k] % crop_size[0] == 0) and (y1[k] % crop_size[1] == 0):
+                        n_instances = torch.max(segmentation.integer_mask[n])
+                        shifted_integer_mask = (segmentation.integer_mask[n] > 0) * \
+                                               (segmentation.integer_mask[n] + n_instances_tot)
+                        n_instances_tot += n_instances
+                        big_integer_mask[x1[k]:x3[k],
+                                         y1[k]:y3[k]] = shifted_integer_mask[0,
+                                                                             start_x[k]:start_x[k]+dx[k],
+                                                                             start_y[k]:start_y[k]+dy[k]].cpu()
+            # End of loop over batches
+            # Now normalize the similarity
+            sparse_similarity_matrix.div_(n_prediction)
+
+            # Remove possible missing values in the big_integer_mask
+            if torch.cuda.is_available():
+                big_integer_mask = big_integer_mask.cuda()
+            original_type = big_integer_mask.dtype
+            bin_count = torch.bincount(big_integer_mask.flatten())
+            old2new_label = torch.cumsum(bin_count > 0, dim=0) - 1  # conversion old -> new
+            integer_mask_no_gaps = old2new_label[big_integer_mask.long()].to(original_type).cpu()
+
+            return Segmentation(raw_image=single_img[None],
+                                fg_prob=big_fg_prob[None, None],
+                                integer_mask=integer_mask_no_gaps[None, None],
+                                bounding_boxes=None,
+                                similarity=SparseSimilarity(sparse_matrix=sparse_similarity_matrix,
+                                                            index_matrix=single_index_matrix))
 
     # this is the generic function which has all the options unspecified
     def process_batch_imgs(self,

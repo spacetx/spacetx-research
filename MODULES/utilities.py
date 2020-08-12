@@ -59,9 +59,8 @@ def roller_2d(a: torch.tensor, b: Optional[torch.tensor] = None, radius: int = 2
         for dy in range(-radius, radius + 1):
             if dx == 0 and dy <= 0:
                 continue
-            dxdy_list.append(dx,dy)
-    print(dxdy)
-    
+            dxdy_list.append((dx, dy))
+
     for dxdy in dxdy_list:
         a_tmp = torch.roll(torch.roll(a, dxdy[0], dims=-2), dxdy[1], dims=-1)
         b_tmp = None if b is None else torch.roll(torch.roll(b, dxdy[0], dims=-2), dxdy[1], dims=-1)

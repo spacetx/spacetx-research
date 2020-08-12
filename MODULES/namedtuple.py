@@ -174,11 +174,6 @@ class Partition(NamedTuple):
                                     iou=iou.item())
 
 
-class SparseSimilarity(NamedTuple):
-    csr_matrix: scipy.sparse.csr_matrix
-    index_matrix: Optional[torch.tensor]
-
-
 ###    def to_sparse_similarity(self, index_matrix: torch.Tensor,
 ###                             index_max: Optional[int] = None,
 ###                             min_edge_weight: float = 0.01) -> SparseSimilarity:
@@ -255,6 +250,11 @@ class Checkpoint(NamedTuple):
     epoch: int
     hyperparams_dict: dict
     history_dict: dict
+
+
+class SparseSimilarity(NamedTuple):
+    sparse_matrix: torch.sparse.FloatTensor
+    index_matrix: Optional[torch.tensor]
 
 
 class Segmentation(NamedTuple):
