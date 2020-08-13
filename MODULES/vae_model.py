@@ -335,7 +335,7 @@ class CompositionalVae(torch.nn.Module):
             row = batch_of_index[:, 0]  # shape: batch, w, h
             row_ge_0 = (row >= 0)
 
-            sparse_similarity = torch.sparse.FloatTensor(max_index, max_index)
+            sparse_similarity = torch.sparse.FloatTensor(max_index, max_index).to(mixing_k.device)
             for pad_mixing_k_shifted, pad_index_shifted in roller_2d(a=pad_mixing_k,
                                                                      b=pad_index, 
                                                                      radius=radius_nn):
@@ -468,7 +468,7 @@ class CompositionalVae(torch.nn.Module):
                     location_of_corner.append([i, j])
 
             # Identify the starting points
-            ij_tmp = torch.tensor(location_of_corner, device=single_img.device, dtype=torch.long)  # shape: N, 2
+            ij_tmp = torch.tensor(location_of_corner, device=torch.device('cpu'), dtype=torch.long)  # shape: N, 2
             x1 = ij_tmp[..., 0].clamp(min=0)
             y1 = ij_tmp[..., 1].clamp(min=0)
             x3 = (ij_tmp[..., 0] + crop_size[0]).clamp(max=w_img)
@@ -523,7 +523,7 @@ class CompositionalVae(torch.nn.Module):
             for n_batches, k_tensor in enumerate(k_list_of_tensor):
 
                 # Pack the data into batch
-                batch_of_index.fill_(0.0)
+                batch_imgs.fill_(0.0)
                 batch_of_index.fill_(-1)
                 for n, k in enumerate(k_tensor):
                     batch_imgs[n, :, start_x[k]:start_x[k]+dx[k],
@@ -531,6 +531,8 @@ class CompositionalVae(torch.nn.Module):
 
                     batch_of_index[n, 0, start_x[k]:start_x[k]+dx[k],
                                          start_y[k]:start_y[k]+dy[k]] = single_index_matrix[x1[k]:x3[k], y1[k]:y3[k]]
+                #assert torch.max(batch_of_index) < max_index
+                #assert torch.min(batch_of_index) >= -1
 
                 # print progress
                 if (n_batches % 100 == 0) or (n_batches == len(k_list_of_tensor)-1):

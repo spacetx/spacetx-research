@@ -20,7 +20,7 @@ def downsample_and_upsample(x: torch.Tensor, low_resolution: tuple, high_resolut
 
 def save_obj(obj, path):
     with open(path, 'wb') as f:
-        torch.save(obj, f)
+        torch.save(obj, f, pickle_protocol=2, _use_new_zipfile_serialization=True)
 
 
 def load_obj(path):

@@ -246,7 +246,8 @@ class Inference_and_Generation(torch.nn.Module):
             if (prob_corr_factor > 0) and (prob_corr_factor <= 1.0) and not generate_synthetic_data:
 
                 # probability correction if necessary
-                av_intensity: torch.Tensor = compute_average_in_box((imgs_in - big_bg).pow(2), bounding_box_all)
+                av_intensity: torch.Tensor = compute_average_in_box((imgs_in - big_bg).abs(), bounding_box_all)
+                # av_intensity: torch.Tensor = compute_average_in_box((imgs_in - big_bg).pow(2), bounding_box_all)
                 assert len(av_intensity.shape) == 2
                 n_boxes_all, batch_size = av_intensity.shape
                 ranking: torch.Tensor = compute_ranking(av_intensity)  # n_boxes_all, batch. It is in [0,n_box_all-1]
