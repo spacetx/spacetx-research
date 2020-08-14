@@ -33,9 +33,13 @@ with torch.no_grad():
                      normalize_graph_edges: bool = False) -> None:
             super().__init__()
 
-            self.device = segmentation.integer_mask.device
-            self.raw_image = segmentation.raw_image[0]
-            self.example_integer_mask = segmentation.integer_mask[0, 0]  # set batch=0, ch=0
+            if torch.cuda.is_available():
+                self.device = torch.device("cuda:0")
+            else:
+                self.device = torch.device("cpu")
+                
+            self.raw_image = segmentation.raw_image[0].to(self.device)
+            self.example_integer_mask = segmentation.integer_mask[0, 0].to(self.device) # set batch=0, ch=0
 
             # it should be able to handle both DenseSimilarity and SparseSimilarity
             b, c, ni, nj = segmentation.integer_mask.shape
@@ -87,17 +91,26 @@ with torch.no_grad():
                                min_edge_weight: float,
                                normalize_graph_edges: bool = True) -> ig.Graph:
             """ Create the graph from the sparse similarity matrix """
-
+            
+            # Move operation on GPU is available. Only at the end move back to cpu
+            if torch.cuda.is_available():
+                fg_prob = fg_prob.cuda()
+                sparse_matrix = similarity.sparse_matrix.cuda()
+                similarity_index_matrix = similarity.index_matrix.cuda()
+            else:
+                sparse_matrix = similarity.sparse_matrix.cpu()
+                similarity_index_matrix = similarity.index_matrix.cpu()
+                
             # Map the location with small fg_prob to index = -1
             vertex_mask = fg_prob[0, 0] > min_fg_prob
             n_max = torch.max(similarity.index_matrix).item()
-            transform_index = -1 * torch.ones(n_max + 1, dtype=torch.long, device=self.device)
-            transform_index[similarity.index_matrix[vertex_mask]] = similarity.index_matrix[vertex_mask]
+            transform_index = -1 * torch.ones(n_max + 1, dtype=torch.long, device=similarity_index_matrix.device)
+            transform_index[similarity_index_matrix[vertex_mask]] = similarity_index_matrix[vertex_mask]
 
             # Do the remapping
-            sparse_matrix = similarity.sparse_matrix.to(self.device)
             v_tmp = sparse_matrix._values()
             ij_tmp = transform_index[sparse_matrix._indices()]
+            print(v_tmp.device)
 
             # Do the filtering
             my_filter = (v_tmp > min_edge_weight) * (ij_tmp[0, :] >= 0) * (ij_tmp[1, :] >= 0)
@@ -113,11 +126,11 @@ with torch.no_grad():
             # Make a transformation of the index_matrix
             transform_index.fill_(-1)
             transform_index[sparse_matrix._indices()[:, my_filter]] = ij_new
-            self.index_matrix = transform_index[similarity.index_matrix]
+            self.index_matrix = transform_index[similarity_index_matrix]
             ni, nj = self.index_matrix.shape[-2:]
 
-            i_matrix, j_matrix = torch.meshgrid([torch.arange(ni, dtype=torch.long, device=self.device),
-                                                 torch.arange(nj, dtype=torch.long, device=self.device)])
+            i_matrix, j_matrix = torch.meshgrid([torch.arange(ni, dtype=torch.long, device=self.index_matrix.device),
+                                                 torch.arange(nj, dtype=torch.long, device=self.index_matrix.device)])
             self.i_coordinate_fg_pixel = i_matrix[self.index_matrix >= 0]
             self.j_coordinate_fg_pixel = j_matrix[self.index_matrix >= 0]
 
@@ -131,11 +144,14 @@ with torch.no_grad():
 
             # Normalize the edges if necessary
             if normalize_graph_edges:
-                sqrt_sum_edges_at_vertex = torch.zeros(self.n_fg_pixel, device=self.device, dtype=torch.float)
+                print(v.device)
+                # THIS IS TOO SLOW
+                sqrt_sum_edges_at_vertex = torch.zeros(self.n_fg_pixel, device=v.device, dtype=torch.float)
                 for n in range(self.n_fg_pixel):
                     sqrt_sum_edges_at_vertex[n] = v[ij_new[0] == n].sum() + v[ij_new[1] == n].sum()
                 sqrt_sum_edges_at_vertex.sqrt_()
                 v.div_(sqrt_sum_edges_at_vertex[ij_new[0]]*sqrt_sum_edges_at_vertex[ij_new[1]])
+                print("done")
             total_edge_weight = v.sum().item()
 
             return ig.Graph(vertex_attrs={"label": numpy.arange(self.n_fg_pixel, dtype=numpy.int64)},

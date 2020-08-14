@@ -3,6 +3,7 @@ import numpy as np
 from .namedtuple import ImageBbox
 import PIL.Image
 PIL.Image.MAX_IMAGE_PIXELS = None
+from typing import Optional
 
 
 def pil_to_numpy(pilfile, mode: str = 'L', reduction_factor: int = 1):
@@ -23,23 +24,29 @@ def pil_to_numpy(pilfile, mode: str = 'L', reduction_factor: int = 1):
         h_new = int(h_raw / reduction_factor)
         pilobject = pilobject.resize((w_new, h_new), resample=PIL.Image.BILINEAR)
 
-    return np.array(pilobject)
+    return skimage.exposure.rescale_intensity(image=np.array(pilobject), 
+                                              in_range='image', 
+                                              out_range='dtype')
 
 
-def rescale_intensity(img_reference, histo_mask, q=(0.01, 99.99), gamma=1):
+def rescale_intensity(img_reference: np.ndarray, 
+                      histo_mask: Optional[np.ndarray] = None, 
+                      q: tuple = (0.01, 99.99), 
+                      gamma: float = 1.0):
     """ Rescale intensity inside the histo_mask so that the intensities occupy the full range
         For gamma greater than 1, the histogram will shift towards left and
         the output image will be darker than the input image.
         For gamma less than 1, the histogram will shift towards right and
         the output image will be brighter than the input image."""
 
-    ql, qr = np.percentile(img_reference[histo_mask], q=q)
-
-    # Define the pre-processing
+    # Here I am just computing ql,qr
+    if histo_mask is None:
+        ql, qr = np.percentile(img_reference.reshape(-1), q=q)
+    else:
+        ql, qr = np.percentile(img_reference[histo_mask].reshape(-1), q=q)
+    
+    # Define the pre-processing which uses: ql, qr
     def f(x):
-        # TODO: Make this a torch function so that it runs faster on GPU.
-        # It is a simple rescaling.
-        # If the input is integer. We can even pre_compute the old_2_new.
         x1 = skimage.exposure.rescale_intensity(x,
                                                 in_range=(ql, qr),
                                                 out_range='dtype')
@@ -53,7 +60,12 @@ def rescale_intensity(img_reference, histo_mask, q=(0.01, 99.99), gamma=1):
     return img_out, f
 
 
-def compute_sqrt_mse(predictions, roi_mask):
+def compute_sqrt_mse(predictions: np.ndarray, 
+                     roi_mask: Optional[np.ndarray] = None):
+    if roi_mask is None:
+        w,h = predictions.shape[-2:]
+        roi_mask = np.ones((w,h), dtype=predictions.dtype)
+        
     assert len(roi_mask.shape) == 2
     if len(predictions.shape) == 3:
         # no channel
