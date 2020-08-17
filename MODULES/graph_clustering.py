@@ -151,8 +151,8 @@ with torch.no_grad():
                     sqrt_sum_edges_at_vertex[n] = v[ij_new[0] == n].sum() + v[ij_new[1] == n].sum()
                 sqrt_sum_edges_at_vertex.sqrt_()
                 v.div_(sqrt_sum_edges_at_vertex[ij_new[0]]*sqrt_sum_edges_at_vertex[ij_new[1]])
-                print("done")
             total_edge_weight = v.sum().item()
+            print("Done building the graph")
 
             return ig.Graph(vertex_attrs={"label": numpy.arange(self.n_fg_pixel, dtype=numpy.int64)},
                             edges=ij_new.permute(1, 0).cpu().numpy(),
