@@ -107,7 +107,7 @@ with torch.no_grad():
             transform_index = -1 * torch.ones(n_max + 1, dtype=torch.long, device=similarity_index_matrix.device)
             transform_index[similarity_index_matrix[vertex_mask]] = similarity_index_matrix[vertex_mask]
 
-            # Do the remapping
+            # Do the remapping (old to medium)
             v_tmp = sparse_matrix._values()
             ij_tmp = transform_index[sparse_matrix._indices()]
             print(v_tmp.device)
@@ -116,14 +116,14 @@ with torch.no_grad():
             my_filter = (v_tmp > min_edge_weight) * (ij_tmp[0, :] >= 0) * (ij_tmp[1, :] >= 0)
             v = v_tmp[my_filter]
             ij = ij_tmp[:, my_filter]
-
-            # Shift the labels so that there are no gaps
+            
+            # Shift the labels so that there are no gaps (medium to new)
             ij_present = (torch.bincount(ij.view(-1)) > 0)
+            self.n_fg_pixel = ij_present.sum().item()
             medium_2_new = (torch.cumsum(ij_present, dim=-1) * ij_present) - 1
             ij_new = medium_2_new[ij]
-            self.n_fg_pixel = ij_present.sum().item()
-
-            # Make a transformation of the index_matrix
+            
+            # Make a transformation of the index_matrix (old to new)
             transform_index.fill_(-1)
             transform_index[sparse_matrix._indices()[:, my_filter]] = ij_new
             self.index_matrix = transform_index[similarity_index_matrix]
@@ -144,12 +144,11 @@ with torch.no_grad():
 
             # Normalize the edges if necessary
             if normalize_graph_edges:
-                print(v.device)
-                # THIS IS TOO SLOW
-                sqrt_sum_edges_at_vertex = torch.zeros(self.n_fg_pixel, device=v.device, dtype=torch.float)
-                for n in range(self.n_fg_pixel):
-                    sqrt_sum_edges_at_vertex[n] = v[ij_new[0] == n].sum() + v[ij_new[1] == n].sum()
-                sqrt_sum_edges_at_vertex.sqrt_()
+                print(v.device, v.shape)
+                print(ij_new.device, ij_new.shape)
+                m = torch.sparse.FloatTensor(ij_new, v, torch.Size([self.n_fg_pixel, self.n_fg_pixel]))
+                m_tmp = (torch.sparse.sum(m, dim=-1) + torch.sparse.sum(m, dim=-2)).coalesce()
+                sqrt_sum_edges_at_vertex = m_tmp._values().sqrt_()
                 v.div_(sqrt_sum_edges_at_vertex[ij_new[0]]*sqrt_sum_edges_at_vertex[ij_new[1]])
             total_edge_weight = v.sum().item()
             print("Done building the graph")
@@ -242,13 +241,19 @@ with torch.no_grad():
                           min(self.raw_image.shape[-2], window[2]),
                           min(self.raw_image.shape[-1], window[3]))
                 vertex_in_window = self.is_vertex_in_window(window)
+                print("b2")
+                # NEXT LINE IS SLOW
                 other_partition = self.partition_sample_segmask.filter_by_vertex(keep_vertex=vertex_in_window)
+            print("c2") 
 
             resolutions = numpy.arange(0.5, 10, 0.5) if sweep_range is None else sweep_range
-            iou = numpy.zeros_like(resolutions)
+            iou = numpy.zeros(resolutions.shape[0], dtype=float)
+            mi = numpy.zeros_like(iou)
             seg = numpy.zeros((resolutions.shape[0], window[2]-window[0], window[3]-window[1]), dtype=numpy.int)
             delta_n_cells = numpy.zeros(resolutions.shape[0], dtype=numpy.int)
-
+            n_cells = numpy.zeros_like(delta_n_cells)
+            sizes_list = list()
+            
             for n, res in enumerate(resolutions):
                 print("resolution sweep, {0:3d} out of {1:3d}".format(n+1, resolutions.shape[0]))
                 p_tmp = self.find_partition_leiden(resolution=res,
@@ -258,11 +263,16 @@ with torch.no_grad():
                                                    cpm_or_modularity=cpm_or_modularity,
                                                    each_cc_separately=each_cc_separately)
 
+                n_cells[n] = len(p_tmp.sizes)-1
+                seg[n] = self.partition_2_mask(p_tmp)[window[0]:window[2], window[1]:window[3]].cpu().numpy()
+                sizes_list.append(p_tmp.sizes.cpu().numpy())
+                
+                # Conpute concordance
                 c_tmp: ConcordancePartition = p_tmp.concordance_with_partition(other_partition=other_partition)
                 delta_n_cells[n] = c_tmp.delta_n
                 iou[n] = c_tmp.iou
-                seg[n] = self.partition_2_mask(p_tmp)[window[0]:window[2], window[1]:window[3]].cpu().numpy()
-
+                mi[n] = c_tmp.mutual_information
+                
             if show_graph:
 
                 figure, ax = plt.subplots(figsize=figsize)
@@ -286,9 +296,12 @@ with torch.no_grad():
             return Suggestion(best_resolution=resolutions[i_max],
                               best_index=i_max.item(),
                               sweep_resolution=resolutions,
+                              sweep_mi=mi,
                               sweep_iou=iou,
                               sweep_delta_n=delta_n_cells,
-                              sweep_seg_mask=seg)
+                              sweep_seg_mask=seg,
+                              sweep_sizes=sizes_list,
+                              sweep_n_cells=n_cells)
 
         # TODO use built-in leiden algorithm instead of leidenalg?
         def find_partition_leiden(self,

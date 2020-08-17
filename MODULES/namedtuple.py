@@ -35,16 +35,23 @@ class Suggestion(NamedTuple):
     best_resolution: float
     best_index: int
     sweep_resolution: numpy.ndarray
+    sweep_mi: numpy.ndarray
     sweep_iou: numpy.ndarray
     sweep_delta_n: numpy.ndarray
     sweep_seg_mask: numpy.ndarray
+    sweep_n_cells: numpy.ndarray
+    sweep_sizes: list
 
     def show_best(self, figsize: tuple = (20, 20), fontsize: int = 20):
         figure, ax = plt.subplots(figsize=figsize)
         ax.imshow(skimage.color.label2rgb(label=self.sweep_seg_mask[self.best_index], bg_label=0))
-        ax.set_title('resolution = {0:.3f}, iou = {1:.3f}, delta_n = {2:3d}'.format(self.best_resolution,
-                                                                                    self.sweep_iou[self.best_index],
-                                                                                    self.sweep_delta_n[self.best_index]),
+        ax.set_title('resolution = {0:.3f}, \
+                      iou = {1:.3f}, \
+                      delta_n = {2:3d}, \
+                      n_cells = {3:3d}'.format(self.best_resolution,
+                                               self.sweep_iou[self.best_index],
+                                               self.sweep_delta_n[self.best_index],
+                                               self.sweep_n_cells[self.best_index]),
                      fontsize=fontsize)
 
 
@@ -68,19 +75,23 @@ class Partition(NamedTuple):
         return check
 
     def filter_by_vertex(self, keep_vertex: torch.tensor):
+        assert self.membership.shape == keep_vertex.shape
+        assert torch.min(self.membership).item() >= 0
+        assert keep_vertex.dtype == torch.bool
+            
         """ Put all the bad vertices in the background cluster """
-        if sum(keep_vertex) == torch.numel(keep_vertex):
+        if keep_vertex.sum().item() == torch.numel(keep_vertex):
             # keep all vertex. Nothing to do
             return self
         else:
             my_filter = torch.bincount(self.membership * keep_vertex) > 0
             count = torch.cumsum(my_filter, dim=-1)
-            old_2_new = (count - count[0]) * my_filter
-
-            if Partition.is_old_2_new_identity(old_2_new):
+            old_2_new = ((count - count[0]) * my_filter).to(self.membership.dtype)
+            new_membership = old_2_new[self.membership * keep_vertex]
+            
+            if (new_membership == self.membership).all():
                 return self
             else:
-                new_membership = old_2_new[self.membership]
                 new_dict = self.params
                 new_dict["filter_by_vertex"] = True
                 return self._replace(membership=new_membership,
