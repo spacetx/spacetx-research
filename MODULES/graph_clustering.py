@@ -93,6 +93,11 @@ with torch.no_grad():
                                normalize_graph_edges: bool = True) -> ig.Graph:
             """ Create the graph from the sparse similarity matrix """
             
+            if normalize_graph_edges == False:
+                print("WARNING! You are going to create a graph without normalizing the edges by the sqrt of the node degree. \
+                       Are you sure you know what you are doing?!")
+            
+            
             # Move operation on GPU is available. Only at the end move back to cpu
             if torch.cuda.is_available():
                 fg_prob = fg_prob.cuda()
@@ -144,18 +149,12 @@ with torch.no_grad():
 
             # Normalize the edges if necessary
             if normalize_graph_edges:
+                # Before normalization v ~ 1.
+                # After normalization v ~ 1/#neighbors so that sum_i v_ij ~ 1
                 m = torch.sparse.FloatTensor(ij_new, v, torch.Size([self.n_fg_pixel, self.n_fg_pixel]))
                 m_tmp = (torch.sparse.sum(m, dim=-1) + torch.sparse.sum(m, dim=-2)).coalesce()
                 sqrt_sum_edges_at_vertex = torch.sqrt(m_tmp._values())
-                # print(v.max()) # This is about 1.0
                 v.div_(sqrt_sum_edges_at_vertex[ij_new[0]]*sqrt_sum_edges_at_vertex[ij_new[1]])
-                # print(v.max()) # This is about 1.0/#neighbors
-                
-                # DEBUG
-                #m = torch.sparse.FloatTensor(ij_new, v, torch.Size([self.n_fg_pixel, self.n_fg_pixel]))
-                #m_tmp = (torch.sparse.sum(m, dim=-1) + torch.sparse.sum(m, dim=-2)).coalesce()
-                #print(m_tmp._values())  # this should all be about 1 now...
-                
                 
             total_edge_weight = v.sum().item()
             print("Done building the graph")
@@ -167,13 +166,11 @@ with torch.no_grad():
                                          "total_nodes": self.n_fg_pixel},
                             directed=False)
 
-        def partition_2_mask(self, partition: Partition, window: Optional[tuple] = None):
+        def partition_2_mask(self, partition: Partition):
             segmask = torch.zeros_like(self.index_matrix)
             segmask[self.i_coordinate_fg_pixel, self.j_coordinate_fg_pixel] = partition.membership
-            if window is None:
-                return segmask
-            else:
-                return segmask[window[0]:window[2], window[1]:window[3]]
+            return segmask
+            
 
         def is_vertex_in_window(self, window: tuple):
             """ Same convention as scikit image:
@@ -183,6 +180,8 @@ with torch.no_grad():
             row_filter = (self.i_coordinate_fg_pixel >= window[0]) * (self.i_coordinate_fg_pixel < window[2])
             col_filter = (self.j_coordinate_fg_pixel >= window[1]) * (self.j_coordinate_fg_pixel < window[3])
             vertex_in_window = row_filter * col_filter
+            if (vertex_in_window == False).all():
+                raise Exception("All vertices are outside the chosen window. This is wrong. DOulb e check you window specifications")
             return vertex_in_window
 
         def subgraphs_by_partition_and_window(self,
@@ -197,7 +196,7 @@ with torch.no_grad():
                     yield self.graph
 
             elif (partition is None) and (window is not None):
-                # return a single graph
+                # return a single graph by window
                 mask_vertex_in_window = self.is_vertex_in_window(window)  # torch.bool
                 vertex_label = torch.tensor(self.graph.vs["label"], dtype=torch.long, device=self.device)
                 for i in range(1):
@@ -298,7 +297,9 @@ with torch.no_grad():
                                   min_size: Optional[float] = 20,
                                   max_size: Optional[float] = None,
                                   cpm_or_modularity: str = "modularity",
-                                  each_cc_separately: bool = False) -> Partition:
+                                  each_cc_separately: bool = False,
+                                  n_iterations: int = 2,
+                                  initial_membership: Optional[numpy.ndarray] = None) -> Partition:
             """ Find a partition of the graph by greedy maximization of CPM or Modularity metric.
                 The graph can have both normalized and un-normalized weight.
                 The metric can be both cpm or modularity
@@ -314,7 +315,7 @@ with torch.no_grad():
                 decreased (to obtain larger communities).
 
                 To speed up the calculation the graph partitioning can be done separately for each connected components.
-                This is absolutely ok for CPM metric while a bit questionable for MOdularity metric.
+                This is absolutely ok for CPM metric while a bit questionable for Modularity metric.
                 It is not likely to make much difference either way.
             """
 
@@ -344,9 +345,9 @@ with torch.no_grad():
 
                     p = la.find_partition(graph=g,
                                           partition_type=partition_type,
-                                          initial_membership=None,
+                                          initial_membership=initial_membership,
                                           weights=g.es['weight'],
-                                          n_iterations=2,
+                                          n_iterations=n_iterations,
                                           resolution_parameter=resolution)
 
                     labels = torch.tensor(p.membership, device=self.device, dtype=torch.long) + 1
@@ -377,53 +378,30 @@ with torch.no_grad():
 
             if window is None:
                 w = [0, 0, self.raw_image.shape[-2], self.raw_image.shape[-1]]
-                sizes_fg = partition.sizes[1:]
-                sizes_fg = sizes_fg[sizes_fg > 0]
-
+                sizes_fg = partition.sizes[1:]  # no background
             else:
                 sizes = torch.bincount(self.is_vertex_in_window(window=window) * partition.membership)
                 sizes_fg = sizes[1:]  # no background
-                sizes_fg = sizes_fg[sizes_fg > 0]
+                sizes_fg = sizes_fg[sizes_fg > 0]  # since I am filtering the vertex some sizes might become zero
                 w = window
 
-            example_integer_mask = self.example_integer_mask[w[0]:w[2], w[1]:w[3]]
-            sizes_fg_example = torch.bincount(example_integer_mask.flatten())
-            sizes_fg_example = sizes_fg_example[1:]  # no background
-            sizes_fg_example = sizes_fg_example[sizes_fg_example > 0]
-
-            segmask = self.partition_2_mask(partition, window=window).cpu().numpy()
-            example_integer_mask = example_integer_mask.cpu().numpy()
+            segmask = self.partition_2_mask(partition)[w[0]:w[2], w[1]:w[3]].cpu().numpy()
             raw_img = self.raw_image[0, w[0]:w[2], w[1]:w[3]].cpu().numpy()
 
-            figure, axes = plt.subplots(ncols=3, nrows=2, figsize=figsize)
+            figure, axes = plt.subplots(ncols=2, nrows=2, figsize=figsize)
             axes[0, 0].imshow(skimage.color.label2rgb(label=segmask,
                                                       bg_label=0))
             axes[0, 1].imshow(skimage.color.label2rgb(label=segmask,
                                                       image=raw_img,
                                                       alpha=0.25,
                                                       bg_label=0))
-            axes[0, 2].hist(sizes_fg.cpu(), **kargs)
-
-            axes[1, 0].imshow(skimage.color.label2rgb(label=example_integer_mask,
-                                                      bg_label=0))
-            axes[1, 1].imshow(skimage.color.label2rgb(label=example_integer_mask,
-                                                      image=raw_img,
-                                                      alpha=0.25,
-                                                      bg_label=0))
-            axes[1, 2].imshow(raw_img, cmap='gray')
-
-            # titles
-            title_sample = 'one sample, #cells -> {0:3d}'.format(sizes_fg_example.shape[0])
-            if hasattr(partition.params, "resolution"):
-                title_partition = '{0:s}, #cells -> {1:3d}, resolution -> {2:.23f}'.format(partition.which,
-                                                                                           sizes_fg.shape[0],
-                                                                                           partition.params["resolution"])
-            else:
-                title_partition = '{0:s}, #cells -> {1:3d}'.format(partition.which, sizes_fg.shape[0])
+            axes[1, 0].imshow(raw_img, cmap='gray')
+            axes[1, 1].hist(sizes_fg.cpu(), **kargs)
+            
+            
+            title_partition = '{0:s}, #cells -> {1:3d}'.format(partition.which, sizes_fg.shape[0])
             axes[0, 0].set_title(title_partition)
             axes[0, 1].set_title(title_partition)
-            axes[0, 2].set_title("size distribution")
-            axes[1, 0].set_title(title_sample)
-            axes[1, 1].set_title(title_sample)
-            axes[1, 2].set_title("raw image")
+            axes[1, 0].set_title("raw image")
+            axes[1, 1].set_title("size distribution")
 
