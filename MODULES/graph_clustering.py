@@ -63,12 +63,13 @@ with torch.no_grad():
         @property
         def partition_connected_components(self):
             if self._partition_connected_components is None:
-                labels = skimage.measure.label(self.index_matrix >= 0, connectivity=2, background=0, return_num=False)
+                mask = (self.index_matrix >= 0).cpu()
+                labels = skimage.measure.label(mask, connectivity=2, background=0, return_num=False)
                 membership_from_cc = torch.tensor(labels,
                                                   dtype=torch.long,
                                                   device=self.device)[self.i_coordinate_fg_pixel,
                                                                       self.j_coordinate_fg_pixel]
-                self._partition_connected_components = Partition(type="connected",
+                self._partition_connected_components = Partition(which="connected",
                                                                  membership=membership_from_cc,
                                                                  sizes=torch.bincount(membership_from_cc),
                                                                  params={})
@@ -79,7 +80,7 @@ with torch.no_grad():
             if self._partition_sample_segmask is None:
                 membership_from_example_segmask = self.example_integer_mask[self.i_coordinate_fg_pixel,
                                                                             self.j_coordinate_fg_pixel].long()
-                self._partition_sample_segmask = Partition(type="one_sample",
+                self._partition_sample_segmask = Partition(which="one_sample",
                                                            membership=membership_from_example_segmask,
                                                            sizes=torch.bincount(membership_from_example_segmask),
                                                            params={})
@@ -110,7 +111,6 @@ with torch.no_grad():
             # Do the remapping (old to medium)
             v_tmp = sparse_matrix._values()
             ij_tmp = transform_index[sparse_matrix._indices()]
-            print(v_tmp.device)
 
             # Do the filtering
             my_filter = (v_tmp > min_edge_weight) * (ij_tmp[0, :] >= 0) * (ij_tmp[1, :] >= 0)
@@ -135,21 +135,28 @@ with torch.no_grad():
             self.j_coordinate_fg_pixel = j_matrix[self.index_matrix >= 0]
 
             # Check
-            # tmp = -1 * torch.ones_like(self.index_matrix)
-            # tmp[self.i_coordinate_fg_pixel,
-            #    self.j_coordinate_fg_pixel] = torch.arange(self.n_fg_pixel,
-            #                                               dtype=torch.long,
-            #                                               device=self.device)
-            # assert (tmp == self.index_matrix).all()
+            tmp = -1 * torch.ones_like(self.index_matrix)
+            tmp[self.i_coordinate_fg_pixel,
+                self.j_coordinate_fg_pixel] = torch.arange(self.n_fg_pixel,
+                                                           dtype=torch.long,
+                                                           device=self.device)
+            assert (tmp == self.index_matrix).all()
 
             # Normalize the edges if necessary
             if normalize_graph_edges:
-                print(v.device, v.shape)
-                print(ij_new.device, ij_new.shape)
                 m = torch.sparse.FloatTensor(ij_new, v, torch.Size([self.n_fg_pixel, self.n_fg_pixel]))
                 m_tmp = (torch.sparse.sum(m, dim=-1) + torch.sparse.sum(m, dim=-2)).coalesce()
-                sqrt_sum_edges_at_vertex = m_tmp._values().sqrt_()
+                sqrt_sum_edges_at_vertex = torch.sqrt(m_tmp._values())
+                # print(v.max()) # This is about 1.0
                 v.div_(sqrt_sum_edges_at_vertex[ij_new[0]]*sqrt_sum_edges_at_vertex[ij_new[1]])
+                # print(v.max()) # This is about 1.0/#neighbors
+                
+                # DEBUG
+                #m = torch.sparse.FloatTensor(ij_new, v, torch.Size([self.n_fg_pixel, self.n_fg_pixel]))
+                #m_tmp = (torch.sparse.sum(m, dim=-1) + torch.sparse.sum(m, dim=-2)).coalesce()
+                #print(m_tmp._values())  # this should all be about 1 now...
+                
+                
             total_edge_weight = v.sum().item()
             print("Done building the graph")
 
@@ -160,10 +167,13 @@ with torch.no_grad():
                                          "total_nodes": self.n_fg_pixel},
                             directed=False)
 
-        def partition_2_mask(self, partition: Partition):
+        def partition_2_mask(self, partition: Partition, window: Optional[tuple] = None):
             segmask = torch.zeros_like(self.index_matrix)
             segmask[self.i_coordinate_fg_pixel, self.j_coordinate_fg_pixel] = partition.membership
-            return segmask
+            if window is None:
+                return segmask
+            else:
+                return segmask[window[0]:window[2], window[1]:window[3]]
 
         def is_vertex_in_window(self, window: tuple):
             """ Same convention as scikit image:
@@ -209,7 +219,7 @@ with torch.no_grad():
 
         def suggest_resolution_parameter(self,
                                          window: Optional[tuple] = None,
-                                         min_size: Optional[float] = 10,
+                                         min_size: Optional[float] = 20,
                                          max_size: Optional[float] = None,
                                          cpm_or_modularity: str = "modularity",
                                          each_cc_separately: bool = False,
@@ -238,11 +248,9 @@ with torch.no_grad():
                           min(self.raw_image.shape[-2], window[2]),
                           min(self.raw_image.shape[-1], window[3]))
                 vertex_in_window = self.is_vertex_in_window(window)
-                print("b2")
-                # NEXT LINE IS SLOW
+                # NEXT LINE IS A BIT SLOW
                 other_partition = self.partition_sample_segmask.filter_by_vertex(keep_vertex=vertex_in_window)
-            print("c2") 
-
+            
             resolutions = numpy.arange(0.5, 10, 0.5) if sweep_range is None else sweep_range
             iou = numpy.zeros(resolutions.shape[0], dtype=float)
             mi = numpy.zeros_like(iou)
@@ -252,7 +260,9 @@ with torch.no_grad():
             sizes_list = list()
             
             for n, res in enumerate(resolutions):
-                print("resolution sweep, {0:3d} out of {1:3d}".format(n+1, resolutions.shape[0]))
+                if (n%10 == 0) or (n == resolutions.shape[0]-1) :
+                    print("resolution sweep, {0:3d} out of {1:3d}".format(n, resolutions.shape[0]-1))
+                    
                 p_tmp = self.find_partition_leiden(resolution=res,
                                                    window=window,
                                                    min_size=min_size,
@@ -285,7 +295,7 @@ with torch.no_grad():
         def find_partition_leiden(self,
                                   resolution: float,
                                   window: Optional[tuple] = None,
-                                  min_size: Optional[float] = 10,
+                                  min_size: Optional[float] = 20,
                                   max_size: Optional[float] = None,
                                   cpm_or_modularity: str = "modularity",
                                   each_cc_separately: bool = False) -> Partition:
@@ -311,7 +321,8 @@ with torch.no_grad():
             if cpm_or_modularity == "cpm":
                 partition_type = la.CPMVertexPartition
                 n = self.graph["total_nodes"]
-                overall_graph_density = self.graph["total_edge_weight"] * 2.0 / (n * (n - 1))
+                overall_graph_density = self.graph["total_edge_weight"] * 2.0 / (n * (n-1))
+                #print("res_raw, overall_graph_density, res", resolution, overall_graph_density, overall_graph_density * resolution)
                 resolution = overall_graph_density * resolution
             elif cpm_or_modularity == "modularity":
                 partition_type = la.RBConfigurationVertexPartition
@@ -329,6 +340,7 @@ with torch.no_grad():
 
                 # print("g summary", g.summary())
                 if g.vcount() > 0:
+                    # Only if the graph has node I tried to find the partition
 
                     p = la.find_partition(graph=g,
                                           partition_type=partition_type,
@@ -342,7 +354,7 @@ with torch.no_grad():
                     max_label += torch.max(labels)
                     membership[g.vs['label']] = shifted_labels
 
-            return Partition(type="leiden_cpm",
+            return Partition(which="leiden_"+cpm_or_modularity,
                              sizes=torch.bincount(membership),
                              membership=membership,
                              params={"resolution": resolution,
@@ -379,7 +391,7 @@ with torch.no_grad():
             sizes_fg_example = sizes_fg_example[1:]  # no background
             sizes_fg_example = sizes_fg_example[sizes_fg_example > 0]
 
-            segmask = self.partition_2_mask(partition)[w[0]:w[2], w[1]:w[3]].cpu().numpy()
+            segmask = self.partition_2_mask(partition, window=window).cpu().numpy()
             example_integer_mask = example_integer_mask.cpu().numpy()
             raw_img = self.raw_image[0, w[0]:w[2], w[1]:w[3]].cpu().numpy()
 
@@ -390,7 +402,7 @@ with torch.no_grad():
                                                       image=raw_img,
                                                       alpha=0.25,
                                                       bg_label=0))
-            axes[0, 2].hist(sizes_fg, **kargs)
+            axes[0, 2].hist(sizes_fg.cpu(), **kargs)
 
             axes[1, 0].imshow(skimage.color.label2rgb(label=example_integer_mask,
                                                       bg_label=0))
@@ -403,11 +415,11 @@ with torch.no_grad():
             # titles
             title_sample = 'one sample, #cells -> {0:3d}'.format(sizes_fg_example.shape[0])
             if hasattr(partition.params, "resolution"):
-                title_partition = '{0:s}, #cells -> {1:3d}, resolution -> {2:.23f}'.format(partition.type,
+                title_partition = '{0:s}, #cells -> {1:3d}, resolution -> {2:.23f}'.format(partition.which,
                                                                                            sizes_fg.shape[0],
                                                                                            partition.params["resolution"])
             else:
-                title_partition = '{0:s}, #cells -> {1:3d}'.format(partition.type, sizes_fg.shape[0])
+                title_partition = '{0:s}, #cells -> {1:3d}'.format(partition.which, sizes_fg.shape[0])
             axes[0, 0].set_title(title_partition)
             axes[0, 1].set_title(title_partition)
             axes[0, 2].set_title("size distribution")

@@ -41,18 +41,41 @@ class Suggestion(NamedTuple):
     sweep_seg_mask: numpy.ndarray
     sweep_n_cells: numpy.ndarray
     sweep_sizes: list
-
-    def show_best(self, figsize: tuple = (20, 20), fontsize: int = 20):
+        
+    def show_index(self, index: int, figsize: tuple = (20, 20), fontsize: int = 20):
         figure, ax = plt.subplots(figsize=figsize)
-        ax.imshow(skimage.color.label2rgb(label=self.sweep_seg_mask[self.best_index], bg_label=0))
+        ax.imshow(skimage.color.label2rgb(label=self.sweep_seg_mask[index], bg_label=0))
         ax.set_title('resolution = {0:.3f}, \
                       iou = {1:.3f}, \
                       delta_n = {2:3d}, \
-                      n_cells = {3:3d}'.format(self.best_resolution,
-                                               self.sweep_iou[self.best_index],
-                                               self.sweep_delta_n[self.best_index],
-                                               self.sweep_n_cells[self.best_index]),
+                      n_cells = {3:3d}'.format(self.sweep_resolution[index],
+                                               self.sweep_iou[index],
+                                               self.sweep_delta_n[index],
+                                               self.sweep_n_cells[index]),
                      fontsize=fontsize)
+        
+    def show_best(self, figsize: tuple = (20, 20), fontsize: int = 20):
+        return self.show_index(self.best_index, figsize, fontsize)
+        
+    def show_graph(self, figsize: tuple = (20, 20), fontsize: int = 20):
+        figure, ax = plt.subplots(figsize=figsize)
+        ax.set_title('Resolution sweep', fontsize=fontsize)
+        ax.set_xlabel("resolution", fontsize=fontsize)
+        ax.tick_params(axis='x', labelsize=fontsize)
+        
+        color = 'tab:red'
+        _ = ax.plot(self.sweep_resolution, self.sweep_n_cells, '.--', label="n_cell", color=color)
+        ax.set_ylabel('n_cell', color=color, fontsize=fontsize)
+        ax.tick_params(axis='y', labelcolor=color, labelsize=fontsize)
+        ax.legend(loc='upper left', fontsize=fontsize)
+        ax.grid()
+
+        ax_2 = ax.twinx()  # instantiate a second axes that shares the same x-axis
+        color = 'tab:green'
+        _ = ax_2.plot(self.sweep_resolution, self.sweep_iou, '-', label="iou", color=color)
+        ax_2.set_ylabel('Intersection Over Union', color=color, fontsize=fontsize)
+        ax_2.tick_params(axis='y', labelcolor=color, labelsize=fontsize)
+        ax_2.legend(loc='upper right', fontsize=fontsize)
 
 
 class ConcordancePartition(NamedTuple):
@@ -63,7 +86,7 @@ class ConcordancePartition(NamedTuple):
 
 
 class Partition(NamedTuple):
-    type: str
+    which: str
     membership: torch.tensor  # bg=0, fg=1,2,3,.....
     sizes: torch.tensor  # both for bg and fg. It is simply obtained by numpy.bincount(membership)
     params: dict
@@ -84,7 +107,6 @@ class Partition(NamedTuple):
             # keep all vertex. Nothing to do
             return self
         else:
-            print(self.membership.device, keep_vertex.device)
             my_filter = torch.bincount(self.membership * keep_vertex) > 0
             count = torch.cumsum(my_filter, dim=-1)
             old_2_new = ((count - count[0]) * my_filter).to(self.membership.dtype)
