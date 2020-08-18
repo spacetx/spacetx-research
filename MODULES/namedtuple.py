@@ -84,14 +84,16 @@ class Partition(NamedTuple):
             # keep all vertex. Nothing to do
             return self
         else:
+            print(self.membership.device, keep_vertex.device)
             my_filter = torch.bincount(self.membership * keep_vertex) > 0
             count = torch.cumsum(my_filter, dim=-1)
             old_2_new = ((count - count[0]) * my_filter).to(self.membership.dtype)
-            new_membership = old_2_new[self.membership * keep_vertex]
             
-            if (new_membership == self.membership).all():
+            if Partition.is_old_2_new_identity(old_2_new):
+                # nothing to do
                 return self
             else:
+                new_membership = old_2_new[self.membership * keep_vertex]
                 new_dict = self.params
                 new_dict["filter_by_vertex"] = True
                 return self._replace(membership=new_membership,

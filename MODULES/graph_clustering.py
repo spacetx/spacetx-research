@@ -213,9 +213,6 @@ with torch.no_grad():
                                          max_size: Optional[float] = None,
                                          cpm_or_modularity: str = "modularity",
                                          each_cc_separately: bool = False,
-                                         show_graph: bool = True,
-                                         figsize: tuple = (12, 12),
-                                         fontsize: int = 20,
                                          sweep_range: Optional[numpy.ndarray] = None) -> Suggestion:
             """ This function select the resolution parameter which gives the hightest
                 Intersection Over Union with the target partition.
@@ -272,26 +269,7 @@ with torch.no_grad():
                 delta_n_cells[n] = c_tmp.delta_n
                 iou[n] = c_tmp.iou
                 mi[n] = c_tmp.mutual_information
-                
-            if show_graph:
-
-                figure, ax = plt.subplots(figsize=figsize)
-                ax.set_title("resolution parameter sweep", fontsize=fontsize)
-                color = 'tab:red'
-                _ = ax.plot(resolutions, delta_n_cells, 'x-', label="delta_n_cell", color=color)
-                ax.set_xlabel("resolution", fontsize=fontsize)
-                ax.set_ylabel('delta_n_cell', color=color, fontsize=fontsize)
-                ax.tick_params(axis='y', labelcolor=color, labelsize=fontsize)
-                ax.legend(loc='upper left')
-                ax.grid()
-
-                ax_2 = ax.twinx()  # instantiate a second axes that shares the same x-axis
-                color = 'tab:green'
-                _ = ax_2.plot(resolutions, iou, 'o-', label="IoU", color=color)
-                ax_2.set_ylabel('Intersection Over Union', color=color, fontsize=fontsize)
-                ax_2.tick_params(axis='y', labelcolor=color, labelsize=fontsize)
-                ax_2.legend(loc='upper right')
-
+            
             i_max = numpy.argmax(iou)
             return Suggestion(best_resolution=resolutions[i_max],
                               best_index=i_max.item(),
