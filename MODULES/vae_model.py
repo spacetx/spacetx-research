@@ -535,7 +535,7 @@ class CompositionalVae(torch.nn.Module):
                                          start_y[k]:start_y[k]+dy[k]] = single_index_matrix[x1[k]:x3[k], y1[k]:y3[k]]
                 #assert torch.max(batch_of_index) < max_index
                 #assert torch.min(batch_of_index) >= -1
-                print("time to prepare the bacth", time.time()-start_time)
+                #print("time to prepare the bacth", time.time()-start_time)
 
                 # print progress
                 if (n_batches % 100 == 0) or (n_batches == len(k_list_of_tensor)-1):
@@ -544,7 +544,7 @@ class CompositionalVae(torch.nn.Module):
                 # Segment the batch (and move to CPU or GPU depending where the model lives)
                 # Note that the last batch might be smaller than batch_size therefore use slicing
                 assert max_index > torch.max(batch_of_index)
-                start_time = time.time()
+                #start_time = time.time()
                 segmentation = self.segment(batch_imgs=batch_imgs[:k_tensor.shape[0]].to(self.sigma_fg.device),
                                             n_objects_max=n_objects_max_per_patch,
                                             prob_corr_factor=prob_corr_factor,
@@ -554,7 +554,7 @@ class CompositionalVae(torch.nn.Module):
                                             batch_of_index=batch_of_index[:k_tensor.shape[0]].to(self.sigma_fg.device),
                                             max_index=max_index,
                                             radius_nn=radius_nn)
-                print("segmentation time", time.time()-start_time)
+                #print("segmentation time", time.time()-start_time)
 
                 if big_fg_prob is None:
                     # Probability and integer mask are dense tensor
@@ -566,7 +566,7 @@ class CompositionalVae(torch.nn.Module):
                                                    dtype=segmentation.integer_mask.dtype)
 
                 # Unpack the data from batch
-                start_time = time.time()
+                #start_time = time.time()
                 sparse_similarity_matrix.add_(segmentation.similarity.sparse_matrix.cpu())
                 sparse_similarity_matrix = sparse_similarity_matrix.coalesce()
 
@@ -585,7 +585,7 @@ class CompositionalVae(torch.nn.Module):
                                          y1[k]:y3[k]] = shifted_integer_mask[0,
                                                                              start_x[k]:start_x[k]+dx[k],
                                                                              start_y[k]:start_y[k]+dy[k]].cpu()
-                print("time to unpack the batch", time.time()-start_time)
+                #print("time to unpack the batch", time.time()-start_time)
 
             # End of loop over batches
             sparse_similarity_matrix.div_(n_prediction)
