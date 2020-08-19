@@ -10,6 +10,12 @@ from matplotlib import pyplot as plt
 import time
 
 
+# I HAVE LEARNED:
+# 1. If I use a lot of negihbours then all methods are roughyl equivalent b/c graph becomes ALL-TO-ALL
+# 2. Radius=10 means each pixel has 121 neighbours
+# 3. CPM does not suffer from the resolution limit which means that it tends to shave off small part from a cell.
+# 4. For now I prefer to use a graph with normalized edges, modularity with resolution 10, using a single gigantic cluster
+
 with torch.no_grad():
     class GraphSegmentation(object):
         """ Produce a consensus segmentation mask by finding communities on a graph.
@@ -63,7 +69,7 @@ with torch.no_grad():
             self._partition_sample_segmask = None
             
             #TODO: Compute median density of connected components so that resolution parameter is about 1
-            self.reference_density = AUCH
+            #self.reference_density = AUCH
 
         @property
         def partition_connected_components(self):
@@ -341,11 +347,13 @@ with torch.no_grad():
             
             if cpm_or_modularity == "cpm":
                 partition_type = la.CPMVertexPartition
-                n = self.graph["total_nodes"]
                 
-                #TODO: Compute median density of connected components so that resolution parameter is about 1
-                #overall_graph_density = 1 #self.graph["total_edge_weight"] * 2.0 / (n * (n-1))
-                resolution = self.reference_density * resolution  # threshold as a fraction of the reference_density
+                #TODO: Rescale the resolution by some (robust) properties of the full graph so that the right resolution parameter is about 1
+                raise NotImplementedError
+                n = self.graph["total_nodes"]
+                overall_graph_density = self.graph["total_edge_weight"] * 2.0 / (n * (n - 1))
+                resolution = overall_graph_density * resolution
+                
             elif cpm_or_modularity == "modularity":
                 partition_type = la.RBConfigurationVertexPartition
             else:
@@ -353,6 +361,7 @@ with torch.no_grad():
                                            CPM_or_modularity can only be 'CPM' or 'modularity'")
             #t1=time.time()
             #print("t1-t0",t1-t0)
+          
             
 
             # Subset graph by connected components and windows if necessary
@@ -363,11 +372,16 @@ with torch.no_grad():
             #t2=time.time()
             #print("t2-t1",t2-t1)
             
-            print("resolution", resolution)
             for n, g in enumerate(self.subgraphs_by_partition_and_window(window=window,
                                                                          partition=partition_for_subgraphs)):
-                #print("t3-t2",time.time()-t2)
-                # print("g summary", g.summary())
+                
+                # With this rescaling the value of the resolution parameter optimized 
+                # for a small window can be used to segment a large window
+                if cpm_or_modularity == "modularity":
+                    tmp = numpy.sum(g.es["weight"]) / g["total_edge_weight"]
+                    resolution = resolution * tmp
+                
+                    
                 if g.vcount() > 0:
                     # Only if the graph has node I tried to find the partition
 
