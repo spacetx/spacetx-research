@@ -11,6 +11,7 @@ from typing import Optional
 
 
 
+
 def pil_to_numpy(pilfile, mode: str = 'L', reduction_factor: int = 1):
     """ Open file using pillow, and return numpy array with shape:
         w,h,channel if channel > 1
