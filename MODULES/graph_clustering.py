@@ -14,7 +14,7 @@ import time
 # 1. If I use a lot of negihbours then all methods are roughyl equivalent b/c graph becomes ALL-TO-ALL
 # 2. Radius=10 means each pixel has 121 neighbours
 # 3. CPM does not suffer from the resolution limit which means that it tends to shave off small part from a cell.
-# 4. For now I prefer to use a graph with normalized edges, modularity with resolution 10, using a single gigantic cluster
+# 4. For now I prefer to use a graph with normalized edges, modularity and single gigantic cluster (i.e. each_cc_component=False)
 
 with torch.no_grad():
     class GraphSegmentation(object):
@@ -167,13 +167,11 @@ with torch.no_grad():
                 sqrt_sum_edges_at_vertex = torch.sqrt(m_tmp._values())
                 v.div_(sqrt_sum_edges_at_vertex[ij_new[0]]*sqrt_sum_edges_at_vertex[ij_new[1]])
                 
-            total_edge_weight = v.sum().item()
-            print("Done building the graph")
-
+            print("Building the graph with python-igraph")
             return ig.Graph(vertex_attrs={"label": numpy.arange(self.n_fg_pixel, dtype=numpy.int64)},
                             edges=ij_new.permute(1, 0).cpu().numpy(),
                             edge_attrs={"weight": v.cpu().numpy()},
-                            graph_attrs={"total_edge_weight": total_edge_weight,
+                            graph_attrs={"total_edge_weight": v.sum().item(),
                                          "total_nodes": self.n_fg_pixel},
                             directed=False)
 
@@ -342,8 +340,6 @@ with torch.no_grad():
                 This is absolutely ok for CPM metric while a bit questionable for Modularity metric.
                 It is not likely to make much difference either way.
             """
-            # NEED TO PROFILE THIS FUNCTION
-            t0=time.time()
             
             if cpm_or_modularity == "cpm":
                 partition_type = la.CPMVertexPartition
@@ -359,18 +355,12 @@ with torch.no_grad():
             else:
                 raise Exception("Warning!! Argument not recognized. \
                                            CPM_or_modularity can only be 'CPM' or 'modularity'")
-            #t1=time.time()
-            #print("t1-t0",t1-t0)
-          
             
-
+            
             # Subset graph by connected components and windows if necessary
             max_label = 0
             membership = torch.zeros(self.n_fg_pixel, dtype=torch.long, device=self.device)
             partition_for_subgraphs = self.partition_connected_components if each_cc_separately else None
-            
-            #t2=time.time()
-            #print("t2-t1",t2-t1)
             
             for n, g in enumerate(self.subgraphs_by_partition_and_window(window=window,
                                                                          partition=partition_for_subgraphs)):
@@ -400,8 +390,6 @@ with torch.no_grad():
                     max_label += torch.max(labels)
                     membership[g.vs['label']] = shifted_labels
                     
-            #t4 = time.time()
-            #print("t4-t2",t4-t2)
             # TODO: filter_by_size is slow
             tmp = Partition(which="leiden_"+cpm_or_modularity,
                              sizes=torch.bincount(membership),
@@ -409,8 +397,6 @@ with torch.no_grad():
                              params={"resolution": resolution,
                                      "each_cc_separately": each_cc_separately}).filter_by_size(min_size=min_size,
                                                                                                max_size=max_size)
-            #.filter_by_size(min_size=min_size,max_size=max_size)
-            #print("t5-t4",time.time()-t4)
             return tmp
 
         def plot_partition(self, partition: Optional[Partition] = None,
