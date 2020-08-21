@@ -92,10 +92,16 @@ class Partition(NamedTuple):
     params: dict
 
     @staticmethod
-    def is_old_2_new_identity(old_2_new: torch.tensor):
-        diff = old_2_new - torch.arange(old_2_new.shape[0], device=old_2_new.device, dtype=old_2_new.dtype)
-        check = (diff.abs().sum().item() == 0)
-        return check
+    def compactify(sizes, memberships):
+        """ if there are gaps in the SIZES, then shift both membership and sizes accordingly"""
+        if (sizes == 0).any():
+            my_filter = sizes > 0
+            my_filter[0] = True
+            count = torch.cumsum(my_filter, dim=-1)
+            old_2_new = ((count - count[0]) * my_filter).to(memberships.dtype)
+            return sizes[my_filter], old_2_new[memberships]
+        else:
+            return sizes, memberships
 
     def filter_by_vertex(self, keep_vertex: torch.tensor):
         assert self.membership.shape == keep_vertex.shape
@@ -107,20 +113,15 @@ class Partition(NamedTuple):
             # keep all vertex. Nothing to do
             return self
         else:
-            my_filter = torch.bincount(self.membership * keep_vertex) > 0
-            count = torch.cumsum(my_filter, dim=-1)
-            old_2_new = ((count - count[0]) * my_filter).to(self.membership.dtype)
-            
-            if Partition.is_old_2_new_identity(old_2_new):
-                # nothing to do
-                return self
-            else:
-                new_membership = old_2_new[self.membership * keep_vertex]
-                new_dict = self.params
-                new_dict["filter_by_vertex"] = True
-                return self._replace(membership=new_membership,
-                                     params=new_dict,
-                                     sizes=torch.bincount(new_membership))
+            new_membership = self.membership * keep_vertex
+            new_sizes = torch.bincount(new_membership)
+            new_sizes, new_membership = self.compactify(new_sizes, new_membership)  # remove the gaps
+
+            new_dict = self.params
+            new_dict["filter_by_vertex"] = True
+            return self._replace(membership=new_membership,
+                                 params=new_dict,
+                                 sizes=new_sizes)
 
     def filter_by_size(self, min_size: Optional[int] = None, max_size: Optional[int] = None):
         """ If a cluster is too small or too large, its label is set to zero (i.e. background value).
@@ -141,18 +142,12 @@ class Partition(NamedTuple):
         else:
             raise Exception("you should never be here!!")
 
-        count = torch.cumsum(my_filter, dim=-1)
-        old_2_new = (count - count[0]) * my_filter  # this makes sure that label 0 is always mapped to 0
-        
-        if Partition.is_old_2_new_identity(old_2_new):
-            # nothing to do
-            return self
-        else:
-            #TODO: this might be too slow. Eliminate torch.bincount.
-            new_dict = self.params
-            new_dict["filter_by_size"] = (min_size, max_size)
-            new_membership = old_2_new[self.membership]
-            return self._replace(membership=new_membership, params=new_dict, sizes=torch.bincount(new_membership))
+        new_sizes = self.sizes * my_filter
+        new_sizes, new_membership = self.compactify(new_sizes, self.membership)
+
+        new_dict = self.params
+        new_dict["filter_by_size"] = (min_size, max_size)
+        return self._replace(membership=new_membership, params=new_dict, sizes=new_sizes)
 
     def concordance_with_partition(self, other_partition) -> ConcordancePartition:
         """ Compute measure of concordance between two partitions:
