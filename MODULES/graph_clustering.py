@@ -104,11 +104,10 @@ with torch.no_grad():
                                normalize_graph_edges: bool = True) -> ig.Graph:
             """ Create the graph from the sparse similarity matrix """
             
-            if normalize_graph_edges == False:
+            if ~normalize_graph_edges:
                 print("WARNING! You are going to create a graph without normalizing the edges by the sqrt of the node degree. \
                        Are you sure you know what you are doing?!")
-            
-            
+
             # Move operation on GPU is available. Only at the end move back to cpu
             if torch.cuda.is_available():
                 fg_prob = fg_prob.cuda()
@@ -179,7 +178,6 @@ with torch.no_grad():
             segmask = torch.zeros_like(self.index_matrix)
             segmask[self.i_coordinate_fg_pixel, self.j_coordinate_fg_pixel] = partition.membership
             return segmask
-            
 
         def is_vertex_in_window(self, window: tuple):
             """ Same convention as scikit image:
@@ -189,8 +187,9 @@ with torch.no_grad():
             row_filter = (self.i_coordinate_fg_pixel >= window[0]) * (self.i_coordinate_fg_pixel < window[2])
             col_filter = (self.j_coordinate_fg_pixel >= window[1]) * (self.j_coordinate_fg_pixel < window[3])
             vertex_in_window = row_filter * col_filter
-            if (vertex_in_window == False).all():
-                raise Exception("All vertices are outside the chosen window. This is wrong. DOulb e check you window specifications")
+            if (~vertex_in_window).all():
+                raise Exception("All vertices are outside the chosen window. \
+                                 This is wrong. Doulbe check your window specifications")
             return vertex_in_window
 
         def subgraphs_by_partition_and_window(self,
@@ -370,8 +369,7 @@ with torch.no_grad():
                 if cpm_or_modularity == "modularity":
                     tmp = numpy.sum(g.es["weight"]) / g["total_edge_weight"]
                     resolution = resolution * tmp
-                
-                    
+
                 if g.vcount() > 0:
                     # Only if the graph has node I tried to find the partition
 
@@ -391,13 +389,8 @@ with torch.no_grad():
                     membership[g.vs['label']] = shifted_labels
                     
             # TODO: filter_by_size is slow
-            tmp = Partition(which="leiden_"+cpm_or_modularity,
-                             sizes=torch.bincount(membership),
-                             membership=membership,
-                             params={"resolution": resolution,
-                                     "each_cc_separately": each_cc_separately}).filter_by_size(min_size=min_size,
-                                                                                               max_size=max_size)
-            return tmp
+            return Partition(sizes=torch.bincount(membership),
+                             membership=membership).filter_by_size(min_size=min_size, max_size=max_size)
 
         def plot_partition(self, partition: Optional[Partition] = None,
                            figsize: Optional[tuple] = (12, 12),
