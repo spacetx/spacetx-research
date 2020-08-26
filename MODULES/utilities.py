@@ -348,7 +348,7 @@ class SpecialDataSet(object):
         assert (roi_mask is None or len(roi_mask.shape) == 4)
         assert (labels is None or labels.shape[0] == img.shape[0])
 
-        device = torch.device('cpu') if store_in_cuda else torch.device('cuda')
+        device = torch.device('cuda') if store_in_cuda else torch.device('cpu')
 
         self.drop_last = drop_last
         self.batch_size = batch_size

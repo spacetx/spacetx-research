@@ -100,15 +100,13 @@ class Partition(NamedTuple):
             return Partition(sizes=self.sizes[my_filter], membership=old_2_new[self.membership])
 
     def filter_by_vertex(self, keep_vertex: torch.tensor):
-        assert (~keep_vertex).any()  # check that there is at least one vertex to drop
         assert self.membership.shape == keep_vertex.shape
         assert keep_vertex.dtype == torch.bool
             
-        """ Put all the bad vertices in the background cluster """
         if keep_vertex.all():
             return self
         else:
-            new_membership = self.membership * keep_vertex
+            new_membership = self.membership * keep_vertex  # put all bad vertices in the background cluster
             return Partition(sizes=torch.bincount(new_membership),
                              membership=new_membership).compactify()
 
