@@ -1,10 +1,8 @@
 import torch
 import numpy
-from typing import NamedTuple, Optional, Union
+from typing import NamedTuple, Optional
 import skimage.color
 import matplotlib.pyplot as plt
-import torch.nn.functional as F
-import scipy.sparse
 
 #  ----------------------------------------------------------------  #
 #  ------- Stuff Related to PreProcessing -------------------------  #
@@ -83,46 +81,38 @@ class ConcordancePartition(NamedTuple):
     mutual_information: float
     delta_n: int
     iou: float
+    n_reversible_mapping: int
 
 
 class Partition(NamedTuple):
-    which: str
-    membership: torch.tensor  # bg=0, fg=1,2,3,.....
     sizes: torch.tensor  # both for bg and fg. It is simply obtained by numpy.bincount(membership)
-    params: dict
+    membership: torch.tensor  # bg=0, fg=1,2,3,.....
 
-    @staticmethod
-    def is_old_2_new_identity(old_2_new: torch.tensor):
-        diff = old_2_new - torch.arange(old_2_new.shape[0], device=old_2_new.device, dtype=old_2_new.dtype)
-        check = (diff.abs().sum().item() == 0)
-        return check
+    def compactify(self):
+        """ if there are gaps in the SIZES, then shift both membership and sizes accordingly"""
+        if (self.sizes[1:] > 0).all():
+            return self
+        else:
+            my_filter = self.sizes > 0
+            my_filter[0] = True
+            count = torch.cumsum(my_filter, dim=-1)
+            old_2_new = ((count - count[0]) * my_filter).to(self.membership.dtype)
+            return Partition(sizes=self.sizes[my_filter], membership=old_2_new[self.membership])
 
     def filter_by_vertex(self, keep_vertex: torch.tensor):
         assert self.membership.shape == keep_vertex.shape
-        assert torch.min(self.membership).item() >= 0
         assert keep_vertex.dtype == torch.bool
             
-        """ Put all the bad vertices in the background cluster """
-        if keep_vertex.sum().item() == torch.numel(keep_vertex):
-            # keep all vertex. Nothing to do
+        if keep_vertex.all():
             return self
         else:
-            my_filter = torch.bincount(self.membership * keep_vertex) > 0
-            count = torch.cumsum(my_filter, dim=-1)
-            old_2_new = ((count - count[0]) * my_filter).to(self.membership.dtype)
-            
-            if Partition.is_old_2_new_identity(old_2_new):
-                # nothing to do
-                return self
-            else:
-                new_membership = old_2_new[self.membership * keep_vertex]
-                new_dict = self.params
-                new_dict["filter_by_vertex"] = True
-                return self._replace(membership=new_membership,
-                                     params=new_dict,
-                                     sizes=torch.bincount(new_membership))
+            new_membership = self.membership * keep_vertex  # put all bad vertices in the background cluster
+            return Partition(sizes=torch.bincount(new_membership),
+                             membership=new_membership).compactify()
 
-    def filter_by_size(self, min_size: Optional[int] = None, max_size: Optional[int] = None):
+    def filter_by_size(self,
+                       min_size: Optional[int] = None,
+                       max_size: Optional[int] = None):
         """ If a cluster is too small or too large, its label is set to zero (i.e. background value).
             The other labels are adjusted so that there are no gaps in the labels number.
             Min_size and Max_size are integers specifying the number of pixels.
@@ -141,18 +131,12 @@ class Partition(NamedTuple):
         else:
             raise Exception("you should never be here!!")
 
-        count = torch.cumsum(my_filter, dim=-1)
-        old_2_new = (count - count[0]) * my_filter  # this makes sure that label 0 is always mapped to 0
-        
-        if Partition.is_old_2_new_identity(old_2_new):
-            # nothing to do
+        my_filter[0] = True  # always keep the bg
+        if my_filter.all():
             return self
         else:
-            #TODO: this might be too slow. Eliminate torch.bincount.
-            new_dict = self.params
-            new_dict["filter_by_size"] = (min_size, max_size)
-            new_membership = old_2_new[self.membership]
-            return self._replace(membership=new_membership, params=new_dict, sizes=torch.bincount(new_membership))
+            return Partition(sizes=self.sizes * my_filter,
+                             membership=self.membership).compactify()
 
     def concordance_with_partition(self, other_partition) -> ConcordancePartition:
         """ Compute measure of concordance between two partitions:
@@ -165,13 +149,21 @@ class Partition(NamedTuple):
         """
 
         assert self.membership.shape == other_partition.membership.shape
-        nx = len(other_partition.sizes)
-        ny = len(self.sizes)
+
+        # Use z = x + y * nx
+        # whose reciprocal is:
+        # x = z % nx
+        # y = z // nx
+
+        nx = self.sizes.shape[0]
+        ny = other_partition.sizes.shape[0]
+        z = self.membership + other_partition.membership * nx  # if z = x + y * nx
+        count_z = torch.bincount(z).float()
+        z_to_x = torch.arange(count_z.shape[0]) % nx  # then x = z % nx
+        z_to_y = torch.arange(count_z.shape[0]) // nx  # and y = z // nx
 
         pxy = torch.zeros((nx, ny), dtype=torch.float, device=self.membership.device)
-        for ix in range(0, nx):
-            counts = torch.bincount(self.membership[other_partition.membership == ix])
-            pxy[ix, :counts.shape[0]] = counts.float()
+        pxy[z_to_x, z_to_y] = count_z
         pxy /= torch.sum(pxy)
         px = torch.sum(pxy, dim=-1)
         py = torch.sum(pxy, dim=-2)
@@ -183,77 +175,32 @@ class Partition(NamedTuple):
         mutual_information = term_xy[pxy > 0].sum() - term_x[px > 0].sum() - term_y[py > 0].sum()
 
         # Extract the most likely mappings
-        # print(nx, ny)
-        to_other = torch.max(pxy, dim=-2)[1]
-        from_other = torch.max(pxy, dim=-1)[1]
+        to_other = torch.max(pxy, dim=-1)[1]
+        from_other = torch.max(pxy, dim=-2)[1]
 
         # Find one-to-one correspondence among instance IDs
-        original_instance_id = torch.arange(ny, device=self.membership.device, dtype=torch.long)
+        original_instance_id = torch.arange(nx, device=self.membership.device, dtype=torch.long)
         is_id_one_to_one = (from_other[to_other[original_instance_id]] == original_instance_id)
+        n_reversible_mapping = is_id_one_to_one.sum().item()
 
         # Define a mapping that changes all bad (i.e. not unique or background) instance IDs to -1
         original_to_good_id = original_instance_id
         original_to_good_id[~is_id_one_to_one] = -1
         original_to_good_id[0] = -1  # Exclude the background
-        # print(original_to_good_id)
+        filter_fg_pixels_with_reversible_id = (original_to_good_id[self.membership] > 0)
 
-        # compute the intersection among all fg_pixels_with_unique_id
+        # Even if the ID is reversible the pixel might have the wrong one.
         pixel_with_same_id = (to_other[self.membership] == other_partition.membership)
-        fg_pixels_with_unique_id = (original_to_good_id[self.membership] > 0)
-        intersection = torch.sum(pixel_with_same_id[fg_pixels_with_unique_id])
+        intersection = torch.sum(pixel_with_same_id[filter_fg_pixels_with_reversible_id])
         union = torch.sum(self.sizes[1:]) + torch.sum(other_partition.sizes[1:]) - intersection  # exclude background
         iou = intersection.float()/union
 
         return ConcordancePartition(joint_distribution=pxy,
                                     mutual_information=mutual_information.item(),
                                     delta_n=ny - nx,
-                                    iou=iou.item())
+                                    iou=iou.item(),
+                                    n_reversible_mapping=n_reversible_mapping)
 
-
-###    def to_sparse_similarity(self, index_matrix: torch.Tensor,
-###                             index_max: Optional[int] = None,
-###                             min_edge_weight: float = 0.01) -> SparseSimilarity:
-###        """ Create a sparse CSR matrix:
-###            CSR = csr_matrix((data, (row_ind, col_ind)), [shape = (M, N)])
-###            where data, row_ind and col_ind satisfy the relationship a[row_ind[k], col_ind[k]] = data[k]
-###            The batch dimension will be summed.
-###            Only pixel with index_matrix >= 0 will be used.
-###            Therefore index_matrix can be used to pass a fg_mask
-###            (i.e. just set the value outside the mask to -1 to exclude)
-###        """
-###
-###        assert len(index_matrix.shape) == len(self.data.shape) == 4
-###        b, ch, w, h = self.data.shape
-###        assert (b, 1, w, h) == index_matrix.shape
-###
-###        index_max = torch.max(index_matrix)[0].item() if index_max is None else index_max
-###        radius = numpy.max(self.ch_to_dxdy)
-###        pad_list = [radius + 1] * 4
-###        pad_index_matrix = F.pad(index_matrix, pad=pad_list, mode="constant", value=-1)
-###        pad_weight = F.pad(self.data, pad=pad_list, mode="constant", value=0.0).to(pad_index_matrix.device)
-###
-###        # Prepare the storage
-###        i_list, j_list, e_list = [], [], []  # i,j are verteces, e=edges
-###
-###        for ch, dxdy in enumerate(self.ch_to_dxdy):
-###            pad_index_matrix_shifted = torch.roll(torch.roll(pad_index_matrix, dxdy[0], dims=-2), dxdy[1],
-###                                                  dims=-1)
-###
-###            data = pad_weight[:, ch, :, :].flatten()
-###            row_ind = pad_index_matrix[:, 0, :, :].flatten()
-###            col_ind = pad_index_matrix_shifted[:, 0, :, :].flatten()
-###
-###            # Do not add loops.
-###            my_filter = (row_ind >= 0) * (col_ind >= 0) * (data > min_edge_weight)
-###
-###            e_list += data[my_filter].tolist()
-###            i_list += row_ind[my_filter].tolist()
-###            j_list += col_ind[my_filter].tolist()
-###
-###        return SparseSimilarity(csr_matrix=scipy.sparse.csr_matrix((e_list, (i_list, j_list)),
-###                                                                   shape=(index_max, index_max)),
-###                                index_matrix=None)
-###
 
 #  ----------------------------------------------------------------  #
 #  ------- Stuff Related to Processing (i.e. CompositionalVAE) ----  #

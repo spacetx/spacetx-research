@@ -1,7 +1,6 @@
 import torch
 import PIL.Image
 import PIL.ImageDraw 
-import pickle
 import json
 import numpy
 from torchvision import utils
@@ -337,7 +336,7 @@ class SpecialDataSet(object):
                  roi_mask: Optional[torch.Tensor] = None,
                  labels: Optional[torch.Tensor] = None,
                  data_augmentation: Optional[ConditionalRandomCrop] = None,
-                 device: str = 'cpu',
+                 store_in_cuda: bool = False,
                  drop_last=False,
                  batch_size=4,
                  shuffle=False):
@@ -348,6 +347,8 @@ class SpecialDataSet(object):
         assert len(img.shape) == 4
         assert (roi_mask is None or len(roi_mask.shape) == 4)
         assert (labels is None or labels.shape[0] == img.shape[0])
+
+        device = torch.device('cuda') if store_in_cuda else torch.device('cpu')
 
         self.drop_last = drop_last
         self.batch_size = batch_size
@@ -361,7 +362,10 @@ class SpecialDataSet(object):
             new_batch_size = img.shape[0] * data_augmentation.n_crops_per_image
             self.data_augmentaion = data_augmentation
 
-        self.img = img.to(device).detach().expand(new_batch_size, -1, -1, -1)
+        if store_in_cuda:
+            self.img = img.cuda().detach().expand(new_batch_size, -1, -1, -1)
+        else:
+            self.img = img.cpu().detach().expand(new_batch_size, -1, -1, -1)
 
         if labels is None:
             self.labels = -1*torch.ones(self.img.shape[0], device=device).detach()
@@ -417,7 +421,7 @@ class SpecialDataSet(object):
         print("img.shape", self.img.shape)
         print("img.dtype", self.img.dtype)
         print("img.device", self.img.device)
-        index = torch.randperm(self.__len__(), out=None, dtype=torch.long, device=self.img.device, requires_grad=False)
+        index = torch.randperm(self.__len__(), dtype=torch.long, device=self.img.device, requires_grad=False)
         # grab one minibatch
         img, labels, index = self.__getitem__(index[:batch_size])
         print("MINIBATCH: img.shapes labels.shape, index.shape ->", img.shape, labels.shape, index.shape)
