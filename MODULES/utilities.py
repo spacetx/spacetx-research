@@ -348,7 +348,7 @@ class SpecialDataSet(object):
         assert (roi_mask is None or len(roi_mask.shape) == 4)
         assert (labels is None or labels.shape[0] == img.shape[0])
 
-        device = torch.device('cuda') if store_in_cuda else torch.device('cpu')
+        storing_device = torch.device('cuda') if store_in_cuda else torch.device('cpu')
 
         self.drop_last = drop_last
         self.batch_size = batch_size
@@ -368,17 +368,17 @@ class SpecialDataSet(object):
             self.img = img.cpu().detach().expand(new_batch_size, -1, -1, -1)
 
         if labels is None:
-            self.labels = -1*torch.ones(self.img.shape[0], device=device).detach()
+            self.labels = -1*torch.ones(self.img.shape[0], device=storing_device).detach()
         else:
-            self.labels = labels.to(device).detach()
+            self.labels = labels.to(storing_device).detach()
         self.labels = self.labels.expand(new_batch_size)
 
         if roi_mask is None:
             self.roi_mask = None
             self.cum_roi_mask = None
         else:
-            self.roi_mask = roi_mask.to(device).detach().expand(new_batch_size, -1, -1, -1)
-            self.cum_roi_mask = roi_mask.to(device).detach().cumsum(dim=-1).cumsum(dim=-2).expand(new_batch_size, -1, -1, -1)
+            self.roi_mask = roi_mask.to(storing_device).detach().expand(new_batch_size, -1, -1, -1)
+            self.cum_roi_mask = roi_mask.to(storing_device).detach().cumsum(dim=-1).cumsum(dim=-2).expand(new_batch_size, -1, -1, -1)
 
     def __len__(self):
         return self.img.shape[0]
@@ -389,14 +389,13 @@ class SpecialDataSet(object):
         if self.data_augmentaion is None:
             return self.img[index], self.labels[index], index
         else:
-
             bij_list = []
             for i in index:
                 bij_list += self.data_augmentaion.get_index(img=self.img[i],
                                                             cum_sum_roi_mask=self.cum_roi_mask[i],
                                                             n_crops_per_image=1)
-
             return self.data_augmentaion.crop_from_list(self.img, bij_list), self.labels[index], index
+            
 
     def __iter__(self, batch_size=None, drop_last=None, shuffle=None):
         # If not specified use defaults
@@ -440,7 +439,15 @@ def process_one_epoch(model: torch.nn.Module,
     dict_metric_av: dict = {}
 
     for i, data in enumerate(dataloader):
+
         imgs, labels, index = data
+        
+        # Put data in GPU if available
+        if torch.cuda.is_available():
+            imgs = imgs.cuda()
+            labels = labels.cuda()
+            index = index.cuda()
+            
         metrics = model.forward(imgs_in=imgs).metrics  # the forward function returns metric and other stuff
         if verbose:
             print("i = %3d train_loss=%.5f" % (i, metrics.loss))
@@ -467,15 +474,26 @@ def process_one_epoch(model: torch.nn.Module,
                                                                     indices_right_examples=indices_right_examples,
                                                                     dict_accuracy=dict_accumulate_accuracy)
 
+
         # Only if training I apply backward
         if model.training:
             optimizer.zero_grad()
             metrics.loss.backward()  # do back_prop and compute all the gradients
             optimizer.step()  # update the parameters
-
+        
             # apply the weight clipper
             if weight_clipper is not None:
                 model.__self__.apply(weight_clipper)
+                
+        # Delete stuff from GPU
+        del imgs
+        del labels
+        del index
+        del metrics
+        torch.cuda.empty_cache()
+    # --------------------------------------------
+    # end of for i, data in enumerate(dataloader)
+    # --------------------------------------------
 
     # At the end of the loop compute the average of the metrics
     with torch.no_grad():

@@ -62,7 +62,7 @@ def compute_sqrt_mse(smoothed: np.ndarray,
 def getLargestCC(mask):
     labels = skimage.measure.label(mask)
     assert (labels.max() != 0)  # assume at least 1 CC
-    largestCC = labels == np.argmax(np.bincount(labels.flat)[1:]) + 1
+    largestCC = (labels == np.argmax(np.bincount(labels.flat)[1:]) + 1)
     return largestCC
 
 
