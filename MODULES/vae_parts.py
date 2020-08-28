@@ -284,6 +284,9 @@ class Inference_and_Generation(torch.nn.Module):
         # 5. Crop the unet_features according to the selected boxes
         # ------------------------------------------------------------------#
         n_boxes, batch_size = bounding_box_few.bx.shape
+        # print(unet_output.features.shape)
+        # print(imgs_in.shape)
+        # append the raw image in the channel dimension. 
         unet_features_expanded = unet_output.features.unsqueeze(0).expand(n_boxes, batch_size, -1, -1, -1)
         cropped_feature_map: torch.Tensor = Cropper.crop(bounding_box=bounding_box_few,
                                                          big_stuff=unet_features_expanded,
