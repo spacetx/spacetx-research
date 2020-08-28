@@ -505,7 +505,7 @@ class CompositionalVae(torch.nn.Module):
 
             # split the list in chunks of batch_size
             index = torch.arange(0, x1.shape[0], dtype=torch.long, device=torch.device('cpu'))
-            n_list_of_list = [index[n:n + batch] for n in range(0, index.shape[0], batch)]
+            n_list_of_list = [index[n:n + batch_size] for n in range(0, index.shape[0], batch_size)]
             n_instances_tot = 0
             for n_batches, n_list in enumerate(n_list_of_list):
                 
@@ -518,8 +518,8 @@ class CompositionalVae(torch.nn.Module):
                                                                y1[n]:y1[n]+crop_size[1]] for n in n_list], dim=-4)
                 
                 # print progress
-                if (n_batches % 10 == 0) or (n_batches == len(k_list_of_tensor)-1):
-                    print(f'{n_batches} out of {len(k_list_of_tensor)-1} -> batch_of_imgs.shape = {batch_imgs.shape}')
+                if (n_batches % 10 == 0) or (n_batches == len(n_list_of_list)-1):
+                    print(f'{n_batches} out of {len(n_list_of_list)-1} -> batch_of_imgs.shape = {batch_imgs.shape}')
                     
                 segmentation = self.segment(batch_imgs=batch_imgs.to(self.sigma_fg.device),
                                             n_objects_max=n_objects_max_per_patch,
@@ -527,7 +527,7 @@ class CompositionalVae(torch.nn.Module):
                                             overlap_threshold=overlap_threshold,
                                             noisy_sampling=True,
                                             draw_boxes=False,
-                                            batch_of_index=batch_of_index.to(self.sigma_fg.device),
+                                            batch_of_index=batch_index.to(self.sigma_fg.device),
                                             max_index=max_index,
                                             radius_nn=radius_nn)
                 #print("segmentation time", time.time()-start_time)
@@ -571,7 +571,7 @@ class CompositionalVae(torch.nn.Module):
                                 integer_mask=big_integer_mask[None, None, pad_w:pad_w + w_img, pad_h:pad_h + h_img],
                                 bounding_boxes=None,
                                 similarity=SparseSimilarity(sparse_matrix=sparse_similarity_matrix,
-                                                            index_matrix=single_index_matrix[pad_w:pad_w + w_img, pad_h:pad_h + h_img]))
+                                                            index_matrix=index_matrix_padded[pad_w:pad_w + w_img, pad_h:pad_h + h_img]))
 
     # this is the generic function which has all the options unspecified
     def process_batch_imgs(self,

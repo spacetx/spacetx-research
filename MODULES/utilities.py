@@ -395,7 +395,6 @@ class SpecialDataSet(object):
                                                             cum_sum_roi_mask=self.cum_roi_mask[i],
                                                             n_crops_per_image=1)
             return self.data_augmentaion.crop_from_list(self.img, bij_list), self.labels[index], index
-            
 
     def __iter__(self, batch_size=None, drop_last=None, shuffle=None):
         # If not specified use defaults
@@ -439,7 +438,6 @@ def process_one_epoch(model: torch.nn.Module,
     dict_metric_av: dict = {}
 
     for i, data in enumerate(dataloader):
-
         imgs, labels, index = data
         
         # Put data in GPU if available
@@ -473,7 +471,6 @@ def process_one_epoch(model: torch.nn.Module,
             dict_accumulate_accuracy = accumulate_counting_accuracy(indices_wrong_examples=indices_wrong_examples,
                                                                     indices_right_examples=indices_right_examples,
                                                                     dict_accuracy=dict_accumulate_accuracy)
-
 
         # Only if training I apply backward
         if model.training:

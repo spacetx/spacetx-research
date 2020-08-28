@@ -108,9 +108,7 @@ class EncoderConv(nn.Module):
         assert self.width == 28
         self.dim_z = dim_z
 
-        FROM HERE DO 56x56 ENCODER
-        
-        
+        #TODO FROM HERE DO 56x56 ENCODER
         self.conv = nn.Sequential(
             torch.nn.Conv2d(self.ch_in, 32, 4, 1, 2),  # B, 32, 28, 28
             torch.nn.ReLU(inplace=True),
