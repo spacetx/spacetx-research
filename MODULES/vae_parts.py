@@ -4,7 +4,7 @@ from .cropper_uncropper import Uncropper, Cropper
 from .non_max_suppression import NonMaxSuppression
 from .unet_model import UNet
 from .encoders_decoders import EncoderConv, DecoderConv, Decoder1by1Linear, EncoderConvLeaky, DecoderConvLeaky
-from .utilities import compute_average_intensity_in_box, compute_ranking
+from .utilities import compute_average_in_box, compute_ranking
 from .utilities import sample_and_kl_diagonal_normal, sample_and_kl_multivariate_normal
 from .utilities import downsample_and_upsample
 from .namedtuple import Inference, BB, NMSoutput, UNEToutput, ZZ, DIST
@@ -246,8 +246,8 @@ class Inference_and_Generation(torch.nn.Module):
             if (prob_corr_factor > 0) and (prob_corr_factor <= 1.0) and not generate_synthetic_data:
 
                 # probability correction if necessary
-                av_intensity: torch.Tensor = compute_average_intensity_in_box(torch.abs(imgs_in - big_bg),
-                                                                              bounding_box_all)
+                av_intensity: torch.Tensor = compute_average_in_box((imgs_in - big_bg).abs(), bounding_box_all)
+                # av_intensity: torch.Tensor = compute_average_in_box((imgs_in - big_bg).pow(2), bounding_box_all)
                 assert len(av_intensity.shape) == 2
                 n_boxes_all, batch_size = av_intensity.shape
                 ranking: torch.Tensor = compute_ranking(av_intensity)  # n_boxes_all, batch. It is in [0,n_box_all-1]
@@ -284,6 +284,9 @@ class Inference_and_Generation(torch.nn.Module):
         # 5. Crop the unet_features according to the selected boxes
         # ------------------------------------------------------------------#
         n_boxes, batch_size = bounding_box_few.bx.shape
+        # print(unet_output.features.shape)
+        # print(imgs_in.shape)
+        # append the raw image in the channel dimension. 
         unet_features_expanded = unet_output.features.unsqueeze(0).expand(n_boxes, batch_size, -1, -1, -1)
         cropped_feature_map: torch.Tensor = Cropper.crop(bounding_box=bounding_box_few,
                                                          big_stuff=unet_features_expanded,
@@ -326,8 +329,11 @@ class Inference_and_Generation(torch.nn.Module):
                          big_mask=big_mask,
                          big_mask_NON_interacting=big_mask_NON_interacting,
                          big_img=big_img,
+                         # the sample of the 3 latent variables
                          prob=prob_few,
                          bounding_box=bounding_box_few,
+                         zinstance_each_obj=zinstance_few.sample,
+                         # the kl of the 3 latent variables
                          kl_logit_map=logit_map.kl,
                          kl_zwhere_map=zwhere_map.kl,
                          kl_zinstance_each_obj=zinstance_few.kl)

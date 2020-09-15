@@ -32,12 +32,7 @@ class DoubleConvolutionBlock(nn.Module):
 #            nn.BatchNorm2d(ch_out, affine=True, track_running_stats=True),
 #            nn.ReLU(inplace=True)
 #        )
-        self.s_p_k = [1.0, 2.0, 5.0]
-        
-    def __add_to_spk_list__(self, spk_list):
-        spk_list.append(self.s_p_k)
-        return spk_list
-        
+
     def forward(self, x, verbose=False):
         y = self.double_conv(x)
         if verbose:
@@ -54,13 +49,7 @@ class DownBlock(nn.Module):
         super().__init__()
         self.max_pool_layer = nn.MaxPool2d(2, 2)
         self.double_conv = DoubleConvolutionBlock(ch_in, ch_out)
-        self.s_p_k = [[2.0, 0.0, 2.0], [1.0, 2.0, 5.0]]  # max_pool, double_conv values in a list
 
-    def __add_to_spk_list__(self, spk_list):
-        spk_list.append(self.s_p_k[0])
-        spk_list.append(self.s_p_k[1])
-        return spk_list
-        
     def forward(self, x0, verbose=False):
 
         x1 = self.max_pool_layer.forward(x0)
@@ -85,12 +74,6 @@ class UpBlock(nn.Module):
         self.ch_in = ch_in
         self.up_conv_layer = nn.ConvTranspose2d(ch_in, int(ch_in/2), kernel_size=2, stride=2, padding=0)
         self.double_conv = DoubleConvolutionBlock(ch_in, ch_out)
-        self.s_p_k = [[0.5, 0.75, 2.0], [1.0, 2.0, 5.0]]
-    
-    def __add_to_spk_list__(self, spk_list):
-        spk_list.append(self.s_p_k[0])
-        spk_list.append(self.s_p_k[1])
-        return spk_list
 
     def forward(self, x_from_compressing_path, x_to_upconv, verbose=False):
         x = self.up_conv_layer.forward(x_to_upconv)

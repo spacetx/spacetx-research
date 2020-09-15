@@ -1,71 +1,118 @@
 import torch
 import numpy
-from typing import NamedTuple, Optional, Tuple
+from typing import NamedTuple, Optional
 import skimage.color
 import matplotlib.pyplot as plt
 
 #  ----------------------------------------------------------------  #
-#  ------- Stuff defined in terms of native types -----------------  #
+#  ------- Stuff Related to PreProcessing -------------------------  #
 #  ----------------------------------------------------------------  #
+
+
+class ImageBbox(NamedTuple):
+    """ Follows Scikit Image convention. Pixels belonging to the bounding box are in the half-open interval:
+        [min_row;max_row) and [min_col;max_col). """
+    min_row: int
+    min_col: int
+    max_row: int
+    max_col: int
+
+
+class PreProcess(NamedTuple):
+    img: torch.Tensor
+    roi_mask: torch.Tensor
+    bbox_original: ImageBbox
+    bbox_crop: ImageBbox
+
+#  --------------------------------------------------------------------------------------  #
+#  ------- Stuff Related to PostProcessing (i.e. Graph Clustering Based on Modularity) --  #
+#  --------------------------------------------------------------------------------------  #
 
 
 class Suggestion(NamedTuple):
     best_resolution: float
     best_index: int
     sweep_resolution: numpy.ndarray
+    sweep_mi: numpy.ndarray
     sweep_iou: numpy.ndarray
     sweep_delta_n: numpy.ndarray
     sweep_seg_mask: numpy.ndarray
-
-    def show_best(self, figsize: tuple = (20, 20), fontsize: int = 20):
+    sweep_n_cells: numpy.ndarray
+    sweep_sizes: list
+        
+    def show_index(self, index: int, figsize: tuple = (20, 20), fontsize: int = 20):
         figure, ax = plt.subplots(figsize=figsize)
-        ax.imshow(skimage.color.label2rgb(label=self.sweep_seg_mask[self.best_index], bg_label=0))
-        ax.set_title('resolution = {0:.3f}, iou = {1:.3f}, delta_n = {2:3d}'.format(self.best_resolution,
-                                                                                    self.sweep_iou[self.best_index],
-                                                                                    self.sweep_delta_n[self.best_index]),
+        ax.imshow(skimage.color.label2rgb(label=self.sweep_seg_mask[index], bg_label=0))
+        ax.set_title('resolution = {0:.3f}, \
+                      iou = {1:.3f}, \
+                      delta_n = {2:3d}, \
+                      n_cells = {3:3d}'.format(self.sweep_resolution[index],
+                                               self.sweep_iou[index],
+                                               self.sweep_delta_n[index],
+                                               self.sweep_n_cells[index]),
                      fontsize=fontsize)
+        
+    def show_best(self, figsize: tuple = (20, 20), fontsize: int = 20):
+        return self.show_index(self.best_index, figsize, fontsize)
+        
+    def show_graph(self, figsize: tuple = (20, 20), fontsize: int = 20):
+        figure, ax = plt.subplots(figsize=figsize)
+        ax.set_title('Resolution sweep', fontsize=fontsize)
+        ax.set_xlabel("resolution", fontsize=fontsize)
+        ax.tick_params(axis='x', labelsize=fontsize)
+        
+        color = 'tab:red'
+        _ = ax.plot(self.sweep_resolution, self.sweep_n_cells, '.--', label="n_cell", color=color)
+        ax.set_ylabel('n_cell', color=color, fontsize=fontsize)
+        ax.tick_params(axis='y', labelcolor=color, labelsize=fontsize)
+        ax.legend(loc='upper left', fontsize=fontsize)
+        ax.grid()
+
+        ax_2 = ax.twinx()  # instantiate a second axes that shares the same x-axis
+        color = 'tab:green'
+        _ = ax_2.plot(self.sweep_resolution, self.sweep_iou, '-', label="iou", color=color)
+        ax_2.set_ylabel('Intersection Over Union', color=color, fontsize=fontsize)
+        ax_2.tick_params(axis='y', labelcolor=color, labelsize=fontsize)
+        ax_2.legend(loc='upper right', fontsize=fontsize)
 
 
-class Concordance(NamedTuple):
+class ConcordancePartition(NamedTuple):
     joint_distribution: torch.tensor
     mutual_information: float
     delta_n: int
     iou: float
+    n_reversible_mapping: int
 
 
 class Partition(NamedTuple):
-    type: str
-    membership: torch.tensor  # bg=0, fg=1,2,3,.....
     sizes: torch.tensor  # both for bg and fg. It is simply obtained by numpy.bincount(membership)
-    params: dict
+    membership: torch.tensor  # bg=0, fg=1,2,3,.....
 
-    @staticmethod
-    def is_old_2_new_identity(old_2_new: torch.tensor):
-        diff = old_2_new - torch.arange(old_2_new.shape[0], device=old_2_new.device, dtype=old_2_new.dtype)
-        check = (diff.abs().sum().item() == 0)
-        return check
-
-    def filter_by_vertex(self, keep_vertex: torch.tensor):
-        """ Put all the bad vertices in the background cluster """
-        if sum(keep_vertex) == torch.numel(keep_vertex):
-            # keep all vertex. Nothing to do
+    def compactify(self):
+        """ if there are gaps in the SIZES, then shift both membership and sizes accordingly"""
+        if (self.sizes[1:] > 0).all():
             return self
         else:
-            my_filter = torch.bincount(self.membership * keep_vertex) > 0
+            my_filter = self.sizes > 0
+            my_filter[0] = True
             count = torch.cumsum(my_filter, dim=-1)
-            old_2_new = (count - count[0]) * my_filter
+            old_2_new = ((count - count[0]) * my_filter).to(self.membership.dtype)
+            return Partition(sizes=self.sizes[my_filter], membership=old_2_new[self.membership])
 
-            if Partition.is_old_2_new_identity(old_2_new):
-                return self
-            else:
-                new_membership = old_2_new[self.membership]
-                new_dict = self.params
-                new_dict["filter_by_vertex"] = True
-                return self._replace(membership=new_membership,
-                                     params=new_dict,
-                                     sizes=torch.bincount(new_membership))
+    def filter_by_vertex(self, keep_vertex: torch.tensor):
+        assert self.membership.shape == keep_vertex.shape
+        assert keep_vertex.dtype == torch.bool
+            
+        if keep_vertex.all():
+            return self
+        else:
+            new_membership = self.membership * keep_vertex  # put all bad vertices in the background cluster
+            return Partition(sizes=torch.bincount(new_membership),
+                             membership=new_membership).compactify()
 
-    def filter_by_size(self, min_size: Optional[int] = None, max_size: Optional[int] = None):
+    def filter_by_size(self,
+                       min_size: Optional[int] = None,
+                       max_size: Optional[int] = None):
         """ If a cluster is too small or too large, its label is set to zero (i.e. background value).
             The other labels are adjusted so that there are no gaps in the labels number.
             Min_size and Max_size are integers specifying the number of pixels.
@@ -84,19 +131,14 @@ class Partition(NamedTuple):
         else:
             raise Exception("you should never be here!!")
 
-        count = torch.cumsum(my_filter, dim=-1)
-        old_2_new = (count - count[0]) * my_filter  # this makes sure that label 0 is always mapped to 0
-
-        if Partition.is_old_2_new_identity(old_2_new):
-            # nothing to do
+        my_filter[0] = True  # always keep the bg
+        if my_filter.all():
             return self
         else:
-            new_dict = self.params
-            new_dict["filter_by_size"] = (min_size, max_size)
-            new_membership = old_2_new[self.membership]
-            return self._replace(membership=new_membership, params=new_dict, sizes=torch.bincount(new_membership))
+            return Partition(sizes=self.sizes * my_filter,
+                             membership=self.membership).compactify()
 
-    def concordance_with_partition(self, other_partition) -> Concordance:
+    def concordance_with_partition(self, other_partition) -> ConcordancePartition:
         """ Compute measure of concordance between two partitions:
             joint_distribution
             mutual_information
@@ -107,13 +149,21 @@ class Partition(NamedTuple):
         """
 
         assert self.membership.shape == other_partition.membership.shape
-        nx = len(other_partition.sizes)
-        ny = len(self.sizes)
+
+        # Use z = x + y * nx
+        # whose reciprocal is:
+        # x = z % nx
+        # y = z // nx
+
+        nx = self.sizes.shape[0]
+        ny = other_partition.sizes.shape[0]
+        z = self.membership + other_partition.membership * nx  # if z = x + y * nx
+        count_z = torch.bincount(z).float()
+        z_to_x = torch.arange(count_z.shape[0]) % nx  # then x = z % nx
+        z_to_y = torch.arange(count_z.shape[0]) // nx  # and y = z // nx
 
         pxy = torch.zeros((nx, ny), dtype=torch.float, device=self.membership.device)
-        for ix in range(0, nx):
-            counts = torch.bincount(self.membership[other_partition.membership == ix])
-            pxy[ix, :counts.shape[0]] = counts.float()
+        pxy[z_to_x, z_to_y] = count_z
         pxy /= torch.sum(pxy)
         px = torch.sum(pxy, dim=-1)
         py = torch.sum(pxy, dim=-2)
@@ -125,31 +175,36 @@ class Partition(NamedTuple):
         mutual_information = term_xy[pxy > 0].sum() - term_x[px > 0].sum() - term_y[py > 0].sum()
 
         # Extract the most likely mappings
-        # print(nx, ny)
-        to_other = torch.max(pxy, dim=-2)[1]
-        from_other = torch.max(pxy, dim=-1)[1]
+        to_other = torch.max(pxy, dim=-1)[1]
+        from_other = torch.max(pxy, dim=-2)[1]
 
         # Find one-to-one correspondence among instance IDs
-        original_instance_id = torch.arange(ny, device=self.membership.device, dtype=torch.long)
+        original_instance_id = torch.arange(nx, device=self.membership.device, dtype=torch.long)
         is_id_one_to_one = (from_other[to_other[original_instance_id]] == original_instance_id)
+        n_reversible_mapping = is_id_one_to_one.sum().item()
 
         # Define a mapping that changes all bad (i.e. not unique or background) instance IDs to -1
         original_to_good_id = original_instance_id
         original_to_good_id[~is_id_one_to_one] = -1
         original_to_good_id[0] = -1  # Exclude the background
-        # print(original_to_good_id)
+        filter_fg_pixels_with_reversible_id = (original_to_good_id[self.membership] > 0)
 
-        # compute the intersection among all fg_pixels_with_unique_id
+        # Even if the ID is reversible the pixel might have the wrong one.
         pixel_with_same_id = (to_other[self.membership] == other_partition.membership)
-        fg_pixels_with_unique_id = (original_to_good_id[self.membership] > 0)
-        intersection = torch.sum(pixel_with_same_id[fg_pixels_with_unique_id])
+        intersection = torch.sum(pixel_with_same_id[filter_fg_pixels_with_reversible_id])
         union = torch.sum(self.sizes[1:]) + torch.sum(other_partition.sizes[1:]) - intersection  # exclude background
         iou = intersection.float()/union
 
-        return Concordance(joint_distribution=pxy,
-                           mutual_information=mutual_information.item(),
-                           delta_n=ny - nx,
-                           iou=iou.item())
+        return ConcordancePartition(joint_distribution=pxy,
+                                    mutual_information=mutual_information.item(),
+                                    delta_n=ny - nx,
+                                    iou=iou.item(),
+                                    n_reversible_mapping=n_reversible_mapping)
+
+
+#  ----------------------------------------------------------------  #
+#  ------- Stuff Related to Processing (i.e. CompositionalVAE) ----  #
+#  ----------------------------------------------------------------  #
 
 
 class DIST(NamedTuple):
@@ -180,33 +235,9 @@ class Checkpoint(NamedTuple):
     history_dict: dict
 
 
-class Similarity(NamedTuple):
-    data: torch.tensor  # *, nn, w, h where nn = ((2*r+1)^2 -1)//2
-    ch_to_dxdy: list  # [(dx0,dy0),(dx1,dy1),....]  of lenght nn
-
-    def reduce_similarity_radius(self, new_radius: int):
-
-        # Check which element should be selected
-        to_select = [(abs(dxdy[0]) <= new_radius and abs(dxdy[1]) <= new_radius) for dxdy in self.ch_to_dxdy]
-        all_true = sum(to_select) == len(to_select)
-        if all_true:
-            raise Exception("new radius should be smaller than current radius. No subsetting left to do")
-
-        # Subsample the ch_to_dxdy
-        new_ch_to_dxdy = []
-        for selected, dxdy in zip(to_select, self.ch_to_dxdy):
-            if selected:
-                new_ch_to_dxdy.append(dxdy)
-
-        # Subsample the similarity matrix
-        index = torch.arange(len(to_select), dtype=torch.long)[to_select]
-
-        return Similarity(data=torch.index_select(self.data, dim=-3, index=index), ch_to_dxdy=new_ch_to_dxdy)
-
-
-#  ----------------------------------------------------------------  #
-#  -------Stuff defined in term of other sutff --------------------  #
-#  ----------------------------------------------------------------  #
+class SparseSimilarity(NamedTuple):
+    sparse_matrix: torch.sparse.FloatTensor
+    index_matrix: Optional[torch.tensor]
 
 
 class Segmentation(NamedTuple):
@@ -215,10 +246,7 @@ class Segmentation(NamedTuple):
     fg_prob: torch.Tensor  # *,1,w,h
     integer_mask: torch.Tensor  # *,1,w,h
     bounding_boxes: Optional[torch.Tensor]  # *,3,w,h
-    similarity: Similarity
-
-    def reduce_similarity_radius(self, new_radius: int):
-        return self._replace(similarity=self.similarity.reduce_similarity_radius(new_radius=new_radius))
+    similarity: Optional[SparseSimilarity] = None
 
 
 class UNEToutput(NamedTuple):
@@ -235,9 +263,10 @@ class Inference(NamedTuple):
     big_bg: torch.Tensor
     big_img: torch.Tensor
     big_mask: torch.Tensor
-    big_mask_NON_interacting: torch.Tensor
+    big_mask_NON_interacting: torch.Tensor  # Use exclusively to compute overlap penalty
     prob: torch.Tensor
     bounding_box: BB
+    zinstance_each_obj: torch.Tensor
     kl_zinstance_each_obj: torch.Tensor
     kl_zwhere_map: torch.Tensor
     kl_logit_map: torch.Tensor
@@ -245,7 +274,7 @@ class Inference(NamedTuple):
 
 class MetricMiniBatch(NamedTuple):
     loss: torch.Tensor
-    nll: torch.Tensor
+    mse: torch.Tensor
     reg: torch.Tensor
     kl_tot: torch.Tensor
     kl_instance: torch.Tensor
@@ -262,19 +291,15 @@ class MetricMiniBatch(NamedTuple):
 
 
 class RegMiniBatch(NamedTuple):
-    # cost_fg_pixel_fraction: torch.Tensor
     cost_overlap: torch.Tensor
     cost_vol_absolute: torch.Tensor
-    # cost_volume_mask_fraction: torch.Tensor
-    # cost_prob_map_integral: torch.Tensor
-    # cost_prob_map_fraction: torch.Tensor
-    # cost_prob_map_TV: torch.Tensor
+    cost_total: torch.Tensor
 
 
 class Metric_and_Reg(NamedTuple):
     # MetricMiniBatch (in the same order as underlying class)
     loss: torch.Tensor
-    nll: torch.Tensor
+    mse: torch.Tensor
     reg: torch.Tensor
     kl_tot: torch.Tensor
     kl_instance: torch.Tensor
@@ -289,13 +314,9 @@ class Metric_and_Reg(NamedTuple):
     length_GP: torch.Tensor
     n_obj_counts: torch.Tensor
     # RegMiniBatch (in the same order as underlying class)
-    # cost_fg_pixel_fraction: torch.Tensor
     cost_overlap: torch.Tensor
     cost_vol_absolute: torch.Tensor
-    # cost_volume_mask_fraction: torch.Tensor
-    # cost_prob_map_integral: torch.Tensor
-    # cost_prob_map_fraction: torch.Tensor
-    # cost_prob_map_TV: torch.Tensor
+    cost_total: torch.Tensor
 
     @classmethod
     def from_merge(cls, metrics, regularizations):
