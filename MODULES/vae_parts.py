@@ -67,41 +67,7 @@ def downsample_and_upsample(x: torch.Tensor, low_resolution: tuple, high_resolut
     return high_res_x
 
 
-class Moving_Average_Calculator:
-    """ beta is the factor multiplying the moving average.
-        Approximately we average the last 1/(1-beta) points.
-        For example:
-        beta = 0.9 -> 10 points
-        beta = 0.99 -> 100 points
-        The larger beta the longer the time average.
 
-        Usage:
-        MA = Moving_Average_Calculator(beta = 0.99)
-        input_dict = { "x" : 100+i+numpy.random.randn(),
-                   "y" : 50+i+numpy.random.randn()}
-        MA(input_dict)
-    """
-
-    def __init__(self, beta):
-        super().__init__()
-        self._bias = None
-        self._steps = 0
-        self._beta = beta
-        self._dict_accumulate = {}
-        self._dict_MA = {}
-
-    def accumulate(self, input_dict):
-        self._steps += 1
-        self._bias = 1 - self._beta ** self._steps
-
-        for key, value in input_dict.items():
-            try:
-                tmp = self._beta * self._dict_accumulate[key] + (1 - self._beta) * value
-                self._dict_accumulate[key] = tmp
-            except KeyError:
-                self._dict_accumulate[key] = (1 - self._beta) * value
-            self._dict_MA[key] = self._dict_accumulate[key] / self._bias
-        return self._dict_MA
 
 
 class Inference_and_Generation(torch.nn.Module):

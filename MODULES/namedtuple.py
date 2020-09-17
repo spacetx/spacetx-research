@@ -229,12 +229,6 @@ class NMSoutput(NamedTuple):
     index_top_k: torch.Tensor
 
 
-class Checkpoint(NamedTuple):
-    epoch: int
-    hyperparams_dict: dict
-    history_dict: dict
-
-
 class SparseSimilarity(NamedTuple):
     sparse_matrix: torch.sparse.FloatTensor
     index_matrix: Optional[torch.tensor]
@@ -324,8 +318,50 @@ class Metric_and_Reg(NamedTuple):
         assert cls._fields == MetricMiniBatch._fields + RegMiniBatch._fields
         return cls._make([*metrics, *regularizations])
 
+    def pretty_print(self, epoch: int=0) -> str:
+        s = "[epoch {0:4d}] loss={1:.3f}, mse={2:.3f}, reg={3:.3f}, \
+              kl_tot={4:.3f}, sparsity={5:.3f}, fg_fraction={6:.3f}, \
+              geco_sp={7:.3f}, geco_bal={8:.3f}".format(epoch,
+                                                        self.loss,
+                                                        self.mse,
+                                                        self.reg,
+                                                        self.kl_tot,
+                                                        self.sparsity,
+                                                        self.fg_fraction,
+                                                        self.geco_sparsity,
+                                                        self.geco_balance)
+        return s
+
 
 class Output(NamedTuple):
     metrics: Metric_and_Reg
     inference: Inference
+    imgs: torch.Tensor
+
+
+# -------------------------------
+# For debug I try a simple VAE
+# -------------------------------
+
+
+class MetricMiniBatchSimple(NamedTuple):
+    loss: torch.Tensor
+    mse: torch.Tensor
+    kl_tot: torch.Tensor
+    geco_balance: torch.Tensor
+    delta_2: torch.Tensor
+
+    def pretty_print(self, epoch: int=0) -> str:
+        s = '[epoch {0:4d}] loss={1:.3f}, mse={2:.3f}, kl_tot={3:.3f}, geco_bal={4:.3f}'.format(epoch,
+                                                                                                self.loss.item(),
+                                                                                                self.mse.item(),
+                                                                                                self.kl_tot.item(),
+                                                                                                self.geco_balance.item(),
+                                                                                                self.delta_2.item())
+        return s
+
+
+class OutputSimple(NamedTuple):
+    metrics: MetricMiniBatchSimple
+    z: torch.Tensor
     imgs: torch.Tensor

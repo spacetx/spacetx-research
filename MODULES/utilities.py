@@ -9,85 +9,7 @@ from torch.distributions.utils import broadcast_all
 from typing import Union, Callable, Optional, List, Tuple
 from .namedtuple import BB, DIST
 import torch.nn.functional as F
-
-
-def downsample_and_upsample(x: torch.Tensor, low_resolution: tuple, high_resolution: tuple):
-    low_res_x = F.interpolate(x, size=low_resolution, mode='bilinear', align_corners=True)
-    high_res_x = F.interpolate(low_res_x, size=high_resolution, mode='bilinear', align_corners=True)
-    return high_res_x
-
-
-def save_obj(obj, path):
-    with open(path, 'wb') as f:
-        torch.save(obj, f, pickle_protocol=2, _use_new_zipfile_serialization=True)
-
-
-def load_obj(path):
-    with open(path, 'rb') as f:
-        return torch.load(f)
-
-
-def load_json_as_dict(path):
-    with open(path, 'rb') as f:
-        return json.load(f)
-
-
-def save_dict_as_json(my_dict, path):
-    with open(path, 'w') as f:
-        return json.dump(my_dict, f)
-
-
-def reset_parameters(parent_module, verbose):
-    for m in parent_module.modules():
-        try:
-            m.reset_parameters()
-            if verbose:
-                print("reset -> ", m)
-        except AttributeError:
-            pass
-
-
-def roller_2d(a: torch.tensor, b: Optional[torch.tensor] = None, radius: int = 2):
-    """ Performs rolling of the last two spatial dimensions.
-        For each point consider half a square. Each pair of points will appear once.
-        Number of channels: [(2r+1)**2 - 1]/2
-        For example for a radius = 2 the full square is 5x5. The number of pairs is: 12
-    """
-    dxdy_list = []
-    for dx in range(0, radius + 1):
-        for dy in range(-radius, radius + 1):
-            if dx == 0 and dy <= 0:
-                continue
-            dxdy_list.append((dx, dy))
-
-    for dxdy in dxdy_list:
-        a_tmp = torch.roll(torch.roll(a, dxdy[0], dims=-2), dxdy[1], dims=-1)
-        b_tmp = None if b is None else torch.roll(torch.roll(b, dxdy[0], dims=-2), dxdy[1], dims=-1)
-        yield a_tmp, b_tmp
-
-
-def are_broadcastable(a: torch.Tensor, b: torch.Tensor) -> bool:
-    """ Return True if tensor are broadcastable to each other, False otherwise """
-    return all((m == n) or (m == 1) or (n == 1) for m, n in zip(a.shape[::-1], b.shape[::-1]))
-
-
-def append_dict_to_dict(source, target, prefix_include=None, prefix_exclude=None, prefix_to_add=None):
-    """ Use typing.
-        For now: prefix_include is str or tuple of str
-        For now: prefix_exclude is str or tuple of str
-        For now: prefix_to_add is str """
-
-    for k, v in source.items():
-
-        if (prefix_include is None or k.startswith(prefix_include)) and (prefix_exclude is None or
-                                                                         not k.startswith(prefix_exclude)):
-            new_k = k if prefix_to_add is None else prefix_to_add+k
-            try:
-                target[new_k].append(v)
-            except KeyError:
-                target[new_k] = [v]
-
-    return target
+from collections import OrderedDict
 
 
 def sample_and_kl_diagonal_normal(posterior_mu: torch.Tensor,
@@ -157,15 +79,15 @@ def kl_multivariate_normal0_normal1(mu0: torch.Tensor,
                                     mu1: torch.Tensor,
                                     L_cov0: torch.Tensor,
                                     L_cov1: torch.Tensor) -> torch.Tensor:
-    """ 
+    """
     Function that analytically computes the KL divergence between two MultivariateNormal distributions
     (see https://en.wikipedia.org/wiki/Multivariate_normal_distribution#Kullback%E2%80%93Leibler_divergence)
 
     Each MultivariateNormal is defined in terms of its mean and the cholesky decomposition of the covariance matrix
     :param mu0: array with mean value of posterior, size (*, n)
-    :param mu1: array with mean value of prior, size (*, n)  
+    :param mu1: array with mean value of prior, size (*, n)
     :param L_cov0: lower triangular matrix with the decomposition on the covariance for the posterior, size (*, n, n)
-    :param L_cov1: lower triangular matrix with the decomposition on the covariance for the prior, size (*, n, n) 
+    :param L_cov1: lower triangular matrix with the decomposition on the covariance for the prior, size (*, n, n)
     :return: kl: array with kl divergence between posterior and prior, size (*)
 
     Note that n is the number of locations where the MultivariateNormal is evaluated,
@@ -222,20 +144,141 @@ def linear_interpolation(t: Union[numpy.array, float], values: tuple, times: tup
     return numpy.clip(v, v_min, v_max)
 
 
-def accumulate_counting_accuracy(indices_wrong_examples: list,
-                                 indices_right_examples: list,
-                                 dict_accuracy: dict) -> dict:
-    dict_accuracy["wrong_examples"] = indices_wrong_examples + dict_accuracy.get("wrong_examples", [])  # concat lists
-    dict_accuracy["right_examples"] = indices_right_examples + dict_accuracy.get("right_examples", [])  # concat lists
-    return dict_accuracy
-
-
 def flatten_list(my_list: List[List]) -> list:
     flat_list: list = []
     for sublist in my_list:
         for item in sublist:
             flat_list.append(item)
     return flat_list
+
+
+def flatten_dict(dd, separator='_', prefix=''):
+    return {prefix + separator + k if prefix else k: v
+            for kk, vv in dd.items()
+            for k, v in flatten_dict(vv, separator, kk).items()
+            } if isinstance(dd, dict) else {prefix: dd}
+
+
+def downsample_and_upsample(x: torch.Tensor, low_resolution: tuple, high_resolution: tuple):
+    low_res_x = F.interpolate(x, size=low_resolution, mode='bilinear', align_corners=True)
+    high_res_x = F.interpolate(low_res_x, size=high_resolution, mode='bilinear', align_corners=True)
+    return high_res_x
+
+
+def save_obj(obj, path):
+    with open(path, 'wb') as f:
+        torch.save(obj, f, pickle_protocol=2, _use_new_zipfile_serialization=True)
+
+
+def load_obj(path):
+    with open(path, 'rb') as f:
+        return torch.load(f)
+
+
+def load_json_as_dict(path):
+    with open(path, 'rb') as f:
+        return json.load(f)
+
+
+def save_dict_as_json(my_dict, path):
+    with open(path, 'w') as f:
+        return json.dump(my_dict, f)
+
+
+def are_broadcastable(a: torch.Tensor, b: torch.Tensor) -> bool:
+    """ Return True if tensor are broadcastable to each other, False otherwise """
+    return all((m == n) or (m == 1) or (n == 1) for m, n in zip(a.shape[::-1], b.shape[::-1]))
+
+
+def append_tuple_to_dict(source_tuple, target_dict, prefix_include=None, prefix_exclude=None, prefix_to_add=None):
+    """ Use typing.
+        For now: prefix_include is str or tuple of str
+        For now: prefix_exclude is str or tuple of str
+        For now: prefix_to_add is str """
+
+    for key in source_tuple._fields:
+        value = getattr(source_tuple, key).item()
+        if (prefix_include is None or key.startswith(prefix_include)) and (prefix_exclude is None or
+                                                                           not key.startswith(prefix_exclude)):
+            new_key = key if prefix_to_add is None else prefix_to_add+key
+            try:
+                target_dict[new_key].append(value)
+            except KeyError:
+                target_dict[new_key] = [value]
+
+    return target_dict
+
+
+class Moving_Average_Calculator:
+    """ beta is the factor multiplying the moving average.
+        Approximately we average the last 1/(1-beta) points.
+        For example:
+        beta = 0.9 -> 10 points
+        beta = 0.99 -> 100 points
+        The larger beta the longer the time average.
+
+        Usage:
+        MA = Moving_Average_Calculator(beta = 0.99)
+        input_dict = { "x" : 100+i+numpy.random.randn(),
+                   "y" : 50+i+numpy.random.randn()}
+        MA(input_dict)
+    """
+
+    def __init__(self, beta):
+        super().__init__()
+        self._bias = None
+        self._steps = 0
+        self._beta = beta
+        self._dict_accumulate = {}
+        self._dict_MA = {}
+
+    def accumulate(self, input_dict):
+        self._steps += 1
+        self._bias = 1 - self._beta ** self._steps
+
+        for key, value in input_dict.items():
+            try:
+                tmp = self._beta * self._dict_accumulate[key] + (1 - self._beta) * value
+                self._dict_accumulate[key] = tmp
+            except KeyError:
+                self._dict_accumulate[key] = (1 - self._beta) * value
+            self._dict_MA[key] = self._dict_accumulate[key] / self._bias
+        return self._dict_MA
+
+
+class Accumulator(object):
+    """ accumulate a tuple into a dictionary.
+        At the end returns the tuple with the average values """
+
+    def __init__(self):
+        super().__init__()
+        self._counter = 0
+        self._dict_accumulate = OrderedDict()
+        self._tuple_cls = None
+
+    def accumulate(self, input_tuple: tuple, counter_increment: int = 1):
+
+        if self._tuple_cls is None:
+            self._tuple_cls = input_tuple.__class__
+        else:
+            assert isinstance(input_tuple, self._tuple_cls)
+
+        self._counter += counter_increment
+        for key in input_tuple._fields:
+            value = getattr(input_tuple, key) * counter_increment
+            try:
+                self._dict_accumulate[key] = value + self._dict_accumulate[key]
+            except KeyError:
+                self._dict_accumulate[key] = value
+
+    def get_average_tuple(self):
+        tmp = OrderedDict()
+        for k, v in self._dict_accumulate.items():
+            tmp[k] = v/self._counter
+        return self._tuple_cls._make(tmp.values())
+
+    def get_cumulative_tuple(self):
+        return self._tuple_cls._make(self._dict_accumulate.values())
 
 
 class ConditionalRandomCrop(torch.nn.Module):
@@ -432,16 +475,14 @@ def process_one_epoch(model: torch.nn.Module,
                       optimizer: Optional[torch.optim.Optimizer] = None,
                       weight_clipper: Optional[Callable[[None], None]] = None,
                       verbose: bool = False) -> dict:
-    """ return a dictionary with all the metrics """
-    n_terms_in_batch: int = 0
-    dict_accumulate_accuracy: dict = {}
-    dict_metric_av: dict = {}
+    """ return a tuple with all the metrics averaged over a epoch """
+    metric_accumulator = Accumulator()
 
     for i, data in enumerate(dataloader):
         imgs, labels, index = data
         
         # Put data in GPU if available
-        if torch.cuda.is_available():
+        if torch.cuda.is_available() and imgs.device == torch.device('cpu'):
             imgs = imgs.cuda()
             labels = labels.cuda()
             index = index.cuda()
@@ -450,27 +491,9 @@ def process_one_epoch(model: torch.nn.Module,
         if verbose:
             print("i = %3d train_loss=%.5f" % (i, metrics.loss))
 
-        # Accumulate over an epoch
+        # Accumulate metrics over an epoch
         with torch.no_grad():
-
-            # Accumulate metrics
-            n_terms_in_batch += len(index)
-            for key in metrics._fields:
-                # print(key, getattr(metrics, key))
-                if key == 'n_obj_counts':
-                    counts = getattr(metrics, 'n_obj_counts').view_as(labels)
-                else:
-                    value = getattr(metrics, key).item() * len(index)
-                    dict_metric_av[key] = value + dict_metric_av.get(key, 0.0)
-
-            # Accumulate counting accuracy
-            index_wrong_tmp = (labels != counts).cpu()
-            index_right_tmp = (labels == counts).cpu()
-            indices_wrong_examples = index[index_wrong_tmp].tolist()
-            indices_right_examples = index[index_right_tmp].tolist()
-            dict_accumulate_accuracy = accumulate_counting_accuracy(indices_wrong_examples=indices_wrong_examples,
-                                                                    indices_right_examples=indices_right_examples,
-                                                                    dict_accuracy=dict_accumulate_accuracy)
+            metric_accumulator.accumulate(input_tuple=metrics, counter_increment=len(index))
 
         # Only if training I apply backward
         if model.training:
@@ -483,30 +506,15 @@ def process_one_epoch(model: torch.nn.Module,
                 model.__self__.apply(weight_clipper)
                 
         # Delete stuff from GPU
-        del imgs
-        del labels
-        del index
-        del metrics
-        torch.cuda.empty_cache()
-    # --------------------------------------------
-    # end of for i, data in enumerate(dataloader)
-    # --------------------------------------------
+        # del imgs
+        # del labels
+        # del index
+        # del metrics
+        # torch.cuda.empty_cache()
 
     # At the end of the loop compute the average of the metrics
     with torch.no_grad():
-
-        # compute the average of the metrics
-        for k, v in dict_metric_av.items():
-            dict_metric_av[k] = v / n_terms_in_batch
-
-        # compute the accuracy
-        n_right = len(dict_accumulate_accuracy["right_examples"])
-        n_wrong = len(dict_accumulate_accuracy["wrong_examples"])
-        dict_metric_av["accuracy"] = float(n_right) / (n_right + n_wrong)
-        dict_metric_av["wrong_examples"] = dict_accumulate_accuracy["wrong_examples"]
-
-        # join the two dictionary together
-        return dict_metric_av
+        return metric_accumulator.get_average_tuple()
 
 
 def show_batch(images: torch.Tensor,
@@ -514,8 +522,8 @@ def show_batch(images: torch.Tensor,
                n_padding: int = 10,
                title: Optional[str] = None,
                pad_value: int = 1,
-               normalize_range: Optional[tuple] = (0.0, 1.0),
-               figsize: Optional[Tuple[float,float]] = None): 
+               normalize_range: Optional[tuple] = None,
+               figsize: Optional[Tuple[float, float]] = None):
     """Visualize a torch tensor of shape: (batch x ch x width x height) """
     assert len(images.shape) == 4  # batch, ch, width, height
     if images.device != "cpu":

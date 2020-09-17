@@ -2,24 +2,13 @@ from .utilities import *
 from .vae_parts import *
 from .namedtuple import *
 from typing import Union
-import time
 
 
-def pretty_print_metrics(epoch: int,
-                         metric: tuple,
-                         is_train: bool = True) -> str:
-    if is_train:
-        s = 'Train [epoch {0:4d}] loss={1[loss]:.3f}, mse={1[mse]:.3f}, reg={1[reg]:.3f}, kl_tot={1[kl_tot]:.3f}, sparsity={1[sparsity]:.3f}, fg_fraction={1[fg_fraction]:.3f}, geco_sp={1[geco_sparsity]:.3f}, geco_bal={1[geco_balance]:.3f}'.format(epoch, metric)
-    else:
-        s = 'Test  [epoch {0:4d}] loss={1[loss]:.3f}, mse={1[mse]:.3f}, reg={1[reg]:.3f}, kl_tot={1[kl_tot]:.3f}, sparsity={1[sparsity]:.3f}, fg_fraction={1[fg_fraction]:.3f}, geco_sp={1[geco_sparsity]:.3f}, geco_bal={1[geco_balance]:.3f}'.format(epoch, metric)
-    return s
-    
-
-def save_everything(path: str,
-                    model: torch.nn.Module,
-                    optimizer: torch.optim.Optimizer,
-                    history_dict: dict,
-                    hyperparams_dict: dict, epoch: int) -> None:
+def create_ckpt(model: torch.nn.Module,
+                optimizer: torch.optim.Optimizer,
+                history_dict: dict,
+                hyperparams_dict: dict,
+                epoch: int) -> dict:
 
     all_member_var = model.__dict__
     member_var_to_save = {}
@@ -27,43 +16,37 @@ def save_everything(path: str,
         if not k.startswith("_") and k != 'training':
             member_var_to_save[k] = v
 
-    torch.save({'epoch': epoch,
-                'model_member_var': member_var_to_save,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'history_dict': history_dict,
-                'hyperparam_dict': hyperparams_dict}, path)
+    ckpt = {'epoch': epoch,
+            'model_member_var': member_var_to_save,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'history_dict': history_dict,
+            'hyperparam_dict': hyperparams_dict}
+
+    return ckpt
 
 
-def file2resumed(path: str, device: Optional[str]=None):
+def ckpt2file(ckpt: dict, path: str):
+    torch.save(ckpt, path)
+
+
+def file2ckpt(path: str, device: Optional[str]=None):
     """ wrapper around torch.load """
     if device is None:
-        resumed = torch.load(path)
+        ckpt = torch.load(path)
     elif device == 'cuda':
-        resumed = torch.load(path, map_location="cuda:0")
+        ckpt = torch.load(path, map_location="cuda:0")
     elif device == 'cpu':
-        resumed = torch.load(path, map_location=torch.device('cpu'))
+        ckpt = torch.load(path, map_location=torch.device('cpu'))
     else:
         raise Exception("device is not recognized")
-    return resumed
+    return ckpt
 
 
-def load_info(resumed,
-              load_params: bool = False,
-              load_epoch: bool = False,
-              load_history: bool = False) -> Checkpoint:
-
-    epoch = resumed['epoch'] if load_epoch else None
-    hyperparam_dict = resumed['hyperparam_dict'] if load_params else None
-    history_dict = resumed['history_dict'] if load_history else None
-
-    return Checkpoint(history_dict=history_dict, epoch=epoch, hyperparams_dict=hyperparam_dict)
-
-
-def load_model_optimizer(resumed,
-                         model: Union[None, torch.nn.Module] = None,
-                         optimizer: Union[None, torch.optim.Optimizer] = None,
-                         overwrite_member_var: bool = False):
+def load_from_ckpt(ckpt,
+                   model: Union[None, torch.nn.Module] = None,
+                   optimizer: Union[None, torch.optim.Optimizer] = None,
+                   overwrite_member_var: bool = False):
 
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
@@ -71,15 +54,15 @@ def load_model_optimizer(resumed,
 
         # load member variables
         if overwrite_member_var:
-            for key, value in resumed['model_member_var'].items():
+            for key, value in ckpt['model_member_var'].items():
                 setattr(model, key, value)
 
         # load the modules
-        model.load_state_dict(resumed['model_state_dict'])
+        model.load_state_dict(ckpt['model_state_dict'])
         model.to(device)
 
     if optimizer is not None:
-        optimizer.load_state_dict(resumed['optimizer_state_dict'])
+        optimizer.load_state_dict(ckpt['optimizer_state_dict'])
 
 
 def instantiate_optimizer(model: torch.nn.Module,
@@ -134,11 +117,13 @@ class CompositionalVae(torch.nn.Module):
         # Raw image parameters
         self.dict_soft_constraints = params["soft_constraint"]
         self.nms_dict = params["nms"]
-        self.sigma_fg = torch.nn.Parameter(data=torch.tensor(params["GECO_loss"]["fg_std"])[..., None, None],  # add singleton for width, height
+        self.sigma_fg = torch.nn.Parameter(data=torch.tensor(params["GECO_loss"]["fg_std"])[..., None, None],
+                                           # add singleton for width, height
                                            requires_grad=False)
-        self.sigma_bg = torch.nn.Parameter(data=torch.tensor(params["GECO_loss"]["bg_std"])[..., None, None],  # add singleton for width, height
+        self.sigma_bg = torch.nn.Parameter(data=torch.tensor(params["GECO_loss"]["bg_std"])[..., None, None],
+                                           # add singleton for width, height
                                            requires_grad=False)
-        
+
         self.geco_dict = params["GECO_loss"]
         self.input_img_dict = params["input_image"]
 
@@ -155,7 +140,7 @@ class CompositionalVae(torch.nn.Module):
                                 inference: Inference,
                                 verbose: bool = False,
                                 chosen: int = None) -> RegMiniBatch:
-        """ Compute the mean regularization over each image. 
+        """ Compute the mean regularization over each image.
             These regularizations are written only in terms of p.detached and big_masks.
             1. fg_pixel_fraction determines the overall foreground budget
             2. overlap make sure that mask do not overlap
@@ -184,7 +169,6 @@ class CompositionalVae(torch.nn.Module):
                                                             chosen=chosen)
         cost_volume_absolute_times_prob = torch.sum(cost_volume_absolute * inference.prob, dim=-2)  # sum over boxes
 
-
         # Note that before returning I am computing the mean over the batch_size (which is the only dimension left)
         minibatch_mean_cost_overlap = cost_overlap.mean()
         minibatch_mean_cost_volume_absolute_times_prob = cost_volume_absolute_times_prob.mean()
@@ -195,7 +179,7 @@ class CompositionalVae(torch.nn.Module):
 
     @staticmethod
     def NLL_MSE(output: torch.tensor, target: torch.tensor, sigma: torch.tensor) -> torch.Tensor:
-        return ((output-target)/sigma).pow(2)
+        return ((output - target) / sigma).pow(2)
 
     def compute_metrics(self,
                         imgs_in: torch.Tensor,
@@ -216,7 +200,8 @@ class CompositionalVae(torch.nn.Module):
         # if the observation_std is fixed then normalization 1.0/sqrt(2*pi*sigma^2) is irrelevant.
         # We are better off using MeanSquareError metric
         mse_k = CompositionalVae.NLL_MSE(output=inference.big_img, target=imgs_in, sigma=self.sigma_fg)
-        mse_bg = CompositionalVae.NLL_MSE(output=inference.big_bg, target=imgs_in, sigma=self.sigma_bg)  # batch_size, ch, w, h
+        mse_bg = CompositionalVae.NLL_MSE(output=inference.big_bg, target=imgs_in,
+                                          sigma=self.sigma_bg)  # batch_size, ch, w, h
         mse_av = (torch.sum(mixing_k * mse_k, dim=-5) + mixing_bg * mse_bg).mean()  # mean over batch_size, ch, w, h
 
         # 2. Sparsity should encourage:
@@ -230,17 +215,19 @@ class CompositionalVae(torch.nn.Module):
         # New solution = add term sum p so that many objects are penalized
         fg_fraction_mask_av = torch.sum(mixing_fg) / torch.numel(mixing_fg)  # divide by # total pixel
         fg_fraction_box_av = torch.sum(p_times_area_map) / torch.numel(mixing_fg)  # divide by # total pixel
-        prob_total_av = torch.sum(inference.p_map)/ (batch_size * n_boxes)  # quickly converge to order 1
+        prob_total_av = torch.sum(inference.p_map) / (batch_size * n_boxes)  # quickly converge to order 1
 
         # 4. compute the KL for each image
-        kl_zinstance_av = torch.mean(inference.kl_zinstance_each_obj)  # choose latent dim z so that this number is order 1.
+        kl_zinstance_av = torch.mean(
+            inference.kl_zinstance_each_obj)  # choose latent dim z so that this number is order 1.
         kl_zwhere_av = torch.sum(inference.kl_zwhere_map) / (batch_size * n_boxes * 4)  # order 1
-        kl_logit_tot = torch.sum(inference.kl_logit_map) / batch_size  # this will be normalized by running average -> order 1
+        kl_logit_tot = torch.sum(
+            inference.kl_logit_map) / batch_size  # this will be normalized by running average -> order 1
 
         # 5. compute the moving averages
         with torch.no_grad():
             input_dict = {"kl_logit_tot": kl_logit_tot.item()}
-            
+
             # Only if in training mode I accumulate the moving average
             if self.training:
                 ma_dict = self.ma_calculator.accumulate(input_dict)
@@ -321,7 +308,6 @@ class CompositionalVae(torch.nn.Module):
             OUTPUT: sparse tensor fo size (max_index, max_index)
         """
         with torch.no_grad():
-
             # start_time = time.time()
             n_boxes, batch_shape, ch_in, w, h = mixing_k.shape
             assert ch_in == 1
@@ -336,11 +322,12 @@ class CompositionalVae(torch.nn.Module):
 
             sparse_similarity = torch.sparse.FloatTensor(max_index, max_index).to(mixing_k.device)
             for pad_mixing_k_shifted, pad_index_shifted in roller_2d(a=pad_mixing_k,
-                                                                     b=pad_index, 
+                                                                     b=pad_index,
                                                                      radius=radius_nn):
-                v = (pad_mixing_k * pad_mixing_k_shifted).sum(dim=-5)[:, 0, pad:(pad + w), pad:(pad + h)]  # shape: batch, w, h
+                v = (pad_mixing_k * pad_mixing_k_shifted).sum(dim=-5)[:, 0, pad:(pad + w),
+                    pad:(pad + h)]  # shape: batch, w, h
                 col = pad_index_shifted[:, 0, pad:(pad + w), pad:(pad + h)]  # shape: batch, w, h
-                
+
                 mask = (v > min_threshold) * (col >= 0) * row_ge_0
 
                 index_tensor = torch.stack((row[mask], col[mask]), dim=0)
@@ -383,7 +370,8 @@ class CompositionalVae(torch.nn.Module):
 
             # Now compute fg_prob, integer_segmentation_mask, similarity
             most_likely_mixing, index = torch.max(mixing_k, dim=-5, keepdim=True)  # 1, batch_size, 1, w, h
-            integer_mask = ((most_likely_mixing > 0.5) * (index + 1)).squeeze(-5).to(dtype=torch.int32)  # bg = 0 fg = 1,2,3,...
+            integer_mask = ((most_likely_mixing > 0.5) * (index + 1)).squeeze(-5).to(
+                dtype=torch.int32)  # bg = 0 fg = 1,2,3,...
 
             fg_prob = torch.sum(mixing_k, dim=-5)  # sum over instances
 
@@ -427,15 +415,16 @@ class CompositionalVae(torch.nn.Module):
                             batch_size: int = 32) -> (Segmentation, SparseSimilarity):
         """ Uses a sliding window approach to collect a co_objectiveness information
             about the pixels of a large image.
-            
+
             On CPU, pad the image with zeros (this lead to duplication of the data).
             Select the slices and then copy to GPU
         """
         assert len(single_img.shape) == 3
         assert roi_mask is None or len(roi_mask.shape) == 3
-            
-        crop_size = (self.input_img_dict["size_raw_image"], self.input_img_dict["size_raw_image"]) if crop_size is None else crop_size
-        stride = (int(crop_size[0]//4), int(crop_size[1]//4)) if stride is None else stride
+
+        crop_size = (self.input_img_dict["size_raw_image"],
+                     self.input_img_dict["size_raw_image"]) if crop_size is None else crop_size
+        stride = (int(crop_size[0] // 4), int(crop_size[1] // 4)) if stride is None else stride
         n_objects_max_per_patch = self.input_img_dict["n_objects_max"] if n_objects_max_per_patch is \
                                                                           None else n_objects_max_per_patch
         prob_corr_factor = getattr(self, "prob_corr_factor", 0.0) if prob_corr_factor is None else prob_corr_factor
@@ -448,13 +437,13 @@ class CompositionalVae(torch.nn.Module):
         with torch.no_grad():
 
             w_img, h_img = single_img.shape[-2:]
-            n_prediction = (crop_size[0]//stride[0]) * (crop_size[1]//stride[1])
+            n_prediction = (crop_size[0] // stride[0]) * (crop_size[1] // stride[1])
             print(f'Each pixel will be segmented {n_prediction} times')
-            
+
             pad_w = crop_size[0] - stride[0]
             pad_h = crop_size[1] - stride[1]
             pad_list = [pad_w, crop_size[0], pad_h, crop_size[1]]
-            
+
             # This is duplicating the single_img on the CPU
             try:
                 img_padded = F.pad(single_img.cpu(),
@@ -463,34 +452,34 @@ class CompositionalVae(torch.nn.Module):
                 img_padded = F.pad(single_img.cpu(),
                                    pad=pad_list, mode='constant', value=0)  # 1, ch_in, w_pad, h_pad
             w_paddded, h_padded = img_padded.shape[-2:]
-            
+
             # This is creating the index matrix on the cpu
             max_index = w_img * h_img
             index_matrix_padded = F.pad(torch.arange(max_index,
                                                      dtype=torch.long,
-                                                     device=torch.device('cpu')).view(1,w_img, h_img),
-                                        pad=pad_list, mode='constant', value=-1) 
-            
+                                                     device=torch.device('cpu')).view(1, w_img, h_img),
+                                        pad=pad_list, mode='constant', value=-1)
+
             # Build a list with the locations of the corner of the images
             location_of_corner = []
             for i in range(0, w_img + pad_w, stride[0]):
                 for j in range(0, h_img + pad_h, stride[1]):
                     location_of_corner.append([i, j])
-            
+
             ij_tmp = torch.tensor(location_of_corner, device=torch.device('cpu'), dtype=torch.long)  # shape: N, 2
             x1 = ij_tmp[..., 0]
             y1 = ij_tmp[..., 1]
-            
+
             if roi_mask is not None:
                 assert roi_mask.shape[-2:] == img_padded.shape[-2:]
                 cum_roi_mask = F.pad(torch.cumsum(torch.cumsum(roi_mask, dim=-1), dim=-2),
-                                     pad=pad_list, mode='constant', value=0) 
-                
+                                     pad=pad_list, mode='constant', value=0)
+
                 # Exclude stuff if outside the roi_mask
-                integral = cum_roi_mask[0, x1+crop_size[0]-1, y1+crop_size[1]-1] - \
-                           cum_roi_mask[0, x1-1, y1+crop_size[1]-1] * (x1 > 0) - \
-                           cum_roi_mask[0, x1+crop_size[0]-1, y1-1] * (y1 > 0) + \
-                           cum_roi_mask[0, x1-1, y1-1] * (x1 > 0) * (y1 > 0)
+                integral = cum_roi_mask[0, x1 + crop_size[0] - 1, y1 + crop_size[1] - 1] - \
+                           cum_roi_mask[0, x1 - 1, y1 + crop_size[1] - 1] * (x1 > 0) - \
+                           cum_roi_mask[0, x1 + crop_size[0] - 1, y1 - 1] * (y1 > 0) + \
+                           cum_roi_mask[0, x1 - 1, y1 - 1] * (x1 > 0) * (y1 > 0)
                 fraction = integral.float() / (crop_size[0] * crop_size[1])
                 mask = fraction > 0.01  # if there is more than 1% ROI the patch will be processed.
                 x1 = x1[mask]
@@ -498,7 +487,7 @@ class CompositionalVae(torch.nn.Module):
                 del cum_roi_mask
                 del mask
             del ij_tmp
-            
+
             print(f'I am going to process {x1.shape[0]} patches')
             if not (x1.shape[0] >= 1):
                 raise Exception("No patches will be analyzed. Something went wrong!")
@@ -508,19 +497,19 @@ class CompositionalVae(torch.nn.Module):
             n_list_of_list = [index[n:n + batch_size] for n in range(0, index.shape[0], batch_size)]
             n_instances_tot = 0
             for n_batches, n_list in enumerate(n_list_of_list):
-                
-                batch_imgs = torch.stack([img_padded[..., 
-                                                     x1[n]:x1[n]+crop_size[0], 
-                                                     y1[n]:y1[n]+crop_size[1]] for n in n_list], dim=-4)
-                
-                batch_index = torch.stack([index_matrix_padded[..., 
-                                                               x1[n]:x1[n]+crop_size[0], 
-                                                               y1[n]:y1[n]+crop_size[1]] for n in n_list], dim=-4)
-                
+
+                batch_imgs = torch.stack([img_padded[...,
+                                          x1[n]:x1[n] + crop_size[0],
+                                          y1[n]:y1[n] + crop_size[1]] for n in n_list], dim=-4)
+
+                batch_index = torch.stack([index_matrix_padded[...,
+                                           x1[n]:x1[n] + crop_size[0],
+                                           y1[n]:y1[n] + crop_size[1]] for n in n_list], dim=-4)
+
                 # print progress
-                if (n_batches % 10 == 0) or (n_batches == len(n_list_of_list)-1):
-                    print(f'{n_batches} out of {len(n_list_of_list)-1} -> batch_of_imgs.shape = {batch_imgs.shape}')
-                    
+                if (n_batches % 10 == 0) or (n_batches == len(n_list_of_list) - 1):
+                    print(f'{n_batches} out of {len(n_list_of_list) - 1} -> batch_of_imgs.shape = {batch_imgs.shape}')
+
                 segmentation = self.segment(batch_imgs=batch_imgs.to(self.sigma_fg.device),
                                             n_objects_max=n_objects_max_per_patch,
                                             prob_corr_factor=prob_corr_factor,
@@ -530,7 +519,7 @@ class CompositionalVae(torch.nn.Module):
                                             batch_of_index=batch_index.to(self.sigma_fg.device),
                                             max_index=max_index,
                                             radius_nn=radius_nn)
-                #print("segmentation time", time.time()-start_time)
+                # print("segmentation time", time.time()-start_time)
 
                 if big_fg_prob is None:
                     # Probability and integer mask are dense tensor
@@ -548,20 +537,20 @@ class CompositionalVae(torch.nn.Module):
                 sparse_similarity_matrix = sparse_similarity_matrix.coalesce()
                 fg_prob = segmentation.fg_prob.cpu()
                 integer_mask = segmentation.integer_mask.cpu()
-                
+
                 for k, n in enumerate(n_list):
-                    big_fg_prob[x1[n]:x1[n]+crop_size[0],
-                                y1[n]:y1[n]+crop_size[1]] += fg_prob[k, 0]
-                    
+                    big_fg_prob[x1[n]:x1[n] + crop_size[0],
+                    y1[n]:y1[n] + crop_size[1]] += fg_prob[k, 0]
+
                     # Find a set of not-overlapping tiles to obtain a sample segmentation (without graph clustering)
                     if ((x1[n] - pad_w) % crop_size[0] == 0) and ((y1[n] - pad_h) % crop_size[1] == 0):
                         n_instances = torch.max(integer_mask[k])
                         shifted_integer_mask = (integer_mask[k] > 0) * \
                                                (integer_mask[k] + n_instances_tot)
                         n_instances_tot += n_instances
-                        big_integer_mask[x1[n]:x1[n]+crop_size[0],
-                                         y1[n]:y1[n]+crop_size[1]] = shifted_integer_mask[0]
-                        
+                        big_integer_mask[x1[n]:x1[n] + crop_size[0],
+                        y1[n]:y1[n] + crop_size[1]] = shifted_integer_mask[0]
+
             # End of loop over batches
             sparse_similarity_matrix.div_(n_prediction)
             big_fg_prob.div_(n_prediction)
@@ -571,7 +560,8 @@ class CompositionalVae(torch.nn.Module):
                                 integer_mask=big_integer_mask[None, None, pad_w:pad_w + w_img, pad_h:pad_h + h_img],
                                 bounding_boxes=None,
                                 similarity=SparseSimilarity(sparse_matrix=sparse_similarity_matrix,
-                                                            index_matrix=index_matrix_padded[pad_w:pad_w + w_img, pad_h:pad_h + h_img]))
+                                                            index_matrix=index_matrix_padded[pad_w:pad_w + w_img,
+                                                                         pad_h:pad_h + h_img]))
 
     # this is the generic function which has all the options unspecified
     def process_batch_imgs(self,
@@ -657,7 +647,6 @@ class CompositionalVae(torch.nn.Module):
                  verbose: bool = False):
 
         with torch.no_grad():
-            
             return self.process_batch_imgs(imgs_in=torch.zeros_like(imgs_in),
                                            generate_synthetic_data=True,
                                            topk_only=False,
@@ -671,3 +660,136 @@ class CompositionalVae(torch.nn.Module):
                                            n_objects_max=self.input_img_dict["n_objects_max"],
                                            bg_is_zero=True,
                                            bg_resolution=(2, 2))
+
+#------------------------------------#
+#------------------------------------#
+#------------------------------------#
+#------------------------------------#
+#------------------------------------#
+#------------------------------------#
+
+
+class SimpleVae(torch.nn.Module):
+
+    def __init__(self, params: dict) -> None:
+        super().__init__()
+
+        # Instantiate all the modules
+        leaky = False
+        if leaky:
+            self.decoder: DecoderConvLeaky = DecoderConvLeaky(size=params["architecture"]["cropped_size"],
+                                                              dim_z=params["architecture"]["dim_zinstance"],
+                                                              ch_out=params["input_image"]["ch_in"])
+
+            self.encoder: EncoderConvLeaky = EncoderConvLeaky(size=params["architecture"]["cropped_size"],
+                                                              ch_in=params["input_image"]["ch_in"],
+                                                              dim_z=params["architecture"]["dim_zinstance"])
+        else:
+            self.decoder: DecoderConv = DecoderConv(size=params["architecture"]["cropped_size"],
+                                                    dim_z=params["architecture"]["dim_zinstance"],
+                                                    ch_out=params["input_image"]["ch_in"])
+
+            self.encoder: EncoderConv = EncoderConv(size=params["architecture"]["cropped_size"],
+                                                    ch_in=params["input_image"]["ch_in"],
+                                                    dim_z=params["architecture"]["dim_zinstance"])
+
+        # Raw image parameters
+        self.sigma = torch.nn.Parameter(data=torch.tensor(params["GECO_loss"]["fg_std"])[..., None, None],  # add singleton for width, height
+                                        requires_grad=False)
+
+        self.geco_dict = params["GECO_loss"]
+        self.input_img_dict = params["input_image"]
+
+        self.geco_balance_factor = torch.nn.Parameter(data=torch.tensor(self.geco_dict["factor_balance_range"][1]),
+                                                      requires_grad=True)
+
+        # Put everything on the cude if cuda available
+        if torch.cuda.is_available():
+            self.cuda()
+
+    @staticmethod
+    def NLL_MSE(output: torch.tensor, target: torch.tensor, sigma: torch.tensor) -> torch.Tensor:
+        return ((output - target) / sigma).pow(2)
+
+    def compute_metrics(self,
+                        imgs_in: torch.Tensor,
+                        imgs_out: torch.Tensor,
+                        kl: torch.Tensor):
+
+        # We are better off using MeanSquareError metric
+        mse = SimpleVae.NLL_MSE(output=imgs_out, target=imgs_in.detach(), sigma=self.sigma)
+        mse_av = mse.mean()  # mean over batch_size, ch, w, h
+
+        # 4. compute the KL for each image
+        kl_av = torch.mean(kl)  # mean over batch_size and latend dimension of z
+        assert mse_av.shape == kl_av.shape
+
+        # Note that I clamp in_place
+        with torch.no_grad():
+            f_balance = self.geco_balance_factor.data.clamp_(min=min(self.geco_dict["factor_balance_range"]),
+                                                             max=max(self.geco_dict["factor_balance_range"]))
+            one_minus_f_balance = torch.ones_like(f_balance) - f_balance
+
+        # 6. Loss_VAE
+        loss_vae = f_balance * mse_av + one_minus_f_balance * kl_av
+
+        # GECO BUSINESS
+        if self.geco_dict["is_active"]:
+            with torch.no_grad():
+                # If nll_av > max(target) -> tmp3 > 0 -> delta_2 < 0 -> bad reconstruction -> increase f_balance
+                # If nll_av < min(target) -> tmp4 > 0 -> delta_2 > 0 -> too good reconstruction -> decrease f_balance
+                tmp3 = (mse_av - max(self.geco_dict["target_mse"])).clamp(min=0)
+                tmp4 = (min(self.geco_dict["target_mse"]) - mse_av).clamp(min=0)
+                delta_2 = (tmp4 - tmp3).requires_grad_(False).to(loss_vae.device)
+
+            loss_2 = self.geco_balance_factor * delta_2
+            loss_av = loss_vae + loss_2 - loss_2.detach()
+        else:
+            delta_2 = torch.tensor(0.0, dtype=loss_vae.dtype, device=loss_vae.device)
+            loss_av = loss_vae
+
+        # add everything you want as long as there is one loss
+        return MetricMiniBatchSimple(loss=loss_av,
+                                     mse=mse_av.detach(),
+                                     kl_tot=kl_av.detach(),
+                                     geco_balance=f_balance,
+                                     delta_2=delta_2)
+
+    # this is the generic function which has all the options unspecified
+    def process_batch_imgs(self,
+                           imgs_in: torch.tensor,
+                           generate_synthetic_data: bool,
+                           noisy_sampling: bool):
+        """ It needs to return: metric (with a .loss member) and whatever else """
+
+        # Checks
+        assert len(imgs_in.shape) == 4
+        assert self.input_img_dict["ch_in"] == imgs_in.shape[-3]
+        # End of Checks #
+
+        z_inferred: ZZ = self.encoder.forward(imgs_in)
+        z: DIST = sample_and_kl_diagonal_normal(posterior_mu=z_inferred.mu,
+                                                posterior_std=z_inferred.std,
+                                                prior_mu=torch.zeros_like(z_inferred.mu),
+                                                prior_std=torch.ones_like(z_inferred.std),
+                                                noisy_sampling=noisy_sampling,
+                                                sample_from_prior=generate_synthetic_data)
+
+        imgs_rec = torch.sigmoid(self.decoder.forward(z.sample))
+
+        metrics = self.compute_metrics(imgs_in=imgs_in,
+                                       imgs_out=imgs_rec,
+                                       kl=z.kl)
+
+        return OutputSimple(metrics=metrics, z=z.sample, imgs=imgs_rec)
+
+    def forward(self, imgs_in: torch.tensor):
+        return self.process_batch_imgs(imgs_in=imgs_in,
+                                       generate_synthetic_data=False,
+                                       noisy_sampling=True)  # True if self.training else False,
+
+    def generate(self, imgs_in: torch.tensor):
+        with torch.no_grad():
+            return self.process_batch_imgs(imgs_in=torch.zeros_like(imgs_in),
+                                           generate_synthetic_data=True,
+                                           noisy_sampling=True)
