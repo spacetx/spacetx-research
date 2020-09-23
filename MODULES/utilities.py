@@ -3,12 +3,11 @@ import PIL.Image
 import PIL.ImageDraw 
 import json
 import numpy
-from torchvision import utils
-from matplotlib import pyplot as plt
+import dill
 from torch.distributions.utils import broadcast_all
-from typing import Union, Callable, Optional, List, Tuple
+from typing import Union, Callable, Optional
+from .utilities_visualization import show_batch
 from .namedtuple import BB, DIST
-import torch.nn.functional as F
 from collections import OrderedDict
 
 
@@ -144,12 +143,13 @@ def linear_interpolation(t: Union[numpy.array, float], values: tuple, times: tup
     return numpy.clip(v, v_min, v_max)
 
 
-def flatten_list(my_list: List[List]) -> list:
-    flat_list: list = []
-    for sublist in my_list:
-        for item in sublist:
-            flat_list.append(item)
-    return flat_list
+def flatten_list(ll):
+    if not ll:  # equivalent to if ll == []
+        return ll
+    elif isinstance(ll[0], list):
+        return flatten_list(ll[0]) + flatten_list(ll[1:])
+    else:
+        return ll[:1] + flatten_list(ll[1:])
 
 
 def flatten_dict(dd, separator='_', prefix=''):
@@ -159,20 +159,16 @@ def flatten_dict(dd, separator='_', prefix=''):
             } if isinstance(dd, dict) else {prefix: dd}
 
 
-def downsample_and_upsample(x: torch.Tensor, low_resolution: tuple, high_resolution: tuple):
-    low_res_x = F.interpolate(x, size=low_resolution, mode='bilinear', align_corners=True)
-    high_res_x = F.interpolate(low_res_x, size=high_resolution, mode='bilinear', align_corners=True)
-    return high_res_x
-
-
 def save_obj(obj, path):
     with open(path, 'wb') as f:
-        torch.save(obj, f, pickle_protocol=2, _use_new_zipfile_serialization=True)
-
+        torch.save(obj, f,
+                   pickle_module=dill,
+                   pickle_protocol=2,
+                   _use_new_zipfile_serialization=True)
 
 def load_obj(path):
     with open(path, 'rb') as f:
-        return torch.load(f)
+        return torch.load(f, pickle_module=dill)
 
 
 def load_json_as_dict(path):
@@ -190,38 +186,50 @@ def are_broadcastable(a: torch.Tensor, b: torch.Tensor) -> bool:
     return all((m == n) or (m == 1) or (n == 1) for m, n in zip(a.shape[::-1], b.shape[::-1]))
 
 
-def append_tuple_to_dict(source_tuple, target_dict, prefix_include=None, prefix_exclude=None, prefix_to_add=None):
+def append_to_dict(source: Union[tuple, dict],
+                   target: dict,
+                   prefix_include: str = None,
+                   prefix_exclude: str = None,
+                   prefix_to_add: str = None):
     """ Use typing.
         For now: prefix_include is str or tuple of str
         For now: prefix_exclude is str or tuple of str
         For now: prefix_to_add is str """
 
-    for key in source_tuple._fields:
-        value = getattr(source_tuple, key).item()
+    if isinstance(source, tuple):
+        input_dict = source._asdict()
+    elif isinstance(source, dict) or isinstance(source, OrderedDict):
+        input_dict = source
+    else:
+        raise Exception
+
+    for key, value in input_dict.items():
+
+        try:
+            value = value.item()
+        except AttributeError:
+            pass
+
         if (prefix_include is None or key.startswith(prefix_include)) and (prefix_exclude is None or
                                                                            not key.startswith(prefix_exclude)):
             new_key = key if prefix_to_add is None else prefix_to_add+key
             try:
-                target_dict[new_key].append(value)
+                target[new_key].append(value)
             except KeyError:
-                target_dict[new_key] = [value]
+                target[new_key] = [value]
+    return target
 
-    return target_dict
 
+class Moving_Average_Calculator(object):
+    """ Compute the moving average of a dictionary.
+        Return the dictionary with the moving average up to that point
 
-class Moving_Average_Calculator:
-    """ beta is the factor multiplying the moving average.
+        beta is the factor multiplying the moving average.
         Approximately we average the last 1/(1-beta) points.
         For example:
         beta = 0.9 -> 10 points
         beta = 0.99 -> 100 points
         The larger beta the longer the time average.
-
-        Usage:
-        MA = Moving_Average_Calculator(beta = 0.99)
-        input_dict = { "x" : 100+i+numpy.random.randn(),
-                   "y" : 50+i+numpy.random.randn()}
-        MA(input_dict)
     """
 
     def __init__(self, beta):
@@ -247,41 +255,56 @@ class Moving_Average_Calculator:
 
 
 class Accumulator(object):
-    """ accumulate a tuple into a dictionary.
+    """ accumulate a tuple or tuple into a dictionary.
         At the end returns the tuple with the average values """
 
     def __init__(self):
         super().__init__()
         self._counter = 0
         self._dict_accumulate = OrderedDict()
-        self._tuple_cls = None
+        self._input_cls = None
 
-    def accumulate(self, input_tuple: tuple, counter_increment: int = 1):
+    def accumulate(self, input: Union[tuple, dict], counter_increment: int = 1):
 
-        if self._tuple_cls is None:
-            self._tuple_cls = input_tuple.__class__
+        if self._input_cls is None:
+            self._input_cls = input.__class__
         else:
-            assert isinstance(input_tuple, self._tuple_cls)
+            assert isinstance(input, self._input_cls)
+
+        if isinstance(input, tuple):
+            input_dict = input._asdict()
+        elif isinstance(input, dict) or isinstance(input, OrderedDict):
+            input_dict = input
+        else:
+            raise Exception
 
         self._counter += counter_increment
-        for key in input_tuple._fields:
-            value = getattr(input_tuple, key) * counter_increment
-            try:
-                self._dict_accumulate[key] = value + self._dict_accumulate[key]
-            except KeyError:
-                self._dict_accumulate[key] = value
 
-    def get_average_tuple(self):
-        tmp = OrderedDict()
+        for k, v in input_dict.items():
+            try:
+                self._dict_accumulate[k] = v * counter_increment + self._dict_accumulate[k]
+            except KeyError:
+                self._dict_accumulate[k] = v * counter_increment
+
+    def get_cumulative(self):
+        return self.export(self._dict_accumulate)
+
+    def get_average(self):
+        tmp = self._dict_accumulate
         for k, v in self._dict_accumulate.items():
             tmp[k] = v/self._counter
-        return self._tuple_cls._make(tmp.values())
+        return self.export(tmp)
 
-    def get_cumulative_tuple(self):
-        return self._tuple_cls._make(self._dict_accumulate.values())
+    def export(self, od):
+        if self._input_cls == dict:
+            return dict(od)
+        elif self._input_cls == OrderedDict:
+            return od
+        else:
+            return self._input_cls._make(od.values())
 
 
-class ConditionalRandomCrop(torch.nn.Module):
+class ConditionalRandomCrop(object):
     """ Crop a torch Tensor at random locations to obtain output of given size.
         The random crop is accepted only if it is inside the Region Of Interest (ROI) """
 
@@ -359,18 +382,18 @@ class ConditionalRandomCrop(torch.nn.Module):
                     bij_list.append([b, i, j])
         return bij_list
 
-    def crop_from_list(self, img: torch.Tensor, bij_list: list):
+    def collate_crops_from_list(self, img: torch.Tensor, bij_list: list):
         return torch.stack([img[b, :, i:i+self.desired_w, j:j+self.desired_h] for b, i, j in bij_list], dim=-4)
 
-    def forward(self,
-                img: torch.Tensor,
-                roi_mask: Optional[torch.Tensor] = None,
-                cum_sum_roi_mask: Optional[torch.Tensor] = None,
-                n_crops_per_image: Optional[int] = None):
+    def crop(self,
+             img: torch.Tensor,
+             roi_mask: Optional[torch.Tensor] = None,
+             cum_sum_roi_mask: Optional[torch.Tensor] = None,
+             n_crops_per_image: Optional[int] = None):
 
         n_crops_per_image = self.n_crops_per_image if n_crops_per_image is None else n_crops_per_image
         bij_list = self.get_index(img, roi_mask, cum_sum_roi_mask, n_crops_per_image)
-        return self.crop_from_list(img, bij_list)
+        return self.collate_crops_from_list(img, bij_list)
 
 
 class SpecialDataSet(object):
@@ -437,7 +460,7 @@ class SpecialDataSet(object):
                 bij_list += self.data_augmentaion.get_index(img=self.img[i],
                                                             cum_sum_roi_mask=self.cum_roi_mask[i],
                                                             n_crops_per_image=1)
-            return self.data_augmentaion.crop_from_list(self.img, bij_list), self.labels[index], index
+            return self.data_augmentaion.collate_crops_from_list(self.img, bij_list), self.labels[index], index
 
     def __iter__(self, batch_size=None, drop_last=None, shuffle=None):
         # If not specified use defaults
@@ -493,7 +516,7 @@ def process_one_epoch(model: torch.nn.Module,
 
         # Accumulate metrics over an epoch
         with torch.no_grad():
-            metric_accumulator.accumulate(input_tuple=metrics, counter_increment=len(index))
+            metric_accumulator.accumulate(input=metrics, counter_increment=len(index))
 
         # Only if training I apply backward
         if model.training:
@@ -514,33 +537,7 @@ def process_one_epoch(model: torch.nn.Module,
 
     # At the end of the loop compute the average of the metrics
     with torch.no_grad():
-        return metric_accumulator.get_average_tuple()
-
-
-def show_batch(images: torch.Tensor,
-               n_col: int = 4,
-               n_padding: int = 10,
-               title: Optional[str] = None,
-               pad_value: int = 1,
-               normalize_range: Optional[tuple] = None,
-               figsize: Optional[Tuple[float, float]] = None):
-    """Visualize a torch tensor of shape: (batch x ch x width x height) """
-    assert len(images.shape) == 4  # batch, ch, width, height
-    if images.device != "cpu":
-        images = images.cpu()
-    if normalize_range is None:
-        grid = utils.make_grid(images, n_col, n_padding, normalize=False, pad_value=pad_value)
-    else:
-        grid = utils.make_grid(images, n_col, n_padding, normalize=True, range=normalize_range,
-                               scale_each=False, pad_value=pad_value)
-        
-    fig = plt.figure(figsize=figsize)
-    plt.imshow(grid.detach().permute(1,2,0).squeeze(-1).numpy())
-    if isinstance(title, str):
-        plt.title(title)
-    plt.close(fig)
-    fig.tight_layout()
-    return fig
+        return metric_accumulator.get_average()
 
 
 def compute_ranking(x: torch.Tensor) -> torch.Tensor:
@@ -555,23 +552,6 @@ def compute_ranking(x: torch.Tensor) -> torch.Tensor:
     batch_index = torch.arange(batch_size, dtype=order.dtype, device=order.device).view(1, -1).expand(n, batch_size)
     rank[order, batch_index] = torch.arange(n, dtype=order.dtype, device=order.device).view(-1, 1).expand(n, batch_size)
     return rank
-
-
-def plot_grid(img, figsize=None):
-    assert len(img.shape) == 3
-    N = img.shape[-3]
-
-    MAX_row = N // 4
-    if MAX_row <= 1:
-        figure, axes = plt.subplots(ncols=N, figsize=figsize)
-        for n in range(N):
-            axes[n].imshow(img[n])
-    else:
-        figure, axes = plt.subplots(ncols=4, nrows=MAX_row, figsize=figsize)
-        for n in range(4 * MAX_row):
-            row = n // 4
-            col = n % 4
-            axes[row, col].imshow(img[n])
 
 
 def compute_average_in_box(imgs: torch.Tensor, bounding_box: BB) -> torch.Tensor:
@@ -727,204 +707,3 @@ def sample_from_constraints_dict(dict_soft_constraints: dict,
             print("cost ->", cost[..., chosen])
 
     return cost
-
-
-### def weighted_sampling_without_replacement(weights, n, dim):
-###     """ Use the algorithm in:
-###         https://github.com/LeviViana/torch_sampling/blob/master/Proof%20Weighted%20Sampling.pdf
-###
-###         Given the weights, it perform random sampling of n elements without replacement along the dimension dim
-###     """
-###     x = torch.rand_like(weights)
-###     keys = x.pow(1.0/weights)
-###     value, index = torch.topk(keys, n, dim=dim, largest=True, sorted=True)
-###     return index
-
-##### class Constraint(object):
-#####     @staticmethod
-#####     def define(lower_bound, upper_bound):
-#####         if (lower_bound is not None) and (upper_bound is not None):
-#####             return ConstraintRange(lower_bound=lower_bound, upper_bound=upper_bound)
-#####         elif lower_bound is not None:
-#####             return ConstraintLarger(lower_bound=lower_bound)
-#####         elif upper_bound is not None:
-#####             return ConstraintSmaller(upper_bound=upper_bound)
-#####         else:
-#####             # both lower_bound and upper_bound are None
-#####             return ConstraintIdentity()
-#####
-#####     def to_unconstrained(self, value):
-#####         raise NotImplementedError
-#####
-#####     def to_constrained(self, value):
-#####         raise NotImplementedError
-#####
-#####
-##### class ConstraintIdentity(Constraint):
-#####     """ Base Constraints which implement the identity """
-#####     def __init__(self) -> None:
-#####         super().__init__()
-#####
-#####     def to_unconstrained(self, value):
-#####         return value
-#####
-#####     def to_constrained(self, value):
-#####         return value
-#####
-#####
-##### class ConstraintLarger(Constraint):
-#####     def __init__(self, lower_bound):
-#####         super().__init__()
-#####         self.lower_bound = lower_bound
-#####         self.beta = 1.0
-#####         self.threshold = 10.0
-#####
-#####     def inverse_softplus(self, x):
-#####         """ takes value in (0, +Infinity) and returns in (-Infinity, Infinity) """
-#####         assert (x >= 0.0).all()
-#####         tmp = torch.log(torch.exp(x) - self.beta)
-#####         result = torch.where(x > self.threshold, x, tmp)
-#####         return torch.where(torch.isinf(-result), -14.0 * torch.ones_like(result), result)
-#####
-#####     def to_unconstrained(self, value):
-#####         """ takes value in (lower_bound, +Infinity) and returns in (-Infinity, Infinity) """
-#####         delta = value - self.lower_bound  # is >= 0
-#####         return self.inverse_softplus(delta)
-#####
-#####     def to_constrained(self, value):
-#####         """ takes value in (-Infinity, Infinity) and returns in (lower_bound, +Infinity) """
-#####         return F.softplus(value, beta=self.beta, threshold=self.threshold) + self.lower_bound
-#####
-#####
-##### class ConstraintSmaller(Constraint):
-#####     def __init__(self, upper_bound):
-#####         super().__init__()
-#####         self.upper_bound = upper_bound
-#####         self.beta = 1.0
-#####         self.threshold = 10.0
-#####
-#####     def inverse_softplus(self, x):
-#####         """ takes value in (0, +Infinity) and returns in (-Infinity, Infinity) """
-#####         assert (x >= 0.0).all()
-#####         tmp = torch.log(torch.exp(x) - self.beta)
-#####         result = torch.where(x > self.threshold, x, tmp)
-#####         return torch.where(torch.isinf(-result), -14.0 * torch.ones_like(result), result)
-#####
-#####     def to_unconstrained(self, value):
-#####         """ takes value in (-Infinity, upper_bound) and returns in (-Infinity, Infinity) """
-#####         delta = self.upper_bound - value  # >= 0
-#####         return - self.inverse_softplus(delta)
-#####
-#####     def to_constrained(self, value):
-#####         """ takes value in (-Infinity, Infinity) and returns in (-Infinity, upper_bound) """
-#####         return self.upper_bound - F.softplus(-value, beta=1, threshold=10.0)
-#####
-#####
-##### class ConstraintRange(Constraint):
-#####     def __init__(self, lower_bound, upper_bound):
-#####         super().__init__()
-#####         self.lower_bound = lower_bound
-#####         self.upper_bound = upper_bound
-#####         self.delta = self.upper_bound - self.lower_bound
-#####
-#####     def to_unconstrained(self, value):
-#####         """ takes value in (lower_bound, upper_bound) and returns in (-Infinity, Infinity) """
-#####         assert ((self.lower_bound <= value) & (value <= self.upper_bound)).all()
-#####         x0 = (value - self.lower_bound) / self.delta  # this is in (0,1)
-#####         x1 = 2 * x0 - 1  # this is in (-1,1)
-#####         return torch.log1p(x1) - torch.log1p(-x1)  # when x1=+/- 1 result is +/- Infinity
-#####
-#####     def to_constrained(self, value):
-#####         """ takes value in (-Infinity, Infinity) and returns in (lower_bound, upper_bound) """
-#####         return torch.sigmoid(value) * self.delta + self.lower_bound
-#####
-#####
-##### class ConstrainedParam(torch.nn.Module):
-#####     def __init__(self, initial_data: torch.Tensor, transformation: Constraint):
-#####         super().__init__()
-#####         self.transformation = transformation
-#####         with torch.no_grad():
-#####             init_unconstrained = self.transformation.to_unconstrained(initial_data.detach())
-#####         self.unconstrained = torch.nn.Parameter(init_unconstrained, requires_grad=True)
-#####
-#####     def forward(self):
-#####         # return constrained parameter
-#####         return self.transformation.to_constrained(self.unconstrained)
-#####
-#####
-#####
-#####def param_constraint(module: torch.nn.Module,
-#####                     name: str,
-#####                     data: torch.Tensor,
-#####                     transformation: ConstraintBase = ConstraintBase) -> Tuple[torch.Tensor, torch.Tensor]:
-#####    """ define a constrained parameters inside a torch.module and return both constrained and unconstrained values """
-#####
-#####    # Make sure that a parameters with that name was initialized during the module initialization.
-#####    # This is to guaranteed that the parameters is registered with the optimizer
-#####    assert name in module._parameters
-#####
-#####    # Look for name in transformation_store which might not exist yet
-#####    try:
-#####        found = name in module.transformation_store
-#####    except AttributeError:
-#####        module.transformation_store = {}
-#####        found = False
-#####
-#####    # If not found save both transformation and the unconstrained value in two dictionaries which live on the module
-#####    if not found:
-#####        module.transformation_store[name] = transformation
-#####        with torch.no_grad():
-#####            data_unconstrained = transformation.to_unconstrained(data.detach())
-#####        # next line will automatically register the parameters in the module._parameters dictionary
-#####        setattr(module, name, torch.nn.Parameter(data_unconstrained, requires_grad=True))
-#####
-#####    # Read transformation and unconstrained_values from dictionary
-#####    transformation = module.transformation_store[name]
-#####    unconstrained_value = getattr(module, name)
-#####
-#####    # Transform from unconstrained to constrained
-#####    constrained_value = transformation.to_constrained(unconstrained_value)
-#####    return constrained_value, unconstrained_value
-
-
-###class MSE_learn_sigma(torch.nn.Module):
-###    """ MSE which learns the right value for sigma unless sigma is passed in which case that external value is used
-###        I use the expression: sigma = e^x + eps to guarantee that sigma >= eps.
-###        x is the unconstrained torch.parameter
-###    """
-###    def __init__(self,
-###                 initial_value: torch.Tensor,
-###                 eps: Union[float, torch.Tensor] = 1E-3):
-###        super().__init__()
-###        self.eps = eps * torch.ones_like(initial_value)
-###        self.unconstrained = torch.nn.Parameter(torch.log(initial_value), requires_grad=True)
-###
-###    def __get_sigma__(self):
-###        # sigma = e^x + eps
-###        return self.unconstrained.exp_() + self.eps
-###
-###    def __get_log_sigma__(self):
-###        # log(sigma) = log(e^x + eps) = x + log(1+ eps/e^x) = x + log1p(eps/e^x)
-###        f = self.eps / self.unconstrained.exp_()
-###        return self.unconstrained + torch.log1p(f)
-###
-###    def forward(self,
-###                output: torch.Tensor,
-###                target: torch.Tensor,
-###                sigma: Union[float, torch.Tensor, None] = None) -> torch.Tensor:
-###
-###        if sigma is None:
-###
-###            # If nothing is passed use self.sigma and make sure to learn it
-###            if self.unconstrained.device != output.device:
-###                self.unconstrained = self.unconstrained.to(output.device)
-###                self.eps = self.eps.to(output.device)
-###
-###            sigma = self.__get_sigma__()
-###            log_sigma = self.__get_log_sigma__()
-###            return ((output-target)/sigma).pow(2) + 2*log_sigma - 2*log_sigma.detach()
-###
-###        else:
-###
-###            # Use whatever it was passed
-###            return ((output - target) / sigma).pow(2)

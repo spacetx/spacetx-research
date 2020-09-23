@@ -6,7 +6,6 @@ from .unet_model import UNet
 from .encoders_decoders import EncoderConv, DecoderConv, Decoder1by1Linear, EncoderConvLeaky, DecoderConvLeaky
 from .utilities import compute_average_in_box, compute_ranking
 from .utilities import sample_and_kl_diagonal_normal, sample_and_kl_multivariate_normal
-from .utilities import downsample_and_upsample
 from .namedtuple import Inference, BB, NMSoutput, UNEToutput, ZZ, DIST
 
 
@@ -63,11 +62,9 @@ def from_weights_to_masks(weight: torch.Tensor, dim: int):
 
 def downsample_and_upsample(x: torch.Tensor, low_resolution: tuple, high_resolution: tuple):
     low_res_x = F.adaptive_avg_pool2d(x, output_size=low_resolution)
+    # low_res_x = F.adaptive_max_pool2d(x, output_size=low_resolution)
     high_res_x = F.interpolate(low_res_x, size=high_resolution, mode='bilinear', align_corners=True)
     return high_res_x
-
-
-
 
 
 class Inference_and_Generation(torch.nn.Module):

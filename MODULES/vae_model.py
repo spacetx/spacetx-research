@@ -1,7 +1,7 @@
 from .utilities import *
 from .vae_parts import *
 from .namedtuple import *
-from typing import Union
+from typing import Optional
 
 
 def create_ckpt(model: torch.nn.Module,
@@ -44,8 +44,8 @@ def file2ckpt(path: str, device: Optional[str]=None):
 
 
 def load_from_ckpt(ckpt,
-                   model: Union[None, torch.nn.Module] = None,
-                   optimizer: Union[None, torch.optim.Optimizer] = None,
+                   model: Optional[torch.nn.Module] = None,
+                   optimizer: Optional[torch.optim.Optimizer] = None,
                    overwrite_member_var: bool = False):
 
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
@@ -216,6 +216,10 @@ class CompositionalVae(torch.nn.Module):
         fg_fraction_mask_av = torch.sum(mixing_fg) / torch.numel(mixing_fg)  # divide by # total pixel
         fg_fraction_box_av = torch.sum(p_times_area_map) / torch.numel(mixing_fg)  # divide by # total pixel
         prob_total_av = torch.sum(inference.p_map) / (batch_size * n_boxes)  # quickly converge to order 1
+
+        exp.log_metric("fg_fraction_mask_av", fg_fraction_mask_av)
+        exp.log_metric("fg_fraction_box_av", fg_fraction_box_av)
+        exp.log_metric("prob_total_av", prob_total_av)
 
         # 4. compute the KL for each image
         kl_zinstance_av = torch.mean(
