@@ -24,7 +24,7 @@ params = load_json_as_dict("./ML_parameters.json")
 
 neptune.set_project(params["neptune_project"])
 exp = neptune.create_experiment(params=flatten_dict(params),
-                                upload_source_files=["./MODULES/vae_model.py", "./encoders_decoders.py"],
+                                upload_source_files=["./MODULES/vae_model.py", "./MODULES/encoders_decoders.py"],
                                 upload_stdout=True,
                                 upload_stderr=True)
 
@@ -34,13 +34,13 @@ preprocessed = load_obj("./data_train.pt")
 img_torch = preprocessed.img.float()
 roi_mask_torch = preprocessed.roi_mask.bool()
 assert len(img_torch.shape) == len(roi_mask_torch.shape) == 4
-print("GPU GB after opening data ->",torch.cuda.memory_allocated()/1E9)
+#print("GPU GB after opening data ->",torch.cuda.memory_allocated()/1E9)
 
 
 BATCH_SIZE = params["simulation"]["batch_size"]
 SIZE_CROPS = params["input_image"]["size_raw_image"]
 N_TEST = params["simulation"]["N_test"]
-N_TRAIN = params["input_image"]["N_train"]
+N_TRAIN = params["simulation"]["N_train"]
 conditional_crop_test = ConditionalRandomCrop(desired_w=SIZE_CROPS, desired_h=SIZE_CROPS, 
                                               min_roi_fraction=0.9, n_crops_per_image=N_TEST)
 
@@ -49,7 +49,7 @@ conditional_crop_train = ConditionalRandomCrop(desired_w=SIZE_CROPS, desired_h=S
 
 test_data = conditional_crop_test.forward(img=img_torch,
                                           roi_mask=roi_mask_torch)
-print("GPU GB after defining test data ->",torch.cuda.memory_allocated()/1E9)
+#print("GPU GB after defining test data ->",torch.cuda.memory_allocated()/1E9)
 
 
 test_loader = SpecialDataSet(img=test_data,
@@ -59,7 +59,7 @@ test_loader = SpecialDataSet(img=test_data,
                              batch_size=BATCH_SIZE)
 test_batch_example = test_loader.check_batch()
 exp.log_image("test_batch_example", test_batch_example)
-print("GPU GB after test_loader ->",torch.cuda.memory_allocated()/1E9)
+#print("GPU GB after test_loader ->",torch.cuda.memory_allocated()/1E9)
 
 
 train_loader = SpecialDataSet(img=img_torch, 
@@ -71,7 +71,7 @@ train_loader = SpecialDataSet(img=img_torch,
                               batch_size=BATCH_SIZE)
 traing_batch_example = traing_loader.check_batch()
 exp.log_image("traing_batch_example", traing_batch_example)
-print("GPU GB after train_loader ->",torch.cuda.memory_allocated()/1E9)
+#print("GPU GB after train_loader ->",torch.cuda.memory_allocated()/1E9)
 
 reference_imgs, labels, index = test_loader.load(8)
 tmp = show_batch(reference_imgs, n_padding=4, figsize=(12,12), title='reference imgs')
@@ -81,21 +81,12 @@ exp.log_image("reference_imgs", tmp)
 # Instantiate model, optimizer and checks
 vae = CompositionalVae(params)
 optimizer = instantiate_optimizer(model=vae, dict_params_optimizer=params["optimizer"])
-print("GPU GB after model and optimizer ->",torch.cuda.memory_allocated()/1E9)
+#print("GPU GB after model and optimizer ->",torch.cuda.memory_allocated()/1E9)
 
 imgs_out = vae.inference_and_generator.unet.show_grid(reference_imgs)
 unet_grid = show_batch(imgs_out[:,0])
 exp.log_image("unet_grid", unet_grid)
 
-vae.eval()
-if torch.cuda.is_available():
-    imgs_in = imgs_in.cuda()
-generated_data = vae.generate(imgs_in=reference_imgs, draw_boxes=True, draw_bg=False)
-tmp_img = show_batch(generated_data.imgs_rec[:8], title="untrained generator", figsize=(12,12))
-tmp_prob = show_batch(generated_data.inference.p_map[:8], n_padding=2, title="untrained probability", figsize=(12,12))
-exp.log_image("untrained_generator_img", tmp_img)
-exp.log_image("untrained_generator_prob", tmp_prob)
-print("GPU GB after generator ->",torch.cuda.memory_allocated()/1E9)
 
 # Check the constraint dictionary
 print("simulation type = "+str(params["simulation"]["type"]))

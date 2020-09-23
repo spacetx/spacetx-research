@@ -1,7 +1,8 @@
+import torch
+from typing import Tuple, Optional
 from torchvision import utils
-from neptunecontrib.api import log_chart
 from matplotlib import pyplot as plt
-
+from neptunecontrib.api import log_chart
 
 
 def plot_grid(img, figsize=None):
