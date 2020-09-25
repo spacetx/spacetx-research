@@ -1,14 +1,16 @@
 from .utilities import *
+from .utilities_ml import Moving_Average_Calculator
+from .utilities_visualization import draw_bounding_boxes, draw_img
 from .vae_parts import *
 from .namedtuple import *
 from typing import Optional
 
 
 def create_ckpt(model: torch.nn.Module,
-                optimizer: torch.optim.Optimizer,
-                history_dict: dict,
-                hyperparams_dict: dict,
-                epoch: int) -> dict:
+                optimizer: Optional[torch.optim.Optimizer] = None,
+                history_dict: Optional[dict] = None,
+                hyperparams_dict: Optional[dict] = None,
+                epoch: Optional[int] = None) -> dict:\
 
     all_member_var = model.__dict__
     member_var_to_save = {}
@@ -16,12 +18,12 @@ def create_ckpt(model: torch.nn.Module,
         if not k.startswith("_") and k != 'training':
             member_var_to_save[k] = v
 
-    ckpt = {'epoch': epoch,
-            'model_member_var': member_var_to_save,
+    ckpt = {'model_member_var': member_var_to_save,
             'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
+            'optimizer_state_dict': None if (optimizer is None) else optimizer.state_dict(),
             'history_dict': history_dict,
-            'hyperparam_dict': hyperparams_dict}
+            'hyperparam_dict': hyperparams_dict,
+            'epoch': epoch}
 
     return ckpt
 
@@ -30,7 +32,7 @@ def ckpt2file(ckpt: dict, path: str):
     torch.save(ckpt, path)
 
 
-def file2ckpt(path: str, device: Optional[str]=None):
+def file2ckpt(path: str, device: Optional[str] = None):
     """ wrapper around torch.load """
     if device is None:
         ckpt = torch.load(path)
@@ -216,7 +218,7 @@ class CompositionalVae(torch.nn.Module):
 
         # 3. compute KL
 
-        #TODO: sum or mean
+        # TODO: sum or mean
         kl_zinstance = torch.mean(inference.kl_zinstance)  # choose latent dim z so that this number is order 1.
         kl_zwhere = torch.sum(inference.kl_zwhere_map) / (batch_size * n_boxes * 4)  # order 1
         kl_logit = torch.sum(inference.kl_logit_map) / batch_size  # will normalize by running average -> order 1
@@ -446,20 +448,21 @@ class CompositionalVae(torch.nn.Module):
             pad_list = [pad_w, crop_size[0], pad_h, crop_size[1]]
 
             # This is duplicating the single_img on the CPU
+            # Note: unsqueeze, pad, suqeeze
             try:
-                img_padded = F.pad(single_img.cpu(),
-                                   pad=pad_list, mode='reflect')  # 1, ch_in, w_pad, h_pad
+                img_padded = F.pad(single_img.cpu().unsqueeze(0),
+                                   pad=pad_list, mode='reflect').squeeze(0)  # 1, ch_in, w_pad, h_pad
             except RuntimeError:
-                img_padded = F.pad(single_img.cpu(),
-                                   pad=pad_list, mode='constant', value=0)  # 1, ch_in, w_pad, h_pad
-            w_paddded, h_padded = img_padded.shape[-2:]
+                img_padded = F.pad(single_img.cpu().unsqueeze(0),
+                                   pad=pad_list, mode='constant', value=0).squeeze(0)  # 1, ch_in, w_pad, h_pad
+            # w_paddded, h_padded = img_padded.shape[-2:]
 
             # This is creating the index matrix on the cpu
             max_index = w_img * h_img
             index_matrix_padded = F.pad(torch.arange(max_index,
                                                      dtype=torch.long,
-                                                     device=torch.device('cpu')).view(1, w_img, h_img),
-                                        pad=pad_list, mode='constant', value=-1)
+                                                     device=torch.device('cpu')).view(1, 1, w_img, h_img),
+                                        pad=pad_list, mode='constant', value=-1).squeeze(0)
 
             # Build a list with the locations of the corner of the images
             location_of_corner = []

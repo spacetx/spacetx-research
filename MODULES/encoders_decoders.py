@@ -1,10 +1,12 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from typing import Optional
+
 from .namedtuple import ZZ
-from typing import List, Optional
 
 EPS_STD = 1E-3  # standard_deviation = F.softplus(x) + EPS_STD >= EPS_STD
+
 
 class MLP_1by1(nn.Module):
     """ Use 1x1 convolution, if ch_hidden <= 0 there is NO hidden layer """
@@ -228,4 +230,3 @@ class EncoderConvLeaky(nn.Module):
         mu = self.compute_mu(x2).view(independent_dim + [self.dim_z])
         std = F.softplus(self.compute_std(x2)).view(independent_dim + [self.dim_z])
         return ZZ(mu=mu, std=std + EPS_STD)
-

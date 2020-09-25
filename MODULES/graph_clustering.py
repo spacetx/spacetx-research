@@ -11,10 +11,11 @@ import time
 
 
 # I HAVE LEARNED:
-# 1. If I use a lot of negihbours then all methods are roughyl equivalent b/c graph becomes ALL-TO-ALL
+# 1. If I use a lot of negihbours then all methods are roughly equivalent b/c graph becomes ALL-TO-ALL
 # 2. Radius=10 means each pixel has 121 neighbours
 # 3. CPM does not suffer from the resolution limit which means that it tends to shave off small part from a cell.
-# 4. For now I prefer to use a graph with normalized edges, modularity and single gigantic cluster (i.e. each_cc_component=False)
+# 4. For now I prefer to use a graph with normalized edges,
+# modularity and single gigantic cluster (i.e. each_cc_component=False)
 
 with torch.no_grad():
     class GraphSegmentation(object):
@@ -47,7 +48,7 @@ with torch.no_grad():
                 self.device = torch.device("cpu")
                 
             self.raw_image = segmentation.raw_image[0].to(self.device)
-            self.example_integer_mask = segmentation.integer_mask[0, 0].to(self.device) # set batch=0, ch=0
+            self.example_integer_mask = segmentation.integer_mask[0, 0].to(self.device)  # set batch=0, ch=0
 
             # it should be able to handle both DenseSimilarity and SparseSimilarity
             b, c, ni, nj = segmentation.integer_mask.shape
@@ -68,8 +69,8 @@ with torch.no_grad():
             self._partition_connected_components = None
             self._partition_sample_segmask = None
             
-            #TODO: Compute median density of connected components so that resolution parameter is about 1
-            #self.reference_density = AUCH
+            # TODO: Compute median density of connected components so that resolution parameter is about 1
+            # self.reference_density = AUCH
 
         @property
         def partition_connected_components(self):
@@ -80,10 +81,8 @@ with torch.no_grad():
                                                   dtype=torch.long,
                                                   device=self.device)[self.i_coordinate_fg_pixel,
                                                                       self.j_coordinate_fg_pixel]
-                self._partition_connected_components = Partition(which="connected",
-                                                                 membership=membership_from_cc,
-                                                                 sizes=torch.bincount(membership_from_cc),
-                                                                 params={})
+                self._partition_connected_components = Partition(membership=membership_from_cc,
+                                                                 sizes=torch.bincount(membership_from_cc))
             return self._partition_connected_components
 
         @property
@@ -91,10 +90,8 @@ with torch.no_grad():
             if self._partition_sample_segmask is None:
                 membership_from_example_segmask = self.example_integer_mask[self.i_coordinate_fg_pixel,
                                                                             self.j_coordinate_fg_pixel].long()
-                self._partition_sample_segmask = Partition(which="one_sample",
-                                                           membership=membership_from_example_segmask,
-                                                           sizes=torch.bincount(membership_from_example_segmask),
-                                                           params={})
+                self._partition_sample_segmask = Partition(membership=membership_from_example_segmask,
+                                                           sizes=torch.bincount(membership_from_example_segmask))
             return self._partition_sample_segmask
 
         def similarity_2_graph(self, similarity: SparseSimilarity,
@@ -354,8 +351,7 @@ with torch.no_grad():
             else:
                 raise Exception("Warning!! Argument not recognized. \
                                            CPM_or_modularity can only be 'CPM' or 'modularity'")
-            
-            
+
             # Subset graph by connected components and windows if necessary
             max_label = 0
             membership = torch.zeros(self.n_fg_pixel, dtype=torch.long, device=self.device)
@@ -381,7 +377,7 @@ with torch.no_grad():
                                           weights=g.es['weight'],
                                           n_iterations=n_iterations,
                                           resolution_parameter=resolution)
-                    print("end find partition internal",time.time()-start_time)
+                    print("end find partition internal", time.time()-start_time)
 
                     labels = torch.tensor(p.membership, device=self.device, dtype=torch.long) + 1
                     shifted_labels = labels + max_label
@@ -428,8 +424,7 @@ with torch.no_grad():
             axes[1, 0].imshow(raw_img, cmap='gray')
             axes[1, 1].hist(sizes_fg.cpu(), **kargs)
             
-            
-            title_partition = '{0:s}, #cells -> {1:3d}'.format(partition.which, sizes_fg.shape[0])
+            title_partition = 'Partition, #cells -> '+str(sizes_fg.shape[0])
             axes[0, 0].set_title(title_partition)
             axes[0, 1].set_title(title_partition)
             axes[1, 0].set_title("raw image")

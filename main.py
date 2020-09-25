@@ -2,10 +2,10 @@
 # coding: utf-8
 
 import neptune
-import matplotlib.pyplot as plt
-
-from MODULES.utilities_neptune import *
+from MODULES.utilities_neptune import log_matplotlib_as_png, log_dict_metrics, log_model_summary, log_last_ckpt
 from MODULES.vae_model import *
+from MODULES.utilities_visualization import show_batch
+from MODULES.utilities_ml import ConditionalRandomCrop, SpecialDataSet, process_one_epoch
 from neptunecontrib.api import log_chart
 
 # Check versions
@@ -17,10 +17,11 @@ print("torch.__version__ --> ", torch.__version__)
 params = load_json_as_dict("./ML_parameters.json")
 
 neptune.set_project(params["neptune_project"])
-exp = neptune.create_experiment(params=flatten_dict(params),
-                                upload_source_files=["./MODULES/vae_model.py", "./MODULES/encoders_decoders.py"],
-                                upload_stdout=True,
-                                upload_stderr=True)
+exp: neptune.experiments.Experiment = \
+    neptune.create_experiment(params=flatten_dict(params),
+                              upload_source_files=["./MODULES/vae_model.py", "./MODULES/encoders_decoders.py"],
+                              upload_stdout=True,
+                              upload_stderr=True)
 
 
 # Get the training and test data
@@ -51,9 +52,8 @@ test_loader = SpecialDataSet(img=test_data,
                              shuffle=False,
                              drop_last=False,
                              batch_size=BATCH_SIZE)
-test_batch_example = test_loader.check_batch()
-test_batch_example.savefig("test_batch_example.png")
-exp.log_image("test_batch_example", "test_batch_example.png")
+test_batch_example_fig = test_loader.check_batch()
+log_matplotlib_as_png("test_batch_example", test_batch_example_fig)
 
 train_loader = SpecialDataSet(img=img_torch,
                               roi_mask=roi_mask_torch,
@@ -62,27 +62,23 @@ train_loader = SpecialDataSet(img=img_torch,
                               shuffle=True,
                               drop_last=True,
                               batch_size=BATCH_SIZE)
-train_batch_example = train_loader.check_batch()
-train_batch_example.savefig("train_batch_example.png")
-exp.log_image("train_batch_example", train_batch_example)
+train_batch_example_fig = train_loader.check_batch()
+log_matplotlib_as_png("train_batch_example", train_batch_example_fig)
 # print("GPU GB after train_loader ->",torch.cuda.memory_allocated()/1E9)
 
 reference_imgs, labels, index = test_loader.load(8)
-tmp = show_batch(reference_imgs, n_padding=4, figsize=(12, 12), title='reference imgs')
-tmp.savefig("reference_imgs.png")
-exp.log_image("reference_imgs", "reference_imgs.png")
+reference_imgs_fig = show_batch(reference_imgs, n_padding=4, figsize=(12, 12), title='reference imgs')
+log_matplotlib_as_png("reference_imgs", reference_imgs_fig)
+
 
 # Instantiate model, optimizer and checks
 vae = CompositionalVae(params)
 optimizer = instantiate_optimizer(model=vae, dict_params_optimizer=params["optimizer"])
 # print("GPU GB after model and optimizer ->",torch.cuda.memory_allocated()/1E9)
 
-print("unet_grid")
 imgs_out = vae.inference_and_generator.unet.show_grid(reference_imgs)
-unet_grid = show_batch(imgs_out[:, 0], normalize_range=(0.0, 1.0))
-unet_grid.savefig("unet_grid.png")
-exp.log_image("unet_grid", "unet_grid.png")
-print("done unet grid")
+unet_grid_fig = show_batch(imgs_out[:, 0], normalize_range=(0.0, 1.0))
+log_matplotlib_as_png("unet_grid", unet_grid_fig)
 
 # Check the constraint dictionary
 print("simulation type = "+str(params["simulation"]["type"]))
@@ -130,7 +126,7 @@ if params["optimizer"]["scheduler_is_active"]:
 
 TEST_FREQUENCY = params["simulation"]["TEST_FREQUENCY"]
 CHECKPOINT_FREQUENCY = params["simulation"]["CHECKPOINT_FREQUENCY"]
-NUM_EPOCHS = params["simulation"]["MAX_EPOCHS"]
+NUM_EPOCHS = 2 #params["simulation"]["MAX_EPOCHS"]
 torch.cuda.empty_cache()
 for delta_epoch in range(1, NUM_EPOCHS+1):
     epoch = delta_epoch+epoch_restart    
@@ -157,32 +153,22 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
             
             with torch.no_grad():
 
-####                history_dict = append_to_dict(source=train_metrics,
-####                                              target=history_dict,
-####                                              prefix_exclude="wrong_examples",
-####                                              prefix_to_add="train_")
+                history_dict = append_to_dict(source=train_metrics,
+                                              target=history_dict,
+                                              prefix_exclude="wrong_examples",
+                                              prefix_to_add="train_")
         
                 if (epoch % TEST_FREQUENCY) == 0:
-                    output = vae.forward(reference_imgs, draw_image=True, draw_boxes=True, verbose=False)
-                    print("here 0")
-                    print("drawn images ->", output.imgs.min(), output.imgs.max())
-                    imgs_rec_train = show_batch(output.imgs[:8], n_col=4, n_padding=4,
-                                                title="TRAIN MODE, EPOCH = "+str(epoch))
-
-                    assert 1==2
-                    print("here 1")
-                    p_map_train = show_batch(output.inference.p_map[:8], n_col=4, n_padding=4,
-                                             title="TRAIN MODE, EPOCH = "+str(epoch), normalize_range=None)
-                    print("here 2")
-                    bg_train = show_batch(output.inference.big_bg[:8], n_col=4, n_padding=4,
-                                          title="TRAIN MODE, EPOCH = "+str(epoch))
-                    print("here A")
-                    exp.log_image("rec_imgs_train", imgs_rec_train)
-                    print("here B")
-                    exp.log_image("rec_prob_train", p_map_train)
-                    print("here C")
-                    exp.log_image("rec_bg_train", bg_train)
-                    print("here D")
+                    output: Output = vae.forward(reference_imgs, draw_image=True, draw_boxes=True, verbose=False)
+                    imgs_rec_train_fig = show_batch(output.imgs[:8], n_col=4, n_padding=4,
+                                                    title="TRAIN MODE, EPOCH = "+str(epoch))
+                    p_map_train_fig = show_batch(output.inference.p_map[:8], n_col=4, n_padding=4,
+                                                 title="TRAIN MODE, EPOCH = "+str(epoch), normalize_range=None)
+                    bg_train_fig = show_batch(output.inference.big_bg[:8], n_col=4, n_padding=4,
+                                              title="TRAIN MODE, EPOCH = "+str(epoch))
+                    log_matplotlib_as_png("rec_imgs_train", imgs_rec_train_fig)
+                    log_matplotlib_as_png("p_map_train", p_map_train_fig)
+                    log_matplotlib_as_png("bg_train", bg_train_fig)
 
                     vae.eval()
                     test_metrics = process_one_epoch(model=vae, 
@@ -193,54 +179,55 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                                                      neptune_experiment=exp,
                                                      neptune_prefix="test")
                     print("Test  "+test_metrics.pretty_print(epoch))
-#                    history_dict = append_to_dict(source=test_metrics,
-#                                                  target=history_dict,
-#                                                  prefix_exclude="wrong_examples",
-#                                                  prefix_to_add="test_")
-        
+                    history_dict = append_to_dict(source=test_metrics,
+                                                  target=history_dict,
+                                                  prefix_exclude="wrong_examples",
+                                                  prefix_to_add="test_")
+
                     output: Output = vae.forward(reference_imgs, draw_image=True, draw_boxes=True, verbose=False)
-                    imgs_rec_test = show_batch(output.imgs[:8], n_col=4, n_padding=4,
-                                               title="TEST MODE, EPOCH = "+str(epoch))
-                    p_map_test = show_batch(output.inference.p_map[:8], n_col=4, n_padding=4,
-                                            title="TEST MODE, EPOCH = "+str(epoch), normalize_range=None)
-                    bg_test = show_batch(output.inference.big_bg[:8], n_col=4, n_padding=4,
-                                         title="TEST MODE, EPOCH = "+str(epoch))
-                    exp.log_image("rec_imgs_test", imgs_rec_test)
-                    exp.log_image("rec_prob_test", p_map_test)
-                    exp.log_image("rec_bg_test", bg_test)
+                    imgs_rec_test_fig = show_batch(output.imgs[:8], n_col=4, n_padding=4,
+                                                   title="TRAIN MODE, EPOCH = "+str(epoch))
+                    p_map_test_fig = show_batch(output.inference.p_map[:8], n_col=4, n_padding=4,
+                                                title="TRAIN MODE, EPOCH = "+str(epoch), normalize_range=None)
+                    bg_test_fig = show_batch(output.inference.big_bg[:8], n_col=4, n_padding=4,
+                                             title="TRAIN MODE, EPOCH = "+str(epoch))
+                    log_matplotlib_as_png("rec_imgs_test", imgs_rec_test_fig)
+                    log_matplotlib_as_png("p_map_test", p_map_test_fig)
+                    log_matplotlib_as_png("bg_test", bg_test_fig)
 
                     segmentation: Segmentation = vae.segment(batch_imgs=reference_imgs)
-                    seg_int_mask = show_batch(segmentation.integer_mask, n_padding=4, figsize=(12, 12),
-                                              title='epoch= {0:6d}'.format(epoch))
-                    seg_fg_prob = show_batch(segmentation.fg_prob, n_padding=4, figsize=(12, 12),
-                                             title='epoch= {0:6d}'.format(epoch))
-                    exp.log_image("seg_integer_mask", seg_int_mask)
-                    exp.log_image("seg_fg_prob", seg_fg_prob)
-                    
+                    seg_int_mask_fig = show_batch(segmentation.integer_mask, n_padding=4, figsize=(12, 12),
+                                                  title='epoch= {0:6d}'.format(epoch))
+                    seg_fg_prob_fig = show_batch(segmentation.fg_prob, n_padding=4, figsize=(12, 12),
+                                                 title='epoch= {0:6d}'.format(epoch))
+                    log_matplotlib_as_png("seg_integer_mask", seg_int_mask_fig)
+                    log_matplotlib_as_png("seg_fg_prob", seg_fg_prob_fig)
+
                     generated: Output = vae.generate(imgs_in=reference_imgs, draw_boxes=True)
-                    gen_img = show_batch(generated.imgs[:8], n_padding=4, figsize=(12, 12),
-                                         title='epoch= {0:6d}'.format(epoch))
-                    gen_prob = show_batch(generated.inference.p_map[:8], n_padding=4, figsize=(12, 12),
-                                          title='epoch= {0:6d}'.format(epoch))
-                    gen_big_masks = show_batch(generated.inference.big_mask[0, :8], n_padding=4, figsize=(12, 12),
-                                               title='epoch= {0:6d}'.format(epoch))
-                    gen_big_imgs = show_batch(generated.inference.big_img[0, :8], n_padding=4, figsize=(12, 12),
+                    gen_img_fig = show_batch(generated.imgs[:8], n_padding=4, figsize=(12, 12),
+                                             title='epoch= {0:6d}'.format(epoch))
+                    gen_prob_fig = show_batch(generated.inference.p_map[:8], n_padding=4, figsize=(12, 12),
                                               title='epoch= {0:6d}'.format(epoch))
-                    exp.log_image("generated_img", gen_img)
-                    exp.log_image("generated_prob", gen_prob)
-                    exp.log_image("generated_big_masks", gen_big_masks)
-                    exp.log_image("generated_big_imgs", gen_big_imgs)
+                    gen_big_masks_fig = show_batch(generated.inference.big_mask[:, 0], n_padding=4, figsize=(12, 12),
+                                                   title='epoch= {0:6d}'.format(epoch))
+                    gen_big_imgs_fig = show_batch(generated.inference.big_img[:, 0], n_padding=4, figsize=(12, 12),
+                                                  title='epoch= {0:6d}'.format(epoch))
+                    log_matplotlib_as_png("gen_img", gen_img_fig)
+                    log_matplotlib_as_png("gen_prob", gen_prob_fig)
+                    log_matplotlib_as_png("gen_big_masks", gen_big_masks_fig)
+                    log_matplotlib_as_png("gen_big_imgs", gen_big_imgs_fig)
 
                     test_loss = test_metrics.loss
                     min_test_loss = min(min_test_loss, test_loss)
 
                     if (test_loss == min_test_loss) or (epoch % CHECKPOINT_FREQUENCY == 0):
                         ckpt = create_ckpt(model=vae,
-                                           optimizer=optimizer,
+                                           optimizer=None,
                                            epoch=epoch,
-                                           hyperparams_dict=params)
-                        save_obj(ckpt, "last_ckpt.pt")  # save locally to file 
-                        log_last_ckpt(exp, "last_ckpt.pt")  # log file into neptune
+                                           hyperparams_dict=params,
+                                           history_dict=history_dict)
+
+                        #log_last_ckpt(name="last_ckpt", ckpt=ckpt)  # log file into neptune
 
 
 # # Check segmentation WITH tiling
@@ -258,6 +245,8 @@ tiling = vae.segment_with_tiling(single_img=img_to_segment,
 save_obj(tiling, "tiling.pt")  # save locally to file 
 exp.log_artifact("tiling", "tiling.pt")  # log gile into neptune
 
+
+# HERE TO CHART
 figure, axes = plt.subplots(ncols=4, figsize=(24, 24))
 axes[0].imshow(skimage.color.label2rgb(tiling.integer_mask[0, 0].cpu().numpy(),
                                        numpy.zeros_like(tiling.integer_mask[0, 0].cpu().numpy()),
@@ -274,7 +263,7 @@ axes[0].set_title("sample integer mask")
 axes[1].set_title("sample integer mask")
 axes[2].set_title("fg prob")
 axes[3].set_title("raw image")
-exp.log_image("tiling_img", figure)
+log_matplotlib_as_png("tiling_img", figure)
 
 
 #####plt.imshow(output_test.inference.p_map[chosen,0].cpu().numpy())

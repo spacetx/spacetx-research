@@ -42,16 +42,19 @@ class NonMaxSuppression(object):
         score: torch.Tensor = score.unsqueeze(0)                                                     # 1 x n_box x batch
         possible: torch.Tensor = possible.unsqueeze(0)                                               # 1 x n_box x batch
         idx: torch.Tensor = torch.arange(start=0, end=n_boxes, step=1,
-                            device=score.device).view(n_boxes, 1, 1).long()             # n_box x 1 x 1
+                                         device=score.device).view(n_boxes, 1, 1).long()             # n_box x 1 x 1
         selected: torch.Tensor = torch.zeros((n_boxes, 1, batch_size), device=score.device).float()  # n_box x 1 x batch
 
         # Loop
-        for l in range(n_objects_max):  # you never need more than n_objects_max proposals
+        counter = 0
+        while counter <= n_objects_max and (possible > 0).any():  # you never need more than n_objects_max proposals
+            # could add another condition. That possible == 0
             score_mask: torch.Tensor = mask_overlap*(score*possible)                       # n_box x n_box x batch
             index = torch.max(score_mask, keepdim=True, dim=-2)[1]           # n_box x 1 x batch
             selected += possible.permute(1, 0, 2)*(idx == index).float()     # n_box x 1 x batch
             blocks = torch.sum(mask_overlap*selected, keepdim=True, dim=-3)  # 1 x n_box x batch
             possible *= (blocks == 0).float()                                # 1 x n_box x batch
+            counter += 1
 
         # return
         return selected.squeeze(-2)  # shape: n_box x batch
@@ -129,4 +132,3 @@ class NonMaxSuppression(object):
 
         return NMSoutput(nms_mask=chosen_nms_mask,
                          index_top_k=indices_top_k)
-

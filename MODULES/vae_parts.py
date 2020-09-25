@@ -5,7 +5,7 @@ from .non_max_suppression import NonMaxSuppression
 from .unet_model import UNet
 from .encoders_decoders import EncoderConv, DecoderConv, Decoder1by1Linear, EncoderConvLeaky, DecoderConvLeaky
 from .utilities import compute_average_in_box, compute_ranking
-from .utilities import sample_and_kl_diagonal_normal, sample_and_kl_multivariate_normal
+from .utilities_ml import sample_and_kl_diagonal_normal, sample_and_kl_multivariate_normal
 from .namedtuple import Inference, BB, NMSoutput, UNEToutput, ZZ, DIST
 
 
