@@ -20,25 +20,14 @@ def log_model_summary(experiment: neptune.experiments.Experiment,
 
 
 def log_metrics(experiment: neptune.experiments.Experiment,
-                metrics: Union[tuple, dict],
+                metrics: dict,
                 prefix: str = "",
                 verbose=True):
     if verbose:
         print("inside log_metrics")
 
-    if isinstance(metrics, tuple):
-        input_dict = metrics._asdict()
-    elif isinstance(metrics, dict) or isinstance(metrics, OrderedDict):
-        input_dict = metrics
-    else:
-        print(type(metrics))
-        Exception("metrics have a not recognized type")
-
-    for key, value in input_dict.items():
-        if isinstance(value, torch.Tensor):
-            experiment.log_metric(prefix + key, value.item())
-        elif isinstance(value, float):
-            experiment.log_metric(prefix + key, value)
+    for key, value in metrics.items():
+        experiment.log_metric(prefix + key, value)
 
     if verbose:
         print("leaving log_metrics")

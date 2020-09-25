@@ -149,7 +149,7 @@ class CompositionalVae(torch.nn.Module):
         # 1. Masks should not overlap:
         # A = (x1+x2+x3)^2 = x1^2 + x2^2 + x3^2 + 2 x1*x2 + 2 x1*x3 + 2 x2*x3
         # Therefore sum_{i \ne j} x_i x_j = x1*x2 + x1*x3 + x2*x3 = 0.5 * [(sum xi)^2 - (sum xi^2)]
-        x = inference.prob[..., None, None, None] * inference.big_mask_NON_interacting
+        x = inference.sample_prob[..., None, None, None] * inference.big_mask_NON_interacting
         sum_x = torch.sum(x, dim=-5)  # sum over boxes
         sum_x_squared = torch.sum(x * x, dim=-5)
         tmp_value = (sum_x * sum_x - sum_x_squared).clamp(min=0)
@@ -167,15 +167,9 @@ class CompositionalVae(torch.nn.Module):
                                                             var_value=volume_mask_absolute,
                                                             verbose=verbose,
                                                             chosen=chosen)
-        cost_volume_absolute_times_prob = torch.sum(cost_volume_absolute * inference.prob, dim=-2)  # sum over boxes
-
-        # Note that before returning I am computing the mean over the batch_size (which is the only dimension left)
-        minibatch_mean_cost_overlap = cost_overlap.mean()
-        minibatch_mean_cost_volume_absolute_times_prob = cost_volume_absolute_times_prob.mean()
-        minibatch_mean_total_cost = minibatch_mean_cost_overlap + minibatch_mean_cost_volume_absolute_times_prob
-        return RegMiniBatch(cost_overlap=minibatch_mean_cost_overlap,
-                            cost_vol_absolute=minibatch_mean_cost_volume_absolute_times_prob,
-                            cost_total=minibatch_mean_total_cost)
+        cost_volume_minibatch = (cost_volume_absolute * inference.sample_prob).sum(dim=-2).mean()  # sum boxes, mean batch_size
+        return RegMiniBatch(reg_overlap=cost_overlap.mean(),
+                            reg_area_obj=cost_volume_minibatch)
 
     @staticmethod
     def NLL_MSE(output: torch.tensor, target: torch.tensor, sigma: torch.tensor) -> torch.Tensor:
@@ -184,17 +178,19 @@ class CompositionalVae(torch.nn.Module):
     def compute_metrics(self,
                         imgs_in: torch.Tensor,
                         inference: Inference,
-                        reg_av: torch.Tensor) -> MetricMiniBatch:
+                        regularizations: RegMiniBatch) -> MetricMiniBatch:
 
         # Preparation
         batch_size, ch, w, h = imgs_in.shape
         n_boxes = inference.big_mask.shape[-5]
-        n_obj_counts = (inference.prob > 0.5).float().sum(-2).detach()  # sum over boxes dimension
         p_times_area_map = inference.p_map * inference.area_map
-        mixing_k = inference.big_mask * inference.prob[..., None, None, None]
-        mixing_fg = torch.sum(mixing_k, dim=-5)
+        mixing_k = inference.big_mask * inference.sample_prob[..., None, None, None]
+        mixing_fg = torch.sum(mixing_k, dim=-5)  # sum over boxes
         mixing_bg = torch.ones_like(mixing_fg) - mixing_fg
+        fg_fraction = torch.mean(mixing_fg)  # mean over batch_size
         assert len(mixing_fg.shape) == 4  # batch, ch=1, w, h
+
+        # 0. Get the regularization
 
         # 1. Observation model
         # if the observation_std is fixed then normalization 1.0/sqrt(2*pi*sigma^2) is irrelevant.
@@ -213,32 +209,29 @@ class CompositionalVae(torch.nn.Module):
         #                        = fg_fraction_box + fg_fraction_box
         #                        -> lead to many small object b/c there is no cost
         # New solution = add term sum p so that many objects are penalized
-        fg_fraction_mask_av = torch.sum(mixing_fg) / torch.numel(mixing_fg)  # divide by # total pixel
-        fg_fraction_box_av = torch.sum(p_times_area_map) / torch.numel(mixing_fg)  # divide by # total pixel
-        prob_total_av = torch.sum(inference.p_map) / (batch_size * n_boxes)  # quickly converge to order 1
+        sparsity_mask = torch.sum(mixing_fg) / torch.numel(mixing_fg)  # divide by # total pixel
+        sparsity_box = torch.sum(p_times_area_map) / torch.numel(mixing_fg)  # divide by # total pixel
+        sparsity_prob = torch.sum(inference.p_map) / (batch_size * n_boxes)  # quickly converge to order 1
+        sparsity_av = sparsity_mask + sparsity_box + sparsity_prob
 
-        exp.log_metric("fg_fraction_mask_av", fg_fraction_mask_av)
-        exp.log_metric("fg_fraction_box_av", fg_fraction_box_av)
-        exp.log_metric("prob_total_av", prob_total_av)
+        # 3. compute KL
 
-        # 4. compute the KL for each image
-        kl_zinstance_av = torch.mean(
-            inference.kl_zinstance_each_obj)  # choose latent dim z so that this number is order 1.
-        kl_zwhere_av = torch.sum(inference.kl_zwhere_map) / (batch_size * n_boxes * 4)  # order 1
-        kl_logit_tot = torch.sum(
-            inference.kl_logit_map) / batch_size  # this will be normalized by running average -> order 1
+        #TODO: sum or mean
+        kl_zinstance = torch.mean(inference.kl_zinstance)  # choose latent dim z so that this number is order 1.
+        kl_zwhere = torch.sum(inference.kl_zwhere_map) / (batch_size * n_boxes * 4)  # order 1
+        kl_logit = torch.sum(inference.kl_logit_map) / batch_size  # will normalize by running average -> order 1
 
         # 5. compute the moving averages
         with torch.no_grad():
-            input_dict = {"kl_logit_tot": kl_logit_tot.item()}
-
+            input_dict = {"kl_logit": kl_logit.item()}
             # Only if in training mode I accumulate the moving average
             if self.training:
                 ma_dict = self.ma_calculator.accumulate(input_dict)
             else:
                 ma_dict = input_dict
+        kl_av = kl_zinstance + kl_zwhere + kl_logit / (1E-3 + ma_dict["kl_logit"])
 
-        # Note that I clamp in_place
+        # 6. Note that I clamp in_place
         with torch.no_grad():
             f_balance = self.geco_balance_factor.data.clamp_(min=min(self.geco_dict["factor_balance_range"]),
                                                              max=max(self.geco_dict["factor_balance_range"]))
@@ -250,20 +243,18 @@ class CompositionalVae(torch.nn.Module):
         # TODO:
         # 1. try: loss_vae = f_balance * (nll_av + reg_av) + (1.0-f_balance) * (kl_av + f_sparsity * sparsity_av)
         # 2. move reg_av to the other size, i.e. proportional to 1-f_balance
-        kl_av = kl_zinstance_av + kl_zwhere_av + kl_logit_tot / (1E-3 + ma_dict["kl_logit_tot"])
-        sparsity_av = fg_fraction_mask_av + fg_fraction_box_av + prob_total_av
-        assert mse_av.shape == reg_av.shape == kl_av.shape == sparsity_av.shape
-
-        loss_vae = f_sparsity * sparsity_av + f_balance * (mse_av + reg_av) + one_minus_f_balance * kl_av
+        reg_av = regularizations.total()
+        loss_vae = f_sparsity * sparsity_av + \
+                   f_balance * (mse_av + reg_av) + \
+                   one_minus_f_balance * kl_av
 
         # GECO BUSINESS
         if self.geco_dict["is_active"]:
             with torch.no_grad():
                 # If fg_fraction_av > max(target) -> tmp1 > 0 -> delta_1 < 0 -> too much fg -> increase sparsity
                 # If fg_fraction_av < min(target) -> tmp2 > 0 -> delta_1 > 0 -> too little fg -> decrease sparsity
-                fg_fraction_av = torch.mean(mixing_fg)
-                tmp1 = (fg_fraction_av - max(self.geco_dict["target_fg_fraction"])).clamp(min=0)
-                tmp2 = (min(self.geco_dict["target_fg_fraction"]) - fg_fraction_av).clamp(min=0)
+                tmp1 = (fg_fraction - max(self.geco_dict["target_fg_fraction"])).clamp(min=0)
+                tmp2 = (min(self.geco_dict["target_fg_fraction"]) - fg_fraction).clamp(min=0)
                 delta_1 = (tmp2 - tmp1).requires_grad_(False).to(loss_vae.device)
 
                 # If nll_av > max(target) -> tmp3 > 0 -> delta_2 < 0 -> bad reconstruction -> increase f_balance
@@ -282,20 +273,26 @@ class CompositionalVae(torch.nn.Module):
 
         # add everything you want as long as there is one loss
         return MetricMiniBatch(loss=loss_av,
-                               mse=mse_av.detach(),
-                               reg=reg_av.detach(),
-                               kl_tot=kl_av.detach(),
-                               kl_instance=kl_zinstance_av.detach(),
-                               kl_where=kl_zwhere_av.detach(),
-                               kl_logit=kl_logit_tot.detach(),
-                               sparsity=sparsity_av.detach(),
-                               fg_fraction=torch.mean(mixing_fg).detach(),
-                               geco_sparsity=f_sparsity,
-                               geco_balance=f_balance,
-                               delta_1=delta_1,
-                               delta_2=delta_2,
-                               length_GP=inference.length_scale_GP.detach(),
-                               n_obj_counts=n_obj_counts)
+                               mse_tot=mse_av.detach().item(),
+                               reg_tot=reg_av.detach().item(),
+                               kl_tot=kl_av.detach().item(),
+                               sparsity_tot=sparsity_av.detach().item(),
+
+                               kl_instance=kl_zinstance.detach().item(),
+                               kl_where=kl_zwhere.detach().item(),
+                               kl_logit=kl_logit.detach().item(),
+                               sparsity_mask=sparsity_mask.detach().item(),
+                               sparsity_box=sparsity_box.detach().item(),
+                               sparsity_prob=sparsity_prob.detach().item(),
+                               reg_overlap=regularizations.reg_overlap.detach().item(),
+                               reg_area_obj=regularizations.reg_area_obj.detach().item(),
+
+                               fg_fraction=fg_fraction.detach().item(),
+                               geco_sparsity=f_sparsity.detach().item(),
+                               geco_balance=f_balance.detach().item(),
+                               delta_1=delta_1.detach().item(),
+                               delta_2=delta_2.detach().item(),
+                               length_GP=inference.length_scale_GP.detach().item())
 
     @staticmethod
     def compute_sparse_similarity_matrix(mixing_k: torch.tensor,
@@ -360,17 +357,17 @@ class CompositionalVae(torch.nn.Module):
         overlap_threshold = self.nms_dict["overlap_threshold"] if overlap_threshold is None else overlap_threshold
 
         with torch.no_grad():
-            inference = self.inference_and_generator(imgs_in=batch_imgs,
-                                                     generate_synthetic_data=False,
-                                                     prob_corr_factor=prob_corr_factor,
-                                                     overlap_threshold=overlap_threshold,
-                                                     n_objects_max=n_objects_max,
-                                                     topk_only=False,
-                                                     noisy_sampling=noisy_sampling,
-                                                     bg_is_zero=True,
-                                                     bg_resolution=(1, 1))
+            inference: Inference = self.inference_and_generator(imgs_in=batch_imgs,
+                                                                generate_synthetic_data=False,
+                                                                prob_corr_factor=prob_corr_factor,
+                                                                overlap_threshold=overlap_threshold,
+                                                                n_objects_max=n_objects_max,
+                                                                topk_only=False,
+                                                                noisy_sampling=noisy_sampling,
+                                                                bg_is_zero=True,
+                                                                bg_resolution=(1, 1))
 
-            mixing_k = inference.big_mask * inference.prob[..., None, None, None]
+            mixing_k = inference.big_mask * inference.sample_prob[..., None, None, None]
 
             # Now compute fg_prob, integer_segmentation_mask, similarity
             most_likely_mixing, index = torch.max(mixing_k, dim=-5, keepdim=True)  # 1, batch_size, 1, w, h
@@ -379,8 +376,8 @@ class CompositionalVae(torch.nn.Module):
 
             fg_prob = torch.sum(mixing_k, dim=-5)  # sum over instances
 
-            bounding_boxes = draw_bounding_boxes(prob=inference.prob,
-                                                 bounding_box=inference.bounding_box,
+            bounding_boxes = draw_bounding_boxes(prob=inference.sample_prob,
+                                                 bounding_box=inference.sample_bb,
                                                  width=integer_mask.shape[-2],
                                                  height=integer_mask.shape[-1]) if draw_boxes else None
 
@@ -429,8 +426,8 @@ class CompositionalVae(torch.nn.Module):
         crop_size = (self.input_img_dict["size_raw_image"],
                      self.input_img_dict["size_raw_image"]) if crop_size is None else crop_size
         stride = (int(crop_size[0] // 4), int(crop_size[1] // 4)) if stride is None else stride
-        n_objects_max_per_patch = self.input_img_dict["n_objects_max"] if n_objects_max_per_patch is \
-                                                                          None else n_objects_max_per_patch
+        n_objects_max_per_patch = self.input_img_dict["n_objects_max"] if n_objects_max_per_patch is None \
+            else n_objects_max_per_patch
         prob_corr_factor = getattr(self, "prob_corr_factor", 0.0) if prob_corr_factor is None else prob_corr_factor
         overlap_threshold = self.nms_dict["overlap_threshold"] if overlap_threshold is None else overlap_threshold
 
@@ -589,38 +586,36 @@ class CompositionalVae(torch.nn.Module):
         assert self.input_img_dict["ch_in"] == imgs_in.shape[-3]
         # End of Checks #
 
-        results = self.inference_and_generator(imgs_in=imgs_in,
-                                               generate_synthetic_data=generate_synthetic_data,
-                                               prob_corr_factor=prob_corr_factor,
-                                               overlap_threshold=overlap_threshold,
-                                               n_objects_max=n_objects_max,
-                                               topk_only=topk_only,
-                                               noisy_sampling=noisy_sampling,
-                                               bg_is_zero=bg_is_zero,
-                                               bg_resolution=bg_resolution)
+        inference: Inference = self.inference_and_generator(imgs_in=imgs_in,
+                                                            generate_synthetic_data=generate_synthetic_data,
+                                                            prob_corr_factor=prob_corr_factor,
+                                                            overlap_threshold=overlap_threshold,
+                                                            n_objects_max=n_objects_max,
+                                                            topk_only=topk_only,
+                                                            noisy_sampling=noisy_sampling,
+                                                            bg_is_zero=bg_is_zero,
+                                                            bg_resolution=bg_resolution)
 
-        regularizations = self.compute_regularizations(inference=results,
-                                                       verbose=verbose)
+        regularizations: RegMiniBatch = self.compute_regularizations(inference=inference,
+                                                                     verbose=verbose)
 
-        metrics = self.compute_metrics(imgs_in=imgs_in,
-                                       inference=results,
-                                       reg_av=regularizations.cost_total)
-
-        all_metrics = Metric_and_Reg.from_merge(metrics=metrics, regularizations=regularizations)
+        metrics: MetricMiniBatch = self.compute_metrics(imgs_in=imgs_in,
+                                                        inference=inference,
+                                                        regularizations=regularizations)
 
         with torch.no_grad():
             if draw_image:
-                imgs_rec = draw_img(prob=results.prob,
-                                    bounding_box=results.bounding_box,
-                                    big_mask=results.big_mask,
-                                    big_img=results.big_img,
-                                    big_bg=results.big_bg,
+                imgs_rec = draw_img(prob=inference.sample_prob,
+                                    bounding_box=inference.sample_bb,
+                                    big_mask=inference.big_mask,
+                                    big_img=inference.big_img,
+                                    big_bg=inference.big_bg,
                                     draw_bg=draw_bg,
                                     draw_boxes=draw_boxes)
             else:
                 imgs_rec = torch.zeros_like(imgs_in)
 
-        return Output(metrics=all_metrics, inference=results, imgs=imgs_rec)
+        return Output(metrics=metrics, inference=inference, imgs=imgs_rec)
 
     def forward(self,
                 imgs_in: torch.tensor,
@@ -664,136 +659,3 @@ class CompositionalVae(torch.nn.Module):
                                            n_objects_max=self.input_img_dict["n_objects_max"],
                                            bg_is_zero=True,
                                            bg_resolution=(2, 2))
-
-#------------------------------------#
-#------------------------------------#
-#------------------------------------#
-#------------------------------------#
-#------------------------------------#
-#------------------------------------#
-
-
-class SimpleVae(torch.nn.Module):
-
-    def __init__(self, params: dict) -> None:
-        super().__init__()
-
-        # Instantiate all the modules
-        leaky = False
-        if leaky:
-            self.decoder: DecoderConvLeaky = DecoderConvLeaky(size=params["architecture"]["cropped_size"],
-                                                              dim_z=params["architecture"]["dim_zinstance"],
-                                                              ch_out=params["input_image"]["ch_in"])
-
-            self.encoder: EncoderConvLeaky = EncoderConvLeaky(size=params["architecture"]["cropped_size"],
-                                                              ch_in=params["input_image"]["ch_in"],
-                                                              dim_z=params["architecture"]["dim_zinstance"])
-        else:
-            self.decoder: DecoderConv = DecoderConv(size=params["architecture"]["cropped_size"],
-                                                    dim_z=params["architecture"]["dim_zinstance"],
-                                                    ch_out=params["input_image"]["ch_in"])
-
-            self.encoder: EncoderConv = EncoderConv(size=params["architecture"]["cropped_size"],
-                                                    ch_in=params["input_image"]["ch_in"],
-                                                    dim_z=params["architecture"]["dim_zinstance"])
-
-        # Raw image parameters
-        self.sigma = torch.nn.Parameter(data=torch.tensor(params["GECO_loss"]["fg_std"])[..., None, None],  # add singleton for width, height
-                                        requires_grad=False)
-
-        self.geco_dict = params["GECO_loss"]
-        self.input_img_dict = params["input_image"]
-
-        self.geco_balance_factor = torch.nn.Parameter(data=torch.tensor(self.geco_dict["factor_balance_range"][1]),
-                                                      requires_grad=True)
-
-        # Put everything on the cude if cuda available
-        if torch.cuda.is_available():
-            self.cuda()
-
-    @staticmethod
-    def NLL_MSE(output: torch.tensor, target: torch.tensor, sigma: torch.tensor) -> torch.Tensor:
-        return ((output - target) / sigma).pow(2)
-
-    def compute_metrics(self,
-                        imgs_in: torch.Tensor,
-                        imgs_out: torch.Tensor,
-                        kl: torch.Tensor):
-
-        # We are better off using MeanSquareError metric
-        mse = SimpleVae.NLL_MSE(output=imgs_out, target=imgs_in.detach(), sigma=self.sigma)
-        mse_av = mse.mean()  # mean over batch_size, ch, w, h
-
-        # 4. compute the KL for each image
-        kl_av = torch.mean(kl)  # mean over batch_size and latend dimension of z
-        assert mse_av.shape == kl_av.shape
-
-        # Note that I clamp in_place
-        with torch.no_grad():
-            f_balance = self.geco_balance_factor.data.clamp_(min=min(self.geco_dict["factor_balance_range"]),
-                                                             max=max(self.geco_dict["factor_balance_range"]))
-            one_minus_f_balance = torch.ones_like(f_balance) - f_balance
-
-        # 6. Loss_VAE
-        loss_vae = f_balance * mse_av + one_minus_f_balance * kl_av
-
-        # GECO BUSINESS
-        if self.geco_dict["is_active"]:
-            with torch.no_grad():
-                # If nll_av > max(target) -> tmp3 > 0 -> delta_2 < 0 -> bad reconstruction -> increase f_balance
-                # If nll_av < min(target) -> tmp4 > 0 -> delta_2 > 0 -> too good reconstruction -> decrease f_balance
-                tmp3 = (mse_av - max(self.geco_dict["target_mse"])).clamp(min=0)
-                tmp4 = (min(self.geco_dict["target_mse"]) - mse_av).clamp(min=0)
-                delta_2 = (tmp4 - tmp3).requires_grad_(False).to(loss_vae.device)
-
-            loss_2 = self.geco_balance_factor * delta_2
-            loss_av = loss_vae + loss_2 - loss_2.detach()
-        else:
-            delta_2 = torch.tensor(0.0, dtype=loss_vae.dtype, device=loss_vae.device)
-            loss_av = loss_vae
-
-        # add everything you want as long as there is one loss
-        return MetricMiniBatchSimple(loss=loss_av,
-                                     mse=mse_av.detach(),
-                                     kl_tot=kl_av.detach(),
-                                     geco_balance=f_balance,
-                                     delta_2=delta_2)
-
-    # this is the generic function which has all the options unspecified
-    def process_batch_imgs(self,
-                           imgs_in: torch.tensor,
-                           generate_synthetic_data: bool,
-                           noisy_sampling: bool):
-        """ It needs to return: metric (with a .loss member) and whatever else """
-
-        # Checks
-        assert len(imgs_in.shape) == 4
-        assert self.input_img_dict["ch_in"] == imgs_in.shape[-3]
-        # End of Checks #
-
-        z_inferred: ZZ = self.encoder.forward(imgs_in)
-        z: DIST = sample_and_kl_diagonal_normal(posterior_mu=z_inferred.mu,
-                                                posterior_std=z_inferred.std,
-                                                prior_mu=torch.zeros_like(z_inferred.mu),
-                                                prior_std=torch.ones_like(z_inferred.std),
-                                                noisy_sampling=noisy_sampling,
-                                                sample_from_prior=generate_synthetic_data)
-
-        imgs_rec = torch.sigmoid(self.decoder.forward(z.sample))
-
-        metrics = self.compute_metrics(imgs_in=imgs_in,
-                                       imgs_out=imgs_rec,
-                                       kl=z.kl)
-
-        return OutputSimple(metrics=metrics, z=z.sample, imgs=imgs_rec)
-
-    def forward(self, imgs_in: torch.tensor):
-        return self.process_batch_imgs(imgs_in=imgs_in,
-                                       generate_synthetic_data=False,
-                                       noisy_sampling=True)  # True if self.training else False,
-
-    def generate(self, imgs_in: torch.tensor):
-        with torch.no_grad():
-            return self.process_batch_imgs(imgs_in=torch.zeros_like(imgs_in),
-                                           generate_synthetic_data=True,
-                                           noisy_sampling=True)

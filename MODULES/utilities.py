@@ -1,13 +1,14 @@
-import torch
 import PIL.Image
 import PIL.ImageDraw 
 import json
 import numpy
 import dill
+import neptune
 from torch.distributions.utils import broadcast_all
 from typing import Union, Callable, Optional
 from .utilities_visualization import show_batch
-from .namedtuple import BB, DIST
+from .namedtuple import BB, DIST, MetricMiniBatch
+from .utilities_neptune import *
 from collections import OrderedDict
 
 
@@ -186,6 +187,25 @@ def are_broadcastable(a: torch.Tensor, b: torch.Tensor) -> bool:
     return all((m == n) or (m == 1) or (n == 1) for m, n in zip(a.shape[::-1], b.shape[::-1]))
 
 
+def roller_2d(a: torch.tensor, b: Optional[torch.tensor] = None, radius: int = 2):
+    """ Performs rolling of the last two spatial dimensions.
+        For each point consider half a square. Each pair of points will appear once.
+        Number of channels: [(2r+1)**2 - 1]/2
+        For example for a radius = 2 the full square is 5x5. The number of pairs is: 12
+    """
+    dxdy_list = []
+    for dx in range(0, radius + 1):
+        for dy in range(-radius, radius + 1):
+            if dx == 0 and dy <= 0:
+                continue
+            dxdy_list.append((dx, dy))
+
+    for dxdy in dxdy_list:
+        a_tmp = torch.roll(torch.roll(a, dxdy[0], dims=-2), dxdy[1], dims=-1)
+        b_tmp = None if b is None else torch.roll(torch.roll(b, dxdy[0], dims=-2), dxdy[1], dims=-1)
+        yield a_tmp, b_tmp
+
+
 def append_to_dict(source: Union[tuple, dict],
                    target: dict,
                    prefix_include: str = None,
@@ -255,53 +275,38 @@ class Moving_Average_Calculator(object):
 
 
 class Accumulator(object):
-    """ accumulate a tuple or tuple into a dictionary.
-        At the end returns the tuple with the average values """
+    """ accumulate a tuple or dictionary into a dictionary """
 
     def __init__(self):
         super().__init__()
         self._counter = 0
         self._dict_accumulate = OrderedDict()
-        self._input_cls = None
 
-    def accumulate(self, input: Union[tuple, dict], counter_increment: int = 1):
-
-        if self._input_cls is None:
-            self._input_cls = input.__class__
-        else:
-            assert isinstance(input, self._input_cls)
-
-        if isinstance(input, tuple):
-            input_dict = input._asdict()
-        elif isinstance(input, dict) or isinstance(input, OrderedDict):
-            input_dict = input
+    def _accumulate_key_value(self, key, value, counter_increment):
+        if isinstance(value, torch.Tensor):
+            x = value.detach().item() * counter_increment
+        elif isinstance(value, float):
+            x = value * counter_increment
         else:
             raise Exception
+        self._dict_accumulate[key] = x + self._dict_accumulate.get(key, 0)
 
+    def accumulate(self, source: Union[tuple, dict], counter_increment: int = 1):
         self._counter += counter_increment
 
-        for k, v in input_dict.items():
-            try:
-                self._dict_accumulate[k] = v * counter_increment + self._dict_accumulate[k]
-            except KeyError:
-                self._dict_accumulate[k] = v * counter_increment
-
-    def get_cumulative(self):
-        return self.export(self._dict_accumulate)
+        if isinstance(source, tuple):
+            for key in source._fields:
+                value = getattr(source, key)
+                self._accumulate_key_value(key, value, counter_increment)
+        else:
+            for key, value in source.items():
+                self._accumulate_key_value(key, value, counter_increment)
 
     def get_average(self):
-        tmp = self._dict_accumulate
+        tmp = self._dict_accumulate.copy()
         for k, v in self._dict_accumulate.items():
             tmp[k] = v/self._counter
-        return self.export(tmp)
-
-    def export(self, od):
-        if self._input_cls == dict:
-            return dict(od)
-        elif self._input_cls == OrderedDict:
-            return od
-        else:
-            return self._input_cls._make(od.values())
+        return tmp
 
 
 class ConditionalRandomCrop(object):
@@ -444,7 +449,8 @@ class SpecialDataSet(object):
             self.cum_roi_mask = None
         else:
             self.roi_mask = roi_mask.to(storing_device).detach().expand(new_batch_size, -1, -1, -1)
-            self.cum_roi_mask = roi_mask.to(storing_device).detach().cumsum(dim=-1).cumsum(dim=-2).expand(new_batch_size, -1, -1, -1)
+            self.cum_roi_mask = roi_mask.to(storing_device).detach().cumsum(dim=-1).cumsum(
+                dim=-2).expand(new_batch_size, -1, -1, -1)
 
     def __len__(self):
         return self.img.shape[0]
@@ -497,7 +503,9 @@ def process_one_epoch(model: torch.nn.Module,
                       dataloader: SpecialDataSet,
                       optimizer: Optional[torch.optim.Optimizer] = None,
                       weight_clipper: Optional[Callable[[None], None]] = None,
-                      verbose: bool = False) -> dict:
+                      verbose: bool = False,
+                      neptune_experiment: Optional[neptune.experiments.Experiment] = None,
+                      neptune_prefix: Optional[str] = None) -> dict:
     """ return a tuple with all the metrics averaged over a epoch """
     metric_accumulator = Accumulator()
 
@@ -507,16 +515,14 @@ def process_one_epoch(model: torch.nn.Module,
         # Put data in GPU if available
         if torch.cuda.is_available() and imgs.device == torch.device('cpu'):
             imgs = imgs.cuda()
-            labels = labels.cuda()
-            index = index.cuda()
-            
+
         metrics = model.forward(imgs_in=imgs).metrics  # the forward function returns metric and other stuff
         if verbose:
             print("i = %3d train_loss=%.5f" % (i, metrics.loss))
 
         # Accumulate metrics over an epoch
         with torch.no_grad():
-            metric_accumulator.accumulate(input=metrics, counter_increment=len(index))
+            metric_accumulator.accumulate(source=metrics, counter_increment=len(index))
 
         # Only if training I apply backward
         if model.training:
@@ -537,7 +543,12 @@ def process_one_epoch(model: torch.nn.Module,
 
     # At the end of the loop compute the average of the metrics
     with torch.no_grad():
-        return metric_accumulator.get_average()
+        metric_one_epoch = metric_accumulator.get_average()
+        if neptune_experiment is not None:
+            log_metrics(experiment=neptune_experiment,
+                        metrics=metric_one_epoch,
+                        prefix=neptune_prefix)
+        return MetricMiniBatch._make(metric_one_epoch.values())
 
 
 def compute_ranking(x: torch.Tensor) -> torch.Tensor:
@@ -650,8 +661,8 @@ def draw_bounding_boxes(prob: Optional[torch.Tensor], bounding_box: BB, width: i
         img = PIL.Image.new('RGB', (width, height), color=0)
         draw = PIL.ImageDraw.Draw(img)
         for box in range(n_boxes):
-            if prob[box, batch] > -1:
             # if prob[box, batch] > 0.5:
+            if prob[box, batch] > -1:
                 draw.rectangle(x1y1x3y3[box, batch, :].cpu().numpy(), outline='red', fill=None)
         batch_bb_np[batch, ...] = numpy.array(img.getdata(), numpy.uint8).reshape((width, height, 3))
 
@@ -662,17 +673,11 @@ def draw_bounding_boxes(prob: Optional[torch.Tensor], bounding_box: BB, width: i
 
 def sample_from_constraints_dict(dict_soft_constraints: dict,
                                  var_name: str,
-                                 var_value: Union[float, torch.Tensor],
+                                 var_value: torch.Tensor,
                                  verbose: bool = False,
-                                 chosen: Optional[int] = None) -> Union[float, torch.Tensor]:
+                                 chosen: Optional[int] = None) -> torch.Tensor:
 
-    if isinstance(var_value, torch.Tensor):
-        cost: torch.Tensor = torch.zeros_like(var_value)
-    elif isinstance(var_value, float):
-        cost: float = 0.0
-    else:
-        raise Exception
-
+    cost = torch.zeros_like(var_value)
     var_constraint_params = dict_soft_constraints[var_name]
 
     if 'lower_bound_value' in var_constraint_params:

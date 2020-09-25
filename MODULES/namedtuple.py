@@ -1,6 +1,6 @@
 import torch
 import numpy
-from typing import NamedTuple, Optional
+from typing import NamedTuple, Optional, Union
 import skimage.color
 import matplotlib.pyplot as plt
 
@@ -258,110 +258,71 @@ class Inference(NamedTuple):
     big_img: torch.Tensor
     big_mask: torch.Tensor
     big_mask_NON_interacting: torch.Tensor  # Use exclusively to compute overlap penalty
-    prob: torch.Tensor
-    bounding_box: BB
-    zinstance_each_obj: torch.Tensor
-    kl_zinstance_each_obj: torch.Tensor
-    kl_zwhere_map: torch.Tensor
+    # the samples of the 3 latent variables
+    sample_prob: torch.Tensor
+    sample_bb: BB
+    sample_zinstance: torch.Tensor
+    # kl of the 3 latent variables
     kl_logit_map: torch.Tensor
-
-
-class MetricMiniBatch(NamedTuple):
-    loss: torch.Tensor
-    mse: torch.Tensor
-    reg: torch.Tensor
-    kl_tot: torch.Tensor
-    kl_instance: torch.Tensor
-    kl_where: torch.Tensor
-    kl_logit: torch.Tensor
-    sparsity: torch.Tensor
-    fg_fraction: torch.Tensor
-    geco_sparsity: torch.Tensor
-    geco_balance: torch.Tensor
-    delta_1: torch.Tensor
-    delta_2: torch.Tensor
-    length_GP: torch.Tensor
-    n_obj_counts: torch.Tensor
+    kl_zwhere_map: torch.Tensor  # all or only few
+    kl_zinstance: torch.Tensor
 
 
 class RegMiniBatch(NamedTuple):
-    cost_overlap: torch.Tensor
-    cost_vol_absolute: torch.Tensor
-    cost_total: torch.Tensor
+    # All entries should be scalars obtained by averaging over minibatch
+    reg_overlap: torch.Tensor
+    reg_area_obj: torch.Tensor
+
+    def total(self):
+        tot = None
+        for x in self:
+            if tot is None:
+                tot = x
+            else:
+                tot += x
+        return tot
 
 
-class Metric_and_Reg(NamedTuple):
-    # MetricMiniBatch (in the same order as underlying class)
-    loss: torch.Tensor
-    mse: torch.Tensor
-    reg: torch.Tensor
-    kl_tot: torch.Tensor
-    kl_instance: torch.Tensor
-    kl_where: torch.Tensor
-    kl_logit: torch.Tensor
-    sparsity: torch.Tensor
-    fg_fraction: torch.Tensor
-    geco_sparsity: torch.Tensor
-    geco_balance: torch.Tensor
-    delta_1: torch.Tensor
-    delta_2: torch.Tensor
-    length_GP: torch.Tensor
-    n_obj_counts: torch.Tensor
-    # RegMiniBatch (in the same order as underlying class)
-    cost_overlap: torch.Tensor
-    cost_vol_absolute: torch.Tensor
-    cost_total: torch.Tensor
+class MetricMiniBatch(NamedTuple):
+    # All entries should be scalars obtained by averaging over minibatch
+    loss: Union[torch.Tensor, float] # this is the only tensor b/c I need to take gradients
+    mse_tot: float
+    reg_tot: float
+    kl_tot: float
+    sparsity_tot: float
 
-    @classmethod
-    def from_merge(cls, metrics, regularizations):
-        assert isinstance(metrics, MetricMiniBatch) and isinstance(regularizations, RegMiniBatch)
-        assert cls._fields == MetricMiniBatch._fields + RegMiniBatch._fields
-        return cls._make([*metrics, *regularizations])
+    kl_instance: float
+    kl_where: float
+    kl_logit: float
+    sparsity_mask: float
+    sparsity_box: float
+    sparsity_prob: float
+    reg_overlap: float
+    reg_area_obj: float
+
+    fg_fraction: float
+    geco_sparsity: float
+    geco_balance: float
+    delta_1: float
+    delta_2: float
+    length_GP: float
 
     def pretty_print(self, epoch: int=0) -> str:
-        s = "[epoch {0:4d}] loss={1:.3f}, mse={2:.3f}, reg={3:.3f}, \
-              kl_tot={4:.3f}, sparsity={5:.3f}, fg_fraction={6:.3f}, \
-              geco_sp={7:.3f}, geco_bal={8:.3f}".format(epoch,
-                                                        self.loss,
-                                                        self.mse,
-                                                        self.reg,
-                                                        self.kl_tot,
-                                                        self.sparsity,
-                                                        self.fg_fraction,
-                                                        self.geco_sparsity,
-                                                        self.geco_balance)
+        s = "[epoch {0:4d}] loss={1:.3f}, mse={2:.3f}, \
+        reg={3:.3f}, kl_tot={4:.3f}, sparsity={5:.3f}, \
+        fg_fraction={6:.3f}, geco_sp={7:.3f}, geco_bal={8:.3f}".format(epoch,
+                                                                       self.loss,
+                                                                       self.mse_tot,
+                                                                       self.reg_tot,
+                                                                       self.kl_tot,
+                                                                       self.sparsity_tot,
+                                                                       self.fg_fraction,
+                                                                       self.geco_sparsity,
+                                                                       self.geco_balance)
         return s
 
 
 class Output(NamedTuple):
-    metrics: Metric_and_Reg
+    metrics: MetricMiniBatch
     inference: Inference
-    imgs: torch.Tensor
-
-
-# -------------------------------
-# For debug I try a simple VAE
-# -------------------------------
-
-
-class MetricMiniBatchSimple(NamedTuple):
-    loss: torch.Tensor
-    mse: torch.Tensor
-    kl_tot: torch.Tensor
-    geco_balance: torch.Tensor
-    delta_2: torch.Tensor
-
-    def pretty_print(self, epoch: int=0) -> str:
-        s = '[epoch {0:4d}] loss={1:.3f}, mse={2:.3f}, kl_tot={3:.3f}, geco_bal={4:.3f}'.format(epoch,
-                                                                                                self.loss.item(),
-                                                                                                self.mse.item(),
-                                                                                                self.kl_tot.item(),
-                                                                                                self.geco_balance.item(),
-                                                                                                self.delta_2.item())
-        return s
-
-
-class OutputSimple(NamedTuple):
-    metrics: MetricMiniBatchSimple
-    z: torch.Tensor
     imgs: torch.Tensor

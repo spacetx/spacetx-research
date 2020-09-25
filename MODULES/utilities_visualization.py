@@ -48,6 +48,6 @@ def show_batch(images: torch.Tensor,
     fig.tight_layout()
 
     if name_for_neptune is not None:
-        log_chart(name='name_for_neptune', chart=fig)
+        log_chart(name=name_for_neptune, chart=fig)
     return fig
 

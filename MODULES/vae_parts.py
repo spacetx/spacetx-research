@@ -285,7 +285,7 @@ class Inference_and_Generation(torch.nn.Module):
         big_mask_NON_interacting = torch.tanh(big_weight)
 
         # 8. Return the inferred quantities
-        return Inference(length_scale_GP=length_scale_GP.data.detach(),
+        return Inference(length_scale_GP=length_scale_GP,
                          p_map=p_map_cor,
                          area_map=area_map,
                          big_bg=big_bg,
@@ -293,10 +293,10 @@ class Inference_and_Generation(torch.nn.Module):
                          big_mask_NON_interacting=big_mask_NON_interacting,
                          big_img=big_img,
                          # the sample of the 3 latent variables
-                         prob=prob_few,
-                         bounding_box=bounding_box_few,
-                         zinstance_each_obj=zinstance_few.sample,
+                         sample_prob=prob_few,
+                         sample_bb=bounding_box_few,
+                         sample_zinstance=zinstance_few.sample,
                          # the kl of the 3 latent variables
                          kl_logit_map=logit_map.kl,
                          kl_zwhere_map=zwhere_map.kl,
-                         kl_zinstance_each_obj=zinstance_few.kl)
+                         kl_zinstance=zinstance_few.kl)
