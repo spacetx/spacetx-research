@@ -455,7 +455,7 @@ class CompositionalVae(torch.nn.Module):
             except RuntimeError:
                 img_padded = F.pad(single_img.cpu().unsqueeze(0),
                                    pad=pad_list, mode='constant', value=0).squeeze(0)  # 1, ch_in, w_pad, h_pad
-            # w_paddded, h_padded = img_padded.shape[-2:]
+            w_paddded, h_padded = img_padded.shape[-2:]
 
             # This is creating the index matrix on the cpu
             max_index = w_img * h_img
@@ -473,11 +473,13 @@ class CompositionalVae(torch.nn.Module):
             ij_tmp = torch.tensor(location_of_corner, device=torch.device('cpu'), dtype=torch.long)  # shape: N, 2
             x1 = ij_tmp[..., 0]
             y1 = ij_tmp[..., 1]
+            del ij_tmp
 
             if roi_mask is not None:
-                assert roi_mask.shape[-2:] == img_padded.shape[-2:]
+                assert roi_mask.shape[-2:] == single_img.shape[-2:]
                 cum_roi_mask = F.pad(torch.cumsum(torch.cumsum(roi_mask, dim=-1), dim=-2),
                                      pad=pad_list, mode='constant', value=0)
+                assert cum_roi_mask.shape[-2:] == img_padded.shape[-2:]
 
                 # Exclude stuff if outside the roi_mask
                 integral = cum_roi_mask[0, x1 + crop_size[0] - 1, y1 + crop_size[1] - 1] - \
@@ -490,7 +492,6 @@ class CompositionalVae(torch.nn.Module):
                 y1 = y1[mask]
                 del cum_roi_mask
                 del mask
-            del ij_tmp
 
             print(f'I am going to process {x1.shape[0]} patches')
             if not (x1.shape[0] >= 1):
@@ -500,6 +501,7 @@ class CompositionalVae(torch.nn.Module):
             index = torch.arange(0, x1.shape[0], dtype=torch.long, device=torch.device('cpu'))
             n_list_of_list = [index[n:n + batch_size] for n in range(0, index.shape[0], batch_size)]
             n_instances_tot = 0
+            need_initialization = True
             for n_batches, n_list in enumerate(n_list_of_list):
 
                 batch_imgs = torch.stack([img_padded[...,
@@ -525,16 +527,18 @@ class CompositionalVae(torch.nn.Module):
                                             radius_nn=radius_nn)
                 # print("segmentation time", time.time()-start_time)
 
-                if big_fg_prob is None:
+                # Initialize only the fist time
+                if need_initialization:
                     # Probability and integer mask are dense tensor
-                    big_fg_prob = torch.zeros((w_img, h_img),
+                    big_fg_prob = torch.zeros((w_paddded, h_padded),
                                               device=torch.device('cpu'),
                                               dtype=segmentation.fg_prob.dtype)
-                    big_integer_mask = torch.zeros((w_img, h_img),
+                    big_integer_mask = torch.zeros((w_paddded, h_padded),
                                                    device=torch.device('cpu'),
                                                    dtype=segmentation.integer_mask.dtype)
                     # Similarity is a sparse tensor
                     sparse_similarity_matrix = torch.sparse.FloatTensor(max_index, max_index).cpu()
+                    need_initialization = False
 
                 # Unpack the data from batch
                 sparse_similarity_matrix.add_(segmentation.similarity.sparse_matrix.cpu())
@@ -543,8 +547,7 @@ class CompositionalVae(torch.nn.Module):
                 integer_mask = segmentation.integer_mask.cpu()
 
                 for k, n in enumerate(n_list):
-                    big_fg_prob[x1[n]:x1[n] + crop_size[0],
-                    y1[n]:y1[n] + crop_size[1]] += fg_prob[k, 0]
+                    big_fg_prob[x1[n]:x1[n] + crop_size[0], y1[n]:y1[n] + crop_size[1]] += fg_prob[k, 0]
 
                     # Find a set of not-overlapping tiles to obtain a sample segmentation (without graph clustering)
                     if ((x1[n] - pad_w) % crop_size[0] == 0) and ((y1[n] - pad_h) % crop_size[1] == 0):
@@ -552,8 +555,8 @@ class CompositionalVae(torch.nn.Module):
                         shifted_integer_mask = (integer_mask[k] > 0) * \
                                                (integer_mask[k] + n_instances_tot)
                         n_instances_tot += n_instances
-                        big_integer_mask[x1[n]:x1[n] + crop_size[0],
-                        y1[n]:y1[n] + crop_size[1]] = shifted_integer_mask[0]
+                        big_integer_mask[x1[n]:x1[n] +
+                                               crop_size[0], y1[n]:y1[n] + crop_size[1]] = shifted_integer_mask[0]
 
             # End of loop over batches
             sparse_similarity_matrix.div_(n_prediction)

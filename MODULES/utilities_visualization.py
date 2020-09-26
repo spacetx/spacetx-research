@@ -5,6 +5,7 @@ import numpy
 from typing import Tuple, Optional
 from torchvision import utils
 from matplotlib import pyplot as plt
+import skimage.color
 
 from .namedtuple import BB
 
@@ -78,15 +79,19 @@ def plot_grid(img, figsize=None):
 
     row_max = n_max // 4
     if row_max <= 1:
-        figure, axes = plt.subplots(ncols=n_max, figsize=figsize)
+        fig, axes = plt.subplots(ncols=n_max, figsize=figsize)
         for n in range(n_max):
             axes[n].imshow(img[n])
     else:
-        figure, axes = plt.subplots(ncols=4, nrows=row_max, figsize=figsize)
+        fig, axes = plt.subplots(ncols=4, nrows=row_max, figsize=figsize)
         for n in range(4 * row_max):
             row = n // 4
             col = n % 4
             axes[row, col].imshow(img[n])
+
+    plt.close(fig)
+    fig.tight_layout()
+    return fig
 
 
 def show_batch(images: torch.Tensor,
@@ -114,3 +119,125 @@ def show_batch(images: torch.Tensor,
     fig.tight_layout()
 
     return fig
+
+
+def plot_tiling(tiling, figsize: tuple = (12, 12)):
+    fig, axes = plt.subplots(ncols=2, nrows=2, figsize=figsize)
+    axes[0, 0].imshow(skimage.color.label2rgb(tiling.integer_mask[0, 0].cpu().numpy(),
+                                              numpy.zeros_like(tiling.integer_mask[0, 0].cpu().numpy()),
+                                              alpha=1.0,
+                                              bg_label=0))
+    axes[0, 1].imshow(skimage.color.label2rgb(tiling.integer_mask[0, 0].cpu().numpy(),
+                                              tiling.raw_image[0, 0].cpu().numpy(),
+                                              alpha=0.25,
+                                              bg_label=0))
+    axes[1, 0].imshow(tiling.fg_prob[0, 0].cpu().numpy(), cmap='gray')
+    axes[1, 1].imshow(tiling.raw_image[0].cpu().permute(1, 2, 0).squeeze(-1).numpy(), cmap='gray')
+
+    axes[0, 0].set_title("sample integer mask")
+    axes[0, 1].set_title("sample integer mask")
+    axes[1, 0].set_title("fg prob")
+    axes[1, 1].set_title("raw image")
+    fig.tight_layout()
+    plt.close(fig)
+
+    return fig
+
+
+def plot_loss(history_dict: dict, test_frequency: int = 5):
+
+    x = numpy.arange(0, len(history_dict["test_loss"])*test_frequency, test_frequency)
+
+    fig, ax = plt.subplots()
+    ax.plot(history_dict["train_loss"], '-', label="train loss")
+    ax.plot(x, history_dict["test_loss"], '.--', label="test loss")
+
+    ax.set_xlabel('epoch')
+    ax.set_ylabel('LOSS = - ELBO')
+    ax.set_title('Training procedure')
+    ax.grid()
+    ax.legend()
+    plt.close()
+    fig.tight_layout()
+    return fig
+
+
+def plot_kl(history_dict: dict, train_or_test: str = "test"):
+    if train_or_test == "test":
+        kl_instance = history_dict["test_kl_instance"]
+        kl_where = history_dict["test_kl_where"]
+        kl_logit = history_dict["test_kl_logit"]
+    elif train_or_test == "train":
+        kl_instance = history_dict["train_kl_instance"]
+        kl_where = history_dict["train_kl_where"]
+        kl_logit = history_dict["train_kl_logit"]
+    else:
+        raise Exception
+
+    fig, ax = plt.subplots()
+    ax.plot(kl_instance, '-', label="kl_instance")
+    ax.plot(kl_where, '.-', label="kl_where")
+    ax.plot(kl_logit, '.--', label="kl_logit")
+    ax.set_xlabel('epoch')
+    ax.set_ylabel('kl')
+    ax.grid()
+    ax.legend()
+    plt.close()
+    fig.tight_layout()
+    return fig
+
+
+def plot_sparsity(history_dict: dict, train_or_test: str = "test"):
+    if train_or_test == "test":
+        sparsity_mask = history_dict["test_sparsity_mask"]
+        sparsity_box = history_dict["test_sparsity_box"]
+        sparsity_prob = history_dict["test_sparsity_prob"]
+    elif train_or_test == "train":
+        sparsity_mask = history_dict["train_sparsity_mask"]
+        sparsity_box = history_dict["train_sparsity_box"]
+        sparsity_prob = history_dict["train_sparsity_prob"]
+    else:
+        raise Exception
+
+    fig, ax = plt.subplots()
+    ax.plot(sparsity_mask, '-', label="sparsity_mask")
+    ax.plot(sparsity_box, '.-', label="sparsity_box")
+    ax.plot(sparsity_prob, '.--', label="sparsity_prob")
+    ax.set_xlabel('epoch')
+    ax.set_ylabel('sparsity')
+    ax.grid()
+    ax.legend()
+    plt.close()
+    fig.tight_layout()
+    return fig
+
+def plot_loss_term(history_dict: dict, train_or_test: str = "test"):
+    if train_or_test == "test":
+        loss = history_dict["test_loss"]
+        mse = history_dict["test_mse_tot"]
+        reg = history_dict["test_reg_tot"]
+        kl = history_dict["test_kl_tot"]
+        sparsity = history_dict["test_sparsity_tot"]
+    elif train_or_test == "train":
+        loss = history_dict["test_loss"]
+        mse = history_dict["test_mse_tot"]
+        reg = history_dict["test_reg_tot"]
+        kl = history_dict["test_kl_tot"]
+        sparsity = history_dict["test_sparsity_tot"]
+    else:
+        raise Exception
+
+    FROM HERE
+
+ax6.plot(loss,'-',label='loss')
+ax6.plot(f_geco_sparsity * sparsity_raw,'x-',label='scaled_sparsity')
+ax6.plot(f_geco_balance * reg_raw,'x-',label='scaled_reg')
+ax6.plot(f_geco_balance * mse_raw,'x-',label='scaled_mse')
+ax6.plot((1-f_geco_balance) * kl_raw,'x-',label='scaled_kl')
+ax6.set_ylim([0, 1.01*max(loss[epoch_min:epoch_max])])
+ax6.set_xlim([epoch_min, epoch_max])
+ax6.grid()
+ax6.legend()
+
+
+

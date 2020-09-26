@@ -23,6 +23,22 @@ def log_model_summary(model: torch.nn.Module,
         print("leaving log_model_summary")
 
 
+def log_object_as_artifact(name: str,
+                           obj: object,
+                           experiment: Optional[neptune.experiments.Experiment] = None,
+                           verbose: bool = False):
+    if verbose:
+        print("inside log_object_as_artifact")
+
+    path = name+".pt"
+    save_obj(obj=obj, path=path)
+    _exp = experiment if experiment else neptune
+    _exp.log_artifact(path)
+
+    if verbose:
+        print("leaving log_object_as_artifact")
+
+
 def log_matplotlib_as_png(name: str,
                           fig: matplotlib.figure.Figure,
                           experiment: Optional[neptune.experiments.Experiment] = None,

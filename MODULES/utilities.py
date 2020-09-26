@@ -90,7 +90,7 @@ def roller_2d(a: torch.tensor, b: Optional[torch.tensor] = None, radius: int = 2
 
 
 def append_to_dict(source: Union[tuple, dict],
-                   target: dict,
+                   destination: dict,
                    prefix_include: str = None,
                    prefix_exclude: str = None,
                    prefix_to_add: str = None):
@@ -99,28 +99,32 @@ def append_to_dict(source: Union[tuple, dict],
         For now: prefix_exclude is str or tuple of str
         For now: prefix_to_add is str """
 
-    def _append_key_value(_key, _value):
+    def _get_x_y(_key, _value):
         if (prefix_include is None or _key.startswith(prefix_include)) and (prefix_exclude is None or
                                                                             not _key.startswith(prefix_exclude)):
-            new_key = _key if prefix_to_add is None else prefix_to_add + _key
-
+            x = _key if prefix_to_add is None else prefix_to_add + _key
             try:
-                x = _value.item()
+                y = _value.item()
             except AttributeError:
-                x = _value
+                y = _value
+            return x, y
+        else:
+            return None, None
 
-            new_x = target.get(new_key, [])
-            new_x.append(x)
-            target[new_key] = new_x
+    try:
+        for key, value in source.items():
+            x, y = _get_x_y(key, value)
+            if x is not None:
+                destination[x] = destination.get(x, []) + [y]
 
-    if isinstance(source, NamedTuple):
+    except AttributeError:
         for key in source._fields:
             value = getattr(source, key)
-            _append_key_value(key, value)
+            x, y = _get_x_y(key, value)
+            if x is not None:
+                destination[x] = destination.get(x, []) + [y]
 
-    elif isinstance(source, dict) or isinstance(source, OrderedDict):
-        for key, value in source.items():
-            _append_key_value(key, value)
+    return destination
 
 
 def compute_ranking(x: torch.Tensor) -> torch.Tensor:

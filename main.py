@@ -2,9 +2,9 @@
 # coding: utf-8
 
 import neptune
-from MODULES.utilities_neptune import log_matplotlib_as_png, log_dict_metrics, log_model_summary, log_last_ckpt
+from MODULES.utilities_neptune import log_matplotlib_as_png, log_object_as_artifact, log_model_summary, log_last_ckpt
 from MODULES.vae_model import *
-from MODULES.utilities_visualization import show_batch
+from MODULES.utilities_visualization import show_batch, plot_tiling, plot_loss
 from MODULES.utilities_ml import ConditionalRandomCrop, SpecialDataSet, process_one_epoch
 from neptunecontrib.api import log_chart
 
@@ -73,6 +73,7 @@ log_matplotlib_as_png("reference_imgs", reference_imgs_fig)
 
 # Instantiate model, optimizer and checks
 vae = CompositionalVae(params)
+log_model_summary(vae)
 optimizer = instantiate_optimizer(model=vae, dict_params_optimizer=params["optimizer"])
 # print("GPU GB after model and optimizer ->",torch.cuda.memory_allocated()/1E9)
 
@@ -145,7 +146,7 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                                               verbose=(epoch == 0),
                                               weight_clipper=None,
                                               neptune_experiment=exp,
-                                              neptune_prefix="train")
+                                              neptune_prefix="train_")
             print("Train " + train_metrics.pretty_print(epoch))
 
             if params["optimizer"]["scheduler_is_active"]:
@@ -154,10 +155,10 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
             with torch.no_grad():
 
                 history_dict = append_to_dict(source=train_metrics,
-                                              target=history_dict,
+                                              destination=history_dict,
                                               prefix_exclude="wrong_examples",
                                               prefix_to_add="train_")
-        
+
                 if (epoch % TEST_FREQUENCY) == 0:
                     output: Output = vae.forward(reference_imgs, draw_image=True, draw_boxes=True, verbose=False)
                     imgs_rec_train_fig = show_batch(output.imgs[:8], n_col=4, n_padding=4,
@@ -177,10 +178,10 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                                                      verbose=(epoch == 0),
                                                      weight_clipper=None,
                                                      neptune_experiment=exp,
-                                                     neptune_prefix="test")
+                                                     neptune_prefix="test_")
                     print("Test  "+test_metrics.pretty_print(epoch))
                     history_dict = append_to_dict(source=test_metrics,
-                                                  target=history_dict,
+                                                  destination=history_dict,
                                                   prefix_exclude="wrong_examples",
                                                   prefix_to_add="test_")
 
@@ -227,7 +228,7 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                                            hyperparams_dict=params,
                                            history_dict=history_dict)
 
-                        #log_last_ckpt(name="last_ckpt", ckpt=ckpt)  # log file into neptune
+                        # log_object_as_artifact(name="last_ckpt", obj=ckpt)  # log file into neptune
 
 
 # # Check segmentation WITH tiling
@@ -242,28 +243,17 @@ tiling = vae.segment_with_tiling(single_img=img_to_segment,
                                  overlap_threshold=None,
                                  radius_nn=10,
                                  batch_size=64)
-save_obj(tiling, "tiling.pt")  # save locally to file 
-exp.log_artifact("tiling", "tiling.pt")  # log gile into neptune
+#log_object_as_artifact(name="tiling", obj=tiling)
+tiling_fig = plot_tiling(tiling)
+exp.log_image("tiling.png", tiling_fig)
+log_matplotlib_as_png("tiling_2", tiling_fig)
+log_chart("tiling_3", tiling_fig)
 
+loss_fig = plot_loss(history_dict)
+exp.log_image("loss.png", loss_fig)
+log_matplotlib_as_png("loss_2", loss_fig)
+log_chart("loss_3", loss_fig)
 
-# HERE TO CHART
-figure, axes = plt.subplots(ncols=4, figsize=(24, 24))
-axes[0].imshow(skimage.color.label2rgb(tiling.integer_mask[0, 0].cpu().numpy(),
-                                       numpy.zeros_like(tiling.integer_mask[0, 0].cpu().numpy()),
-                                       alpha=1.0,
-                                       bg_label=0))
-axes[1].imshow(skimage.color.label2rgb(tiling.integer_mask[0, 0].cpu().numpy(),
-                                       tiling.raw_image[0, 0].cpu().numpy(),
-                                       alpha=0.25,
-                                       bg_label=0))
-axes[2].imshow(tiling.fg_prob[0, 0].cpu().numpy(), cmap='gray')
-axes[3].imshow(tiling.raw_image[0].cpu().permute(1, 2, 0).squeeze(-1).numpy(), cmap='gray')
-
-axes[0].set_title("sample integer mask")
-axes[1].set_title("sample integer mask")
-axes[2].set_title("fg prob")
-axes[3].set_title("raw image")
-log_matplotlib_as_png("tiling_img", figure)
 
 
 #####plt.imshow(output_test.inference.p_map[chosen,0].cpu().numpy())
