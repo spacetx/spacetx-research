@@ -6,8 +6,10 @@ from typing import Tuple, Optional
 from torchvision import utils
 from matplotlib import pyplot as plt
 import skimage.color
+import neptune
 
-from .namedtuple import BB
+from .namedtuple import BB, Output, Segmentation
+from .utilities_neptune import log_img_and_chart
 
 
 def draw_img(prob: torch.tensor,
@@ -73,7 +75,11 @@ def draw_bounding_boxes(prob: Optional[torch.Tensor], bounding_box: BB, width: i
     return batch_bb_torch.to(bounding_box.bx.device)
 
 
-def plot_grid(img, figsize=None):
+def plot_grid(img,
+              figsize: Optional[Tuple[float, float]] = None,
+              experiment: Optional[neptune.experiments.Experiment] = None,
+              neptune_name: Optional[str] = None):
+
     assert len(img.shape) == 3
     n_max = img.shape[-3]
 
@@ -89,8 +95,10 @@ def plot_grid(img, figsize=None):
             col = n % 4
             axes[row, col].imshow(img[n])
 
-    plt.close(fig)
     fig.tight_layout()
+    if neptune_name is not None:
+        log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
+    plt.close(fig)
     return fig
 
 
@@ -100,7 +108,10 @@ def show_batch(images: torch.Tensor,
                title: Optional[str] = None,
                pad_value: int = 1,
                normalize_range: Optional[tuple] = None,
-               figsize: Optional[Tuple[float, float]] = None):
+               figsize: Optional[Tuple[float, float]] = None,
+               experiment: Optional[neptune.experiments.Experiment] = None,
+               neptune_name: Optional[str] = None):
+
     """Visualize a torch tensor of shape: (batch x ch x width x height) """
     assert len(images.shape) == 4  # batch, ch, width, height
     if images.device != "cpu":
@@ -115,13 +126,20 @@ def show_batch(images: torch.Tensor,
     plt.imshow(grid.detach().permute(1, 2, 0).squeeze(-1).numpy())
     if isinstance(title, str):
         plt.title(title)
-    plt.close(fig)
     fig.tight_layout()
 
+    if neptune_name is not None:
+        log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
+
+    plt.close(fig)
     return fig
 
 
-def plot_tiling(tiling, figsize: tuple = (12, 12)):
+def plot_tiling(tiling,
+                figsize: tuple = (12, 12),
+                experiment: Optional[neptune.experiments.Experiment] = None,
+                neptune_name: str = "tiling"):
+
     fig, axes = plt.subplots(ncols=2, nrows=2, figsize=figsize)
     axes[0, 0].imshow(skimage.color.label2rgb(tiling.integer_mask[0, 0].cpu().numpy(),
                                               numpy.zeros_like(tiling.integer_mask[0, 0].cpu().numpy()),
@@ -139,30 +157,40 @@ def plot_tiling(tiling, figsize: tuple = (12, 12)):
     axes[1, 0].set_title("fg prob")
     axes[1, 1].set_title("raw image")
     fig.tight_layout()
+    log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
     plt.close(fig)
-
     return fig
 
 
-def plot_loss(history_dict: dict, test_frequency: int = 5):
+def plot_loss(history_dict: dict,
+              test_frequency: int = 5,
+              experiment: Optional[neptune.experiments.Experiment] = None,
+              neptune_name: str = "loss_history"):
 
     x = numpy.arange(0, len(history_dict["test_loss"])*test_frequency, test_frequency)
+    train_loss = history_dict["train_loss"]
+    test_loss = history_dict["test_loss"]
 
     fig, ax = plt.subplots()
-    ax.plot(history_dict["train_loss"], '-', label="train loss")
-    ax.plot(x, history_dict["test_loss"], '.--', label="test loss")
+    ax.plot(train_loss, '-', label="train loss")
+    ax.plot(x, test_loss, '.--', label="test loss")
 
     ax.set_xlabel('epoch')
     ax.set_ylabel('LOSS = - ELBO')
     ax.set_title('Training procedure')
     ax.grid()
     ax.legend()
-    plt.close()
     fig.tight_layout()
+    log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
+    plt.close()
     return fig
 
 
-def plot_kl(history_dict: dict, train_or_test: str = "test"):
+def plot_kl(history_dict: dict,
+            train_or_test: str = "test",
+            experiment: Optional[neptune.experiments.Experiment] = None,
+            neptune_name: str = "kl_history"):
+
     if train_or_test == "test":
         kl_instance = history_dict["test_kl_instance"]
         kl_where = history_dict["test_kl_where"]
@@ -182,12 +210,17 @@ def plot_kl(history_dict: dict, train_or_test: str = "test"):
     ax.set_ylabel('kl')
     ax.grid()
     ax.legend()
-    plt.close()
     fig.tight_layout()
+    log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
+    plt.close()
     return fig
 
 
-def plot_sparsity(history_dict: dict, train_or_test: str = "test"):
+def plot_sparsity(history_dict: dict,
+                  train_or_test: str = "test",
+                  experiment: Optional[neptune.experiments.Experiment] = None,
+                  neptune_name: str = "sparsity_history"):
+
     if train_or_test == "test":
         sparsity_mask = history_dict["test_sparsity_mask"]
         sparsity_box = history_dict["test_sparsity_box"]
@@ -207,37 +240,255 @@ def plot_sparsity(history_dict: dict, train_or_test: str = "test"):
     ax.set_ylabel('sparsity')
     ax.grid()
     ax.legend()
-    plt.close()
     fig.tight_layout()
+    log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
+    plt.close()
     return fig
 
-def plot_loss_term(history_dict: dict, train_or_test: str = "test"):
+
+def plot_loss_term(history_dict: dict,
+                   train_or_test: str = "test",
+                   experiment: Optional[neptune.experiments.Experiment] = None,
+                   neptune_name: str = "loss_terms"):
+
     if train_or_test == "test":
-        loss = history_dict["test_loss"]
-        mse = history_dict["test_mse_tot"]
-        reg = history_dict["test_reg_tot"]
-        kl = history_dict["test_kl_tot"]
-        sparsity = history_dict["test_sparsity_tot"]
+        loss = numpy.array(history_dict["test_loss"])
+        mse = numpy.array(history_dict["test_mse_tot"])
+        reg = numpy.array(history_dict["test_reg_tot"])
+        kl = numpy.array(history_dict["test_kl_tot"])
+        sparsity = numpy.array(history_dict["test_sparsity_tot"])
+        geco_sparsity = numpy.array(history_dict["test_geco_sparsity"])
+        geco_balance = numpy.array(history_dict["test_geco_balance"])
     elif train_or_test == "train":
-        loss = history_dict["test_loss"]
-        mse = history_dict["test_mse_tot"]
-        reg = history_dict["test_reg_tot"]
-        kl = history_dict["test_kl_tot"]
-        sparsity = history_dict["test_sparsity_tot"]
+        loss = numpy.array(history_dict["train_loss"])
+        mse = numpy.array(history_dict["train_mse_tot"])
+        reg = numpy.array(history_dict["train_reg_tot"])
+        kl = numpy.array(history_dict["train_kl_tot"])
+        sparsity = numpy.array(history_dict["train_sparsity_tot"])
+        geco_sparsity = numpy.array(history_dict["train_geco_sparsity"])
+        geco_balance = numpy.array(history_dict["train_geco_balance"])
     else:
         raise Exception
 
-    FROM HERE
+    fig, ax = plt.subplots()
+    ax.plot(loss, '-', label="loss")
+    ax.plot(geco_balance * mse, '.-', label="scaled mse")
+    ax.plot(geco_balance * reg, '.--', label="scaled reg")
+    ax.plot((1-geco_balance) * kl, '.--', label="scaled kl")
+    ax.plot(geco_sparsity * sparsity, '.--', label="scaled sparsity")
 
-ax6.plot(loss,'-',label='loss')
-ax6.plot(f_geco_sparsity * sparsity_raw,'x-',label='scaled_sparsity')
-ax6.plot(f_geco_balance * reg_raw,'x-',label='scaled_reg')
-ax6.plot(f_geco_balance * mse_raw,'x-',label='scaled_mse')
-ax6.plot((1-f_geco_balance) * kl_raw,'x-',label='scaled_kl')
-ax6.set_ylim([0, 1.01*max(loss[epoch_min:epoch_max])])
-ax6.set_xlim([epoch_min, epoch_max])
-ax6.grid()
-ax6.legend()
+    ax.set_xlabel('epoch')
+    ax.set_ylabel('loss term')
+    ax.grid()
+    ax.legend()
+    fig.tight_layout()
+    log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
+    plt.close()
+    return fig
 
 
+def plot_trajectory(history_dict: dict,
+                    train_or_test: str = "test",
+                    experiment: Optional[neptune.experiments.Experiment] = None,
+                    neptune_name: str = "train_trajectory"):
+
+    if train_or_test == "test":
+        mse = history_dict["test_mse_tot"]
+        kl = history_dict["test_kl_tot"]
+        sparsity = history_dict["test_sparsity_tot"]
+    elif train_or_test == "train":
+        mse = history_dict["train_mse_tot"]
+        kl = history_dict["train_kl_tot"]
+        sparsity = history_dict["train_sparsity_tot"]
+    else:
+        raise Exception
+
+    fontsize = 20
+    labelsize = 20
+    colors = numpy.arange(0.0, len(mse), 1.0)/len(mse)
+
+    fig = plt.figure(figsize=(20, 10))
+    ax1 = fig.add_subplot(221)
+    ax2 = fig.add_subplot(222)
+    ax3 = fig.add_subplot(223)
+    ax4 = fig.add_subplot(224, projection='3d')
+
+    ax1.set_xlabel('MSE', fontsize=fontsize)
+    ax1.set_ylabel('KL', fontsize=fontsize)
+    ax1.tick_params(axis='both', which='major', labelsize=labelsize)
+    ax1.scatter(mse, kl, c=colors)
+    ax1.plot(mse, kl, '--')
+    ax1.grid()
+
+    ax2.set_xlabel('SPARSITY', fontsize=fontsize)
+    ax2.set_ylabel('MSE', fontsize=fontsize)
+    ax2.tick_params(axis='both', which='major', labelsize=labelsize)
+    ax2.scatter(sparsity, mse, c=colors)
+    ax2.plot(sparsity, mse, '--')
+    ax2.grid()
+
+    ax3.set_xlabel('SPARSITY', fontsize=fontsize)
+    ax3.set_ylabel('KL', fontsize=fontsize)
+    ax3.tick_params(axis='both', which='major', labelsize=labelsize)
+    ax3.scatter(sparsity, kl, c=colors)
+    ax3.plot(sparsity, kl, '--')
+    ax3.grid()
+
+    ax4.scatter(kl, sparsity, mse, c=colors)
+    ax4.plot(kl, sparsity, mse, '--')
+    ax4.set_xlabel('KL', fontsize=fontsize)
+    ax4.set_ylabel('SPARSITY', fontsize=fontsize)
+    ax4.set_zlabel('MSE', fontsize=fontsize)
+
+    fig.tight_layout()  # otherwise the right y-label is slightly clipped
+    log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
+    plt.close()
+    return fig
+
+
+def plot_geco_parameters(history_dict: dict,
+                         params: dict,
+                         train_or_test: str = "test",
+                         experiment: Optional[neptune.experiments.Experiment] = None,
+                         neptune_name: str = "geco_params_trajectory"):
+
+    if train_or_test == "train":
+        fg_fraction = history_dict["train_fg_fraction"]
+        geco_sparsity = history_dict["train_geco_sparsity"]
+        mse_av = history_dict["train_mse_tot"]
+        geco_balance = history_dict["train_geco_balance"]
+    elif train_or_test == "test":
+        fg_fraction = history_dict["test_fg_fraction"]
+        geco_sparsity = history_dict["test_geco_sparsity"]
+        mse_av = history_dict["test_mse_tot"]
+        geco_balance = history_dict["test_geco_balance"]
+    else:
+        raise Exception
+
+    fontsize = 20
+    labelsize = 20
+    fig = plt.figure(figsize=(20, 20))
+    ax1 = fig.add_subplot(211)
+    ax2 = fig.add_subplot(212)
+
+    color = 'tab:red'
+    ax1.set_xlabel('epochs', fontsize=fontsize)
+    ax1.set_ylabel('fg_fraction', fontsize=fontsize, color=color)
+    ax1.tick_params(axis='both', which='major', labelsize=labelsize)
+    ax1.plot(fg_fraction, '.--', color=color, label="n_object")
+    ymin = min(params["GECO_loss"]['target_fg_fraction'])
+    ymax = max(params["GECO_loss"]['target_fg_fraction'])
+    ax1.plot(ymin * numpy.ones(len(fg_fraction)), '-', color='black', label="y_min")
+    ax1.plot(ymax * numpy.ones(len(fg_fraction)), '-', color='black', label="y_max")
+    ax1.tick_params(axis='y', labelcolor=color)
+    ax1.grid()
+
+    ax1b = ax1.twinx()  # instantiate a second axes that shares the same x-axis
+    color = 'tab:green'
+    ax1b.set_xlabel('epochs', fontsize=fontsize)
+    ax1b.set_ylabel('geco_sparsity', color=color, fontsize=fontsize)
+    ax1b.tick_params(axis='both', which='major', labelsize=labelsize)
+    plt.plot(geco_sparsity, '-', label="geco_sparsity", color=color)
+    ax1b.tick_params(axis='y', labelcolor=color)
+    ax1b.grid()
+
+    # ----------------
+    color = 'tab:red'
+    ax2.set_xlabel('epochs', fontsize=fontsize)
+    ax2.set_ylabel('mse av', fontsize=fontsize, color=color)
+    ax2.tick_params(axis='both', which='major', labelsize=labelsize)
+    ax2.plot(mse_av, '.--', color=color, label="mse av")
+
+    ymin = min(params["GECO_loss"]["target_mse"])
+    ymax = max(params["GECO_loss"]["target_mse"])
+    ax2.plot(ymin * numpy.ones(len(mse_av)), '-', color='black', label="y_min")
+    ax2.plot(ymax * numpy.ones(len(mse_av)), '-', color='black', label="y_max")
+    ax2.tick_params(axis='y', labelcolor=color)
+
+    ax2.grid()
+    ax2b = ax2.twinx()  # instantiate a second axes that shares the same x-axis
+    color = 'tab:green'
+    ax2b.set_xlabel('epochs', fontsize=fontsize)
+    ax2b.set_ylabel('geco_balance', fontsize=fontsize, color=color)
+    plt.plot(geco_balance, '-', label="geco_balance", color=color)
+    ax2b.tick_params(axis='both', which='major', labelsize=labelsize)
+    ax2b.tick_params(axis='y', labelcolor=color)
+    ax2b.grid()
+
+    fig.tight_layout()  # otherwise the right y-label is slightly clipped
+    log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
+    plt.close()
+    return fig
+
+
+def plot_all_from_dictionary(history_dict: dict,
+                             params: dict,
+                             test_frequency: int = 5,
+                             train_or_test: str = "test",
+                             experiment: Optional[neptune.experiments.Experiment] = None,
+                             verbose: bool = False):
+    if verbose:
+        print("in plot_all_from_dictionary ->"+train_or_test)
+
+    plot_loss(history_dict, test_frequency=test_frequency, experiment=experiment)
+    plot_kl(history_dict, train_or_test=train_or_test, experiment=experiment)
+    plot_sparsity(history_dict, train_or_test=train_or_test, experiment=experiment)
+    plot_loss_term(history_dict, train_or_test=train_or_test, experiment=experiment)
+    plot_trajectory(history_dict, train_or_test=train_or_test, experiment=experiment)
+    plot_geco_parameters(history_dict, params, train_or_test=train_or_test, experiment=experiment)
+
+    if verbose:
+        print("leaving plot_all_from_dictionary ->"+train_or_test)
+
+
+def plot_reconstruction_and_inference(output: Output,
+                                      epoch: int,
+                                      prefix: str = "",
+                                      postfix: str = "",
+                                      verbose: bool = False):
+    if verbose:
+        print("in plot_reconstruction_and_inference")
+
+    _ = show_batch(output.imgs[:8],
+                   n_col=4,
+                   n_padding=4,
+                   title='imgs, epoch= {0:6d}'.format(epoch),
+                   neptune_name=prefix+"imgs"+postfix)
+    _ = show_batch(output.inference.p_map[:8],
+                   n_col=4,
+                   n_padding=4,
+                   title='p_map, epoch= {0:6d}'.format(epoch),
+                   normalize_range=None,
+                   neptune_name=prefix+"p_map"+postfix)
+    _ = show_batch(output.inference.big_bg[:8],
+                   n_col=4,
+                   n_padding=4,
+                   title='background, epoch= {0:6d}'.format(epoch),
+                   neptune_name=prefix+"bg"+postfix)
+
+    if verbose:
+        print("leaving plot_reconstruction_and_inference")
+
+
+def plot_segmentation(segmentation: Segmentation,
+                      epoch: int,
+                      prefix: str = "",
+                      postfix: str = "",
+                      verbose: bool = False):
+    if verbose:
+        print("in plot_segmentation")
+
+    _ = show_batch(segmentation.integer_mask,
+                   n_padding=4,
+                   figsize=(12, 12),
+                   title='integer_mask, epoch= {0:6d}'.format(epoch),
+                   neptune_name=prefix+"integer_mask"+postfix)
+    _ = show_batch(segmentation.fg_prob,
+                   n_padding=4,
+                   figsize=(12, 12),
+                   title='fg_prob, epoch= {0:6d}'.format(epoch),
+                   neptune_name=prefix+"fg_prob"+postfix)
+
+    if verbose:
+        print("leaving plot_segmentation")
 

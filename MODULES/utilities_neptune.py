@@ -2,8 +2,21 @@ import neptune
 import torch.nn
 import matplotlib.figure
 from typing import Optional
-
 from .utilities import save_obj
+from neptunecontrib.api import log_chart
+
+
+def log_img_and_chart(name: str,
+                      fig: matplotlib.figure.Figure,
+                      experiment:  Optional[neptune.experiments.Experiment] = None,
+                      verbose: bool = False):
+    if verbose:
+        print("inside log_img_and_chart -> "+name)
+    _exp = experiment if experiment else neptune
+    log_chart(name, fig, _exp)
+    _exp.log_image(name, fig)
+    if verbose:
+        print("leaving log_img_and_chart -> "+name)
 
 
 def log_model_summary(model: torch.nn.Module,
