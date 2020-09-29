@@ -2,48 +2,73 @@ import PIL.Image
 import PIL.ImageDraw
 import torch
 import numpy
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Union
 from torchvision import utils
 from matplotlib import pyplot as plt
 import skimage.color
+import skimage.morphology
 import neptune
 
 from .namedtuple import BB, Output, Segmentation
 from .utilities_neptune import log_img_and_chart
 
 
-def contours_from_segmask(segmask, thickness: int=1):
-    contours = (skimage.morphology.dilation(segmask)  != segmask)
-    for i in range(1,thickness):
+def contours_from_labels(labels: numpy.ndarray,
+                         contour_thickness: int = 1) -> numpy.ndarray:
+    assert len(labels.shape) == 2
+    assert contour_thickness >= 1
+    contours = (skimage.morphology.dilation(labels) != labels)
+
+    for i in range(1, contour_thickness):
         contours = skimage.morphology.binary_dilation(contours)
     return contours
 
 
-def add_red_contours(image, contours):
-    assert countours.dtype == bool
-    image_with_contours = skimage.color.gray2rgb(image)
+def add_red_contours(image: numpy.ndarray, contours: numpy.ndarray) -> numpy.ndarray:
+    assert contours.dtype == bool
+    if (len(image.shape) == 3) and (image.shape[-1] == 3):
+        image_with_contours = image
+    elif len(image.shape) == 2:
+        image_with_contours = skimage.color.gray2rgb(image)
+    else:
+        raise Exception
     image_with_contours[contours, 0] = 1
     image_with_contours[contours, 1:] = 0
     return image_with_contours
 
 
-def plot_mask_with_contours(segmask, raw_image,
-        contour_thickness: int = 2, figsize: tuple =(24,24)):
-        experiment: Optional[neptune.experiments.Experiment] = None,
-        neptune_name: Optional[str] = None):
-    
-    contours = contours_from_segmask(segmask)
+def plot_label_contours(label: Union[torch.Tensor, numpy.ndarray],
+                        image: Union[torch.Tensor, numpy.ndarray],
+                        contour_thickness: int = 2,
+                        figsize: tuple = (24, 24),
+                        experiment: Optional[neptune.experiments.Experiment] = None,
+                        neptune_name: Optional[str] = None):
+
+    assert len(label.shape) == 2
+    if torch.is_tensor(label):
+        label = label.cpu().numpy()
+
+    if torch.is_tensor(image):
+        if len(image.shape) == 3:
+            image = image.permute(1, 2, 0).cpu().numpy()
+        else:
+            image = image.cpu().numpy()
+    if len(image.shape) == 3 and (image.shape[-1] != 3):
+        image = image[..., 0]
+
+    assert image.shape[:2] == label.shape[:2]
+
+    contours = contours_from_labels(label, contour_thickness)
     fig, ax = plt.subplots(ncols=3, figsize=figsize)
-    ax[0].imshow(raw_image, cmap='gray')
-    ax[1].imshow(add_red_contours(raw_image, contours))
-    ax[2].imshow(segmask, cmap='gray')
+    ax[0].imshow(image)
+    ax[1].imshow(add_red_contours(image, contours))
+    ax[2].imshow(label, cmap='gray')
 
     fig.tight_layout()
     if neptune_name is not None:
         log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
     plt.close(fig)
     return fig
-
 
 
 def draw_img(prob: torch.tensor,
@@ -513,7 +538,7 @@ def plot_reconstruction_and_inference(output: Output,
 
 
 def plot_segmentation(segmentation: Segmentation,
-                      epoch: Union[int, str],
+                      epoch: Union[int, str] = "",
                       prefix: str = "",
                       postfix: str = "",
                       verbose: bool = False):
@@ -521,21 +546,21 @@ def plot_segmentation(segmentation: Segmentation,
         print("in plot_segmentation")
 
     if isinstance(epoch, int):
-        postfix = 'epoch= {0:6d}'.format(epoch)
+        title_postfix = 'epoch= {0:6d}'.format(epoch)
     elif isinstance(epoch, str):
-        postfix = epoch
+        title_postfix = epoch
     else:
         raise Exception
 
     _ = show_batch(segmentation.integer_mask,
                    n_padding=4,
                    figsize=(12, 12),
-                   title='integer_mask, '+postfix
+                   title='integer_mask, '+title_postfix,
                    neptune_name=prefix+"integer_mask"+postfix)
     _ = show_batch(segmentation.fg_prob,
                    n_padding=4,
                    figsize=(12, 12),
-                   title='fg_prob, '+postfix
+                   title='fg_prob, '+title_postfix,
                    neptune_name=prefix+"fg_prob"+postfix)
 
     if verbose:

@@ -451,10 +451,10 @@ class CompositionalVae(torch.nn.Module):
             # Note: unsqueeze, pad, suqeeze
             try:
                 img_padded = F.pad(single_img.cpu().unsqueeze(0),
-                                   pad=pad_list, mode='reflect').squeeze(0)  # 1, ch_in, w_pad, h_pad
+                                   pad=pad_list, mode='reflect')  # 1, ch_in, w_pad, h_pad
             except RuntimeError:
                 img_padded = F.pad(single_img.cpu().unsqueeze(0),
-                                   pad=pad_list, mode='constant', value=0).squeeze(0)  # 1, ch_in, w_pad, h_pad
+                                   pad=pad_list, mode='constant', value=0)  # 1, ch_in, w_pad, h_pad
             w_paddded, h_padded = img_padded.shape[-2:]
 
             # This is creating the index matrix on the cpu
@@ -462,7 +462,11 @@ class CompositionalVae(torch.nn.Module):
             index_matrix_padded = F.pad(torch.arange(max_index,
                                                      dtype=torch.long,
                                                      device=torch.device('cpu')).view(1, 1, w_img, h_img),
-                                        pad=pad_list, mode='constant', value=-1).squeeze(0)
+                                        pad=pad_list, mode='constant', value=-1)  # 1, 1, w_pad, h_pad
+
+            assert index_matrix_padded.shape[-2:] == img_padded.shape[-2:]
+            assert index_matrix_padded.shape[0] == img_padded.shape[0]
+            assert len(index_matrix_padded.shape) == len(img_padded.shape)
 
             # Build a list with the locations of the corner of the images
             location_of_corner = []
@@ -504,11 +508,11 @@ class CompositionalVae(torch.nn.Module):
             need_initialization = True
             for n_batches, n_list in enumerate(n_list_of_list):
 
-                batch_imgs = torch.stack([img_padded[...,
+                batch_imgs = torch.cat([img_padded[...,
                                           x1[n]:x1[n] + crop_size[0],
                                           y1[n]:y1[n] + crop_size[1]] for n in n_list], dim=-4)
 
-                batch_index = torch.stack([index_matrix_padded[...,
+                batch_index = torch.cat([index_matrix_padded[...,
                                            x1[n]:x1[n] + crop_size[0],
                                            y1[n]:y1[n] + crop_size[1]] for n in n_list], dim=-4)
 
@@ -567,7 +571,7 @@ class CompositionalVae(torch.nn.Module):
                                 integer_mask=big_integer_mask[None, None, pad_w:pad_w + w_img, pad_h:pad_h + h_img],
                                 bounding_boxes=None,
                                 similarity=SparseSimilarity(sparse_matrix=sparse_similarity_matrix,
-                                                            index_matrix=index_matrix_padded[pad_w:pad_w + w_img,
+                                                            index_matrix=index_matrix_padded[0, 0, pad_w:pad_w + w_img,
                                                                          pad_h:pad_h + h_img]))
 
     # this is the generic function which has all the options unspecified

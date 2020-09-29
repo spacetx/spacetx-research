@@ -4,9 +4,10 @@
 import neptune
 from MODULES.utilities_neptune import log_matplotlib_as_png, log_object_as_artifact, log_model_summary, log_last_ckpt
 from MODULES.vae_model import *
-from MODULES.utilities_visualization import show_batch, plot_tiling, plot_all_from_dictionary
-from MODULES.utilities_visualization import plot_reconstruction_and_inference, plot_segmentation, plot_geco_parameters
+from MODULES.utilities_visualization import show_batch, plot_tiling, plot_all_from_dictionary, plot_label_contours
+from MODULES.utilities_visualization import plot_reconstruction_and_inference, plot_segmentation
 from MODULES.utilities_ml import ConditionalRandomCrop, SpecialDataSet, process_one_epoch
+from MODULES.graph_clustering import GraphSegmentation
 
 # Check versions
 from platform import python_version
@@ -237,7 +238,7 @@ tiling_fig = plot_tiling(tiling, neptune_name="tiling")
 
 # perform graph analysis
 g = GraphSegmentation(tiling, min_fg_prob=0.1, min_edge_weight=0.01, normalize_graph_edges=True)
-partition = g.find_partition_leiden(resolution=800.0, 
+partition = g.find_partition_leiden(resolution=1.0,
                                     window=None,
                                     min_size=30, 
                                     cpm_or_modularity="modularity", 
@@ -246,17 +247,16 @@ partition = g.find_partition_leiden(resolution=800.0,
                                     initial_membership=None) 
 g.plot_partition(partition, neptune_name="partition_after_graph")
 
+label = g.partition_2_label(partition)
+label_after_QC = g.QC_on_label(label, min_area=30)
+plot_label_contours(label=tiling.integer_mask[0, 0],
+                    image=tiling.raw_image[0, 0],
+                    contour_thickness=2,
+                    neptune_name="contours_based_on_sample")
 
-segmask = g.partition_2_mask(partition)
-segmask_after_QC = g.QC_on_mask(segmask, min_area=30)
-plot_mask_with_contours(segmask=tiling.integer_mask, 
-                        raw_image=tiling.raw_image, 
-                        contour_thickness=2,
-                        neptune_name="contours_sample")
-
-plot_mask_with_contours(segmask=segmask_after_QC,
-                        raw_image=tiling.raw_image, 
-                        contour_thickness=2,
-                        neptune_name="contours_after_graph_QC")
+plot_label_contours(label=label_after_QC,
+                    image=tiling.raw_image[0, 0],
+                    contour_thickness=2,
+                    neptune_name="contours_based_on_graph")
 
 exp.stop()
