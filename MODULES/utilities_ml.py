@@ -396,7 +396,7 @@ def process_one_epoch(model: torch.nn.Module,
         imgs, labels, index = data
         
         # Put data in GPU if available
-        if torch.cuda.is_available() and imgs.device == torch.device('cpu'):
+        if torch.cuda.is_available() and (imgs.device == torch.device('cpu')): 
             imgs = imgs.cuda()
 
         metrics = model.forward(imgs_in=imgs).metrics  # the forward function returns metric and other stuff

@@ -67,6 +67,8 @@ log_matplotlib_as_png("train_batch_example", train_batch_example_fig)
 # print("GPU GB after train_loader ->",torch.cuda.memory_allocated()/1E9)
 
 reference_imgs, labels, index = test_loader.load(8)
+if torch.cuda.is_available():
+    reference_imgs = reference_imgs.cuda()
 reference_imgs_fig = show_batch(reference_imgs,
                                 n_padding=4,
                                 figsize=(12, 12),
@@ -128,7 +130,7 @@ if params["optimizer"]["scheduler_is_active"]:
 
 TEST_FREQUENCY = params["simulation"]["TEST_FREQUENCY"]
 CHECKPOINT_FREQUENCY = params["simulation"]["CHECKPOINT_FREQUENCY"]
-NUM_EPOCHS = 2 #params["simulation"]["MAX_EPOCHS"]
+NUM_EPOCHS = params["simulation"]["MAX_EPOCHS"]
 torch.cuda.empty_cache()
 for delta_epoch in range(1, NUM_EPOCHS+1):
     epoch = delta_epoch+epoch_restart    
@@ -196,7 +198,7 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                                            epoch=epoch,
                                            hyperparams_dict=params,
                                            history_dict=history_dict)
-                        #log_object_as_artifact(name="last_ckpt", obj=ckpt)  # log file into neptune
+                        log_object_as_artifact(name="last_ckpt", obj=ckpt)  # log file into neptune
                         plot_all_from_dictionary(history_dict,
                                                  params,
                                                  test_frequency=TEST_FREQUENCY,
@@ -208,18 +210,53 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                                                  train_or_test="train",
                                                  verbose=True)
 
-# # Check segmentation WITH tiling
+# # Check segmentation WITH and WITHOUT tiling
 img_to_segment = train_loader.img[0, :, 1000:1300, 2100:2400]
 roi_mask_to_segment = train_loader.roi_mask[0, :, 1000:1300, 2100:2400]
-tiling = vae.segment_with_tiling(single_img=img_to_segment,
-                                 roi_mask=roi_mask_to_segment,
-                                 crop_size=None,
-                                 stride=(40, 40),
-                                 n_objects_max_per_patch=None,
-                                 prob_corr_factor=None,
-                                 overlap_threshold=None,
-                                 radius_nn=10,
-                                 batch_size=64)
+
+# check simple segmentation
+crop_size = params["input_image"]["size_raw_image"]
+small_img_to_segment = img_to_segment[None, ..., :crop_size, :crop_size]
+if torch.cuda.is_available():
+    small_img_to_segment = small_img_to_segment.cuda()
+segmentation: Segmentation = vae.segment(batch_imgs=small_img_to_segment)
+plot_segmentation(segmentation, epoch="debug_before_tiling", prefix="seg_", postfix="_test")
+
+# tiling segmentation
+tiling: Segmentation = vae.segment_with_tiling(single_img=img_to_segment,
+                                               roi_mask=roi_mask_to_segment,
+                                               crop_size=None,
+                                               stride=(40, 40),
+                                               n_objects_max_per_patch=None,
+                                               prob_corr_factor=None,
+                                               overlap_threshold=None,
+                                               radius_nn=10,
+                                               batch_size=64)
 log_object_as_artifact(name="tiling", obj=tiling, verbose=True)
-tiling_fig = plot_tiling(tiling)
+tiling_fig = plot_tiling(tiling, neptune_name="tiling")
+
+# perform graph analysis
+g = GraphSegmentation(tiling, min_fg_prob=0.1, min_edge_weight=0.01, normalize_graph_edges=True)
+partition = g.find_partition_leiden(resolution=800.0, 
+                                    window=None,
+                                    min_size=30, 
+                                    cpm_or_modularity="modularity", 
+                                    each_cc_separately=False,
+                                    n_iterations=10,
+                                    initial_membership=None) 
+g.plot_partition(partition, neptune_name="partition_after_graph")
+
+
+segmask = g.partition_2_mask(partition)
+segmask_after_QC = g.QC_on_mask(segmask, min_area=30)
+plot_mask_with_contours(segmask=tiling.integer_mask, 
+                        raw_image=tiling.raw_image, 
+                        contour_thickness=2,
+                        neptune_name="contours_sample")
+
+plot_mask_with_contours(segmask=segmask_after_QC,
+                        raw_image=tiling.raw_image, 
+                        contour_thickness=2,
+                        neptune_name="contours_after_graph_QC")
+
 exp.stop()

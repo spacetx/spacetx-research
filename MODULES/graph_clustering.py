@@ -388,9 +388,25 @@ with torch.no_grad():
             return Partition(sizes=torch.bincount(membership),
                              membership=membership).filter_by_size(min_size=min_size, max_size=max_size)
 
+
+        def QC_on_mask(self, segmask, min_area):
+            """ This function filter the labels by some criteria. For example by min size"""
+            labels = skimage.measure.label(segmask, background=0, return_num=False, connectivity=2)
+            mydict = skimage.measure.regionprops_table(labels, properties=['label', 'area'])
+            my_filter = mydict["area"] > min_area
+
+            bad_labels = mydict["label"][~my_filter]
+            old2new = numpy.arange(mydict["label"][-1]+1)
+            old2new[bad_labels]=0
+            new_labels = old2new[labels].astype(numpy.int32)
+            return new_labels
+
+
         def plot_partition(self, partition: Optional[Partition] = None,
                            figsize: Optional[tuple] = (12, 12),
                            window: Optional[tuple] = None,
+                           experiment: Optional[neptune.experiments.Experiment] = None,
+                           neptune_name: neptune_name: Optional[str] = None,
                            **kargs) -> torch.tensor:
             """
                 If partition is None it prints the connected components
@@ -414,7 +430,7 @@ with torch.no_grad():
             segmask = self.partition_2_mask(partition)[w[0]:w[2], w[1]:w[3]].cpu().numpy()
             raw_img = self.raw_image[0, w[0]:w[2], w[1]:w[3]].cpu().numpy()
 
-            figure, axes = plt.subplots(ncols=2, nrows=2, figsize=figsize)
+            fig, axes = plt.subplots(ncols=2, nrows=2, figsize=figsize)
             axes[0, 0].imshow(skimage.color.label2rgb(label=segmask,
                                                       bg_label=0))
             axes[0, 1].imshow(skimage.color.label2rgb(label=segmask,
@@ -429,4 +445,11 @@ with torch.no_grad():
             axes[0, 1].set_title(title_partition)
             axes[1, 0].set_title("raw image")
             axes[1, 1].set_title("size distribution")
+            
+            fig.tight_layout()
+            if neptune_name is not None:
+                log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
+            plt.close(fig)
+            return fig
+
 

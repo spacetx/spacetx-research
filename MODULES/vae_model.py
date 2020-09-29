@@ -415,7 +415,7 @@ class CompositionalVae(torch.nn.Module):
                             prob_corr_factor: Optional[float] = None,
                             overlap_threshold: Optional[float] = None,
                             radius_nn: int = 5,
-                            batch_size: int = 32) -> (Segmentation, SparseSimilarity):
+                            batch_size: int = 32) -> Segmentation:
         """ Uses a sliding window approach to collect a co_objectiveness information
             about the pixels of a large image.
 

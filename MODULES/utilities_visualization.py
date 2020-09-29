@@ -12,6 +12,40 @@ from .namedtuple import BB, Output, Segmentation
 from .utilities_neptune import log_img_and_chart
 
 
+def contours_from_segmask(segmask, thickness: int=1):
+    contours = (skimage.morphology.dilation(segmask)  != segmask)
+    for i in range(1,thickness):
+        contours = skimage.morphology.binary_dilation(contours)
+    return contours
+
+
+def add_red_contours(image, contours):
+    assert countours.dtype == bool
+    image_with_contours = skimage.color.gray2rgb(image)
+    image_with_contours[contours, 0] = 1
+    image_with_contours[contours, 1:] = 0
+    return image_with_contours
+
+
+def plot_mask_with_contours(segmask, raw_image,
+        contour_thickness: int = 2, figsize: tuple =(24,24)):
+        experiment: Optional[neptune.experiments.Experiment] = None,
+        neptune_name: Optional[str] = None):
+    
+    contours = contours_from_segmask(segmask)
+    fig, ax = plt.subplots(ncols=3, figsize=figsize)
+    ax[0].imshow(raw_image, cmap='gray')
+    ax[1].imshow(add_red_contours(raw_image, contours))
+    ax[2].imshow(segmask, cmap='gray')
+
+    fig.tight_layout()
+    if neptune_name is not None:
+        log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
+    plt.close(fig)
+    return fig
+
+
+
 def draw_img(prob: torch.tensor,
              bounding_box: BB,
              big_mask: torch.tensor,
@@ -138,7 +172,7 @@ def show_batch(images: torch.Tensor,
 def plot_tiling(tiling,
                 figsize: tuple = (12, 12),
                 experiment: Optional[neptune.experiments.Experiment] = None,
-                neptune_name: str = "tiling"):
+                neptune_name: Optional[str] = None):
 
     fig, axes = plt.subplots(ncols=2, nrows=2, figsize=figsize)
     axes[0, 0].imshow(skimage.color.label2rgb(tiling.integer_mask[0, 0].cpu().numpy(),
@@ -157,7 +191,8 @@ def plot_tiling(tiling,
     axes[1, 0].set_title("fg prob")
     axes[1, 1].set_title("raw image")
     fig.tight_layout()
-    log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
+    if neptune_name is not None:
+        log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
     plt.close(fig)
     return fig
 
@@ -165,7 +200,7 @@ def plot_tiling(tiling,
 def plot_loss(history_dict: dict,
               test_frequency: int = 5,
               experiment: Optional[neptune.experiments.Experiment] = None,
-              neptune_name: str = "loss_history"):
+              neptune_name: Optional[str] = None):
 
     x = numpy.arange(0, len(history_dict["test_loss"])*test_frequency, test_frequency)
     train_loss = history_dict["train_loss"]
@@ -181,7 +216,8 @@ def plot_loss(history_dict: dict,
     ax.grid()
     ax.legend()
     fig.tight_layout()
-    log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
+    if neptune_name is not None:
+        log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
     plt.close()
     return fig
 
@@ -189,7 +225,7 @@ def plot_loss(history_dict: dict,
 def plot_kl(history_dict: dict,
             train_or_test: str = "test",
             experiment: Optional[neptune.experiments.Experiment] = None,
-            neptune_name: str = "kl_history"):
+            neptune_name: Optional[str] = None):
 
     if train_or_test == "test":
         kl_instance = history_dict["test_kl_instance"]
@@ -211,7 +247,8 @@ def plot_kl(history_dict: dict,
     ax.grid()
     ax.legend()
     fig.tight_layout()
-    log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
+    if neptune_name is not None:
+        log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
     plt.close()
     return fig
 
@@ -219,7 +256,7 @@ def plot_kl(history_dict: dict,
 def plot_sparsity(history_dict: dict,
                   train_or_test: str = "test",
                   experiment: Optional[neptune.experiments.Experiment] = None,
-                  neptune_name: str = "sparsity_history"):
+                  neptune_name: Optional[str] = None):
 
     if train_or_test == "test":
         sparsity_mask = history_dict["test_sparsity_mask"]
@@ -241,7 +278,8 @@ def plot_sparsity(history_dict: dict,
     ax.grid()
     ax.legend()
     fig.tight_layout()
-    log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
+    if neptune_name is not None:
+        log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
     plt.close()
     return fig
 
@@ -249,7 +287,7 @@ def plot_sparsity(history_dict: dict,
 def plot_loss_term(history_dict: dict,
                    train_or_test: str = "test",
                    experiment: Optional[neptune.experiments.Experiment] = None,
-                   neptune_name: str = "loss_terms"):
+                   neptune_name: Optional[str] = None):
 
     if train_or_test == "test":
         loss = numpy.array(history_dict["test_loss"])
@@ -282,7 +320,8 @@ def plot_loss_term(history_dict: dict,
     ax.grid()
     ax.legend()
     fig.tight_layout()
-    log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
+    if neptune_name is not None:
+        log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
     plt.close()
     return fig
 
@@ -290,7 +329,7 @@ def plot_loss_term(history_dict: dict,
 def plot_trajectory(history_dict: dict,
                     train_or_test: str = "test",
                     experiment: Optional[neptune.experiments.Experiment] = None,
-                    neptune_name: str = "train_trajectory"):
+                    neptune_name: Optional[str] = None):
 
     if train_or_test == "test":
         mse = history_dict["test_mse_tot"]
@@ -341,7 +380,8 @@ def plot_trajectory(history_dict: dict,
     ax4.set_zlabel('MSE', fontsize=fontsize)
 
     fig.tight_layout()  # otherwise the right y-label is slightly clipped
-    log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
+    if neptune_name is not None:
+        log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
     plt.close()
     return fig
 
@@ -350,7 +390,7 @@ def plot_geco_parameters(history_dict: dict,
                          params: dict,
                          train_or_test: str = "test",
                          experiment: Optional[neptune.experiments.Experiment] = None,
-                         neptune_name: str = "geco_params_trajectory"):
+                         neptune_name: Optional[str] = None):
 
     if train_or_test == "train":
         fg_fraction = history_dict["train_fg_fraction"]
@@ -416,7 +456,8 @@ def plot_geco_parameters(history_dict: dict,
     ax2b.grid()
 
     fig.tight_layout()  # otherwise the right y-label is slightly clipped
-    log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
+    if neptune_name is not None:
+        log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
     plt.close()
     return fig
 
@@ -430,12 +471,13 @@ def plot_all_from_dictionary(history_dict: dict,
     if verbose:
         print("in plot_all_from_dictionary ->"+train_or_test)
 
-    plot_loss(history_dict, test_frequency=test_frequency, experiment=experiment)
-    plot_kl(history_dict, train_or_test=train_or_test, experiment=experiment)
-    plot_sparsity(history_dict, train_or_test=train_or_test, experiment=experiment)
-    plot_loss_term(history_dict, train_or_test=train_or_test, experiment=experiment)
-    plot_trajectory(history_dict, train_or_test=train_or_test, experiment=experiment)
-    plot_geco_parameters(history_dict, params, train_or_test=train_or_test, experiment=experiment)
+    plot_loss(history_dict, test_frequency=test_frequency, experiment=experiment, neptune_name="loss_history_"+train_or_test)
+    plot_kl(history_dict, train_or_test=train_or_test, experiment=experiment, neptune_name="kl_history_"+train_or_test)
+    plot_sparsity(history_dict, train_or_test=train_or_test, experiment=experiment, neptune_name="sparsity_history_"+train_or_test)
+    plot_loss_term(history_dict, train_or_test=train_or_test, experiment=experiment, neptune_name="loss_terms_"+train_or_test)
+    plot_trajectory(history_dict, train_or_test=train_or_test, experiment=experiment, neptune_name="trajectory_"+train_or_test)
+    plot_geco_parameters(history_dict, params, train_or_test=train_or_test, experiment=experiment, 
+            neptune_name="geco_params_trajectory_"+train_or_test)
 
     if verbose:
         print("leaving plot_all_from_dictionary ->"+train_or_test)
@@ -471,22 +513,29 @@ def plot_reconstruction_and_inference(output: Output,
 
 
 def plot_segmentation(segmentation: Segmentation,
-                      epoch: int,
+                      epoch: Union[int, str],
                       prefix: str = "",
                       postfix: str = "",
                       verbose: bool = False):
     if verbose:
         print("in plot_segmentation")
 
+    if isinstance(epoch, int):
+        postfix = 'epoch= {0:6d}'.format(epoch)
+    elif isinstance(epoch, str):
+        postfix = epoch
+    else:
+        raise Exception
+
     _ = show_batch(segmentation.integer_mask,
                    n_padding=4,
                    figsize=(12, 12),
-                   title='integer_mask, epoch= {0:6d}'.format(epoch),
+                   title='integer_mask, '+postfix
                    neptune_name=prefix+"integer_mask"+postfix)
     _ = show_batch(segmentation.fg_prob,
                    n_padding=4,
                    figsize=(12, 12),
-                   title='fg_prob, epoch= {0:6d}'.format(epoch),
+                   title='fg_prob, '+postfix
                    neptune_name=prefix+"fg_prob"+postfix)
 
     if verbose:
