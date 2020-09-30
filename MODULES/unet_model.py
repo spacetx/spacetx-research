@@ -1,5 +1,4 @@
 import torch
-import numpy
 from .unet_parts import DownBlock, DoubleConvolutionBlock, UpBlock
 from .encoders_decoders import Encoder1by1, MLP_1by1, PredictBackground
 from collections import deque
@@ -49,13 +48,13 @@ class UNet(torch.nn.Module):
                                       ch_out=self.n_ch_output_features,
                                       ch_hidden=-1)  # this means there is NO hidden layer
 
-        #self.ch_in_zwhere = min(20, self.ch_list[-self.level_zwhere_and_logit_output - 1])
+        # self.ch_in_zwhere = min(20, self.ch_list[-self.level_zwhere_and_logit_output - 1])
         self.ch_in_zwhere = self.ch_list[-self.level_zwhere_and_logit_output - 1]
         self.encode_zwhere = Encoder1by1(ch_in=self.ch_in_zwhere,
                                          dim_z=self.dim_zwhere,
                                          ch_hidden=None)  # this means there is ONE hidden layer of automatic size
 
-        #self.ch_in_logit = min(20, self.ch_list[-self.level_zwhere_and_logit_output - 1])
+        # self.ch_in_logit = min(20, self.ch_list[-self.level_zwhere_and_logit_output - 1])
         self.ch_in_logit = self.ch_list[-self.level_zwhere_and_logit_output - 1]
         self.encode_logit = Encoder1by1(ch_in=self.ch_in_logit,
                                         dim_z=self.dim_logit,
@@ -68,7 +67,7 @@ class UNet(torch.nn.Module):
                                                  ch_hidden=-1)  # this means there is NO hidden layer
 
     def forward(self, x: torch.Tensor, verbose: bool):
-        input_w, input_h = x.shape[-2:]
+        # input_w, input_h = x.shape[-2:]
         if verbose:
             print("INPUT ---> shape ", x.shape)
 

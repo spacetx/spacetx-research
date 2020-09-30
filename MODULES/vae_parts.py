@@ -5,8 +5,7 @@ from .non_max_suppression import NonMaxSuppression
 from .unet_model import UNet
 from .encoders_decoders import EncoderConv, DecoderConv, Decoder1by1Linear, EncoderConvLeaky, DecoderConvLeaky
 from .utilities import compute_average_in_box, compute_ranking
-from .utilities import sample_and_kl_diagonal_normal, sample_and_kl_multivariate_normal
-from .utilities import downsample_and_upsample
+from .utilities_ml import sample_and_kl_diagonal_normal, sample_and_kl_multivariate_normal
 from .namedtuple import Inference, BB, NMSoutput, UNEToutput, ZZ, DIST
 
 
@@ -63,45 +62,9 @@ def from_weights_to_masks(weight: torch.Tensor, dim: int):
 
 def downsample_and_upsample(x: torch.Tensor, low_resolution: tuple, high_resolution: tuple):
     low_res_x = F.adaptive_avg_pool2d(x, output_size=low_resolution)
+    # low_res_x = F.adaptive_max_pool2d(x, output_size=low_resolution)
     high_res_x = F.interpolate(low_res_x, size=high_resolution, mode='bilinear', align_corners=True)
     return high_res_x
-
-
-class Moving_Average_Calculator:
-    """ beta is the factor multiplying the moving average.
-        Approximately we average the last 1/(1-beta) points.
-        For example:
-        beta = 0.9 -> 10 points
-        beta = 0.99 -> 100 points
-        The larger beta the longer the time average.
-
-        Usage:
-        MA = Moving_Average_Calculator(beta = 0.99)
-        input_dict = { "x" : 100+i+numpy.random.randn(),
-                   "y" : 50+i+numpy.random.randn()}
-        MA(input_dict)
-    """
-
-    def __init__(self, beta):
-        super().__init__()
-        self._bias = None
-        self._steps = 0
-        self._beta = beta
-        self._dict_accumulate = {}
-        self._dict_MA = {}
-
-    def accumulate(self, input_dict):
-        self._steps += 1
-        self._bias = 1 - self._beta ** self._steps
-
-        for key, value in input_dict.items():
-            try:
-                tmp = self._beta * self._dict_accumulate[key] + (1 - self._beta) * value
-                self._dict_accumulate[key] = tmp
-            except KeyError:
-                self._dict_accumulate[key] = (1 - self._beta) * value
-            self._dict_MA[key] = self._dict_accumulate[key] / self._bias
-        return self._dict_MA
 
 
 class Inference_and_Generation(torch.nn.Module):
@@ -322,7 +285,7 @@ class Inference_and_Generation(torch.nn.Module):
         big_mask_NON_interacting = torch.tanh(big_weight)
 
         # 8. Return the inferred quantities
-        return Inference(length_scale_GP=length_scale_GP.data.detach(),
+        return Inference(length_scale_GP=length_scale_GP,
                          p_map=p_map_cor,
                          area_map=area_map,
                          big_bg=big_bg,
@@ -330,10 +293,10 @@ class Inference_and_Generation(torch.nn.Module):
                          big_mask_NON_interacting=big_mask_NON_interacting,
                          big_img=big_img,
                          # the sample of the 3 latent variables
-                         prob=prob_few,
-                         bounding_box=bounding_box_few,
-                         zinstance_each_obj=zinstance_few.sample,
+                         sample_prob=prob_few,
+                         sample_bb=bounding_box_few,
+                         sample_zinstance=zinstance_few.sample,
                          # the kl of the 3 latent variables
                          kl_logit_map=logit_map.kl,
                          kl_zwhere_map=zwhere_map.kl,
-                         kl_zinstance_each_obj=zinstance_few.kl)
+                         kl_zinstance=zinstance_few.kl)
