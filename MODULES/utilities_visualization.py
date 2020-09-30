@@ -486,7 +486,7 @@ def plot_geco_parameters(history_dict: dict,
 
     fig.tight_layout()  # otherwise the right y-label is slightly clipped
     if neptune_name is not None:
-        log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
+        log_img_only(name=neptune_name, fig=fig, experiment=experiment)
     plt.close()
     return fig
 

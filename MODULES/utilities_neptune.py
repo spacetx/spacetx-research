@@ -81,9 +81,9 @@ def log_matplotlib_as_png(name: str,
 def log_dict_metrics(metrics: dict,
                      prefix: str = "",
                      experiment: Optional[neptune.experiments.Experiment] = None,
-                     verbose: bool = True):
+                     verbose: bool = False):
     if verbose:
-        print("inside log_metrics")
+        print("inside log_dict_metrics")
 
     _exp = experiment if experiment else neptune
 
@@ -91,13 +91,13 @@ def log_dict_metrics(metrics: dict,
         _exp.log_metric(prefix + key, value)
 
     if verbose:
-        print("leaving log_metrics")
+        print("leaving log_dict_metrics")
 
 
 def log_last_ckpt(name: str,
                   ckpt: dict,
                   experiment: Optional[neptune.experiments.Experiment] = None,
-                  verbose: bool = True,
+                  verbose: bool = False,
                   delete_previous_ckpt: bool = True):
 
     if verbose:

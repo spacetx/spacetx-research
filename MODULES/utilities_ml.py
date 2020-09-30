@@ -392,8 +392,7 @@ def process_one_epoch(model: torch.nn.Module,
     """ return a tuple with all the metrics averaged over a epoch """
     metric_accumulator = Accumulator()
 
-    for i, data in enumerate(dataloader):
-        imgs, labels, index = data
+    for i, (imgs, labels, index) in enumerate(dataloader):
         
         # Put data in GPU if available
         if torch.cuda.is_available() and (imgs.device == torch.device('cpu')): 

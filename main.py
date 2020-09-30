@@ -2,7 +2,7 @@
 # coding: utf-8
 
 import neptune
-from MODULES.utilities_neptune import log_matplotlib_as_png, log_object_as_artifact, log_model_summary, log_last_ckpt
+from MODULES.utilities_neptune import log_object_as_artifact, log_model_summary, log_last_ckpt, log_img_only, log_dict_metrics
 from MODULES.vae_model import *
 from MODULES.utilities_visualization import show_batch, plot_tiling, plot_all_from_dictionary, plot_label_contours
 from MODULES.utilities_visualization import plot_reconstruction_and_inference, plot_segmentation
@@ -20,7 +20,7 @@ params = load_json_as_dict("./ML_parameters.json")
 neptune.set_project(params["neptune_project"])
 exp: neptune.experiments.Experiment = \
     neptune.create_experiment(params=flatten_dict(params),
-                              upload_source_files=["./MODULES/vae_model.py", "./MODULES/encoders_decoders.py"],
+                              upload_source_files=["./main.py", "./MODULES/vae_model.py", "./MODULES/encoders_decoders.py"],
                               upload_stdout=True,
                               upload_stderr=True)
 
@@ -54,7 +54,7 @@ test_loader = SpecialDataSet(img=test_data,
                              drop_last=False,
                              batch_size=BATCH_SIZE)
 test_batch_example_fig = test_loader.check_batch()
-log_matplotlib_as_png("test_batch_example", test_batch_example_fig)
+log_img_only(name="test_batch_example", fig=test_batch_example_fig, experiment=exp)
 
 train_loader = SpecialDataSet(img=img_torch,
                               roi_mask=roi_mask_torch,
@@ -64,17 +64,25 @@ train_loader = SpecialDataSet(img=img_torch,
                               drop_last=True,
                               batch_size=BATCH_SIZE)
 train_batch_example_fig = train_loader.check_batch()
-log_matplotlib_as_png("train_batch_example", train_batch_example_fig)
+log_img_only(name="train_batch_example", fig=train_batch_example_fig, experiment=exp)
 # print("GPU GB after train_loader ->",torch.cuda.memory_allocated()/1E9)
 
-reference_imgs, labels, index = test_loader.load(8)
+# Make a batch of reference images by cropping the train_data at consecutive locations
+reference_imgs_list = [] 
+crop_size = params["input_image"]["size_raw_image"]
+for ni in range(2):
+    i = 1000 + ni * crop_size
+    for nj in range(4):
+        j = 2100 + nj * crop_size
+        reference_imgs_list.append(img_torch[..., i:i+crop_size, j:j+crop_size])
+reference_imgs = torch.cat(reference_imgs_list, dim=-4)
 if torch.cuda.is_available():
     reference_imgs = reference_imgs.cuda()
-reference_imgs_fig = show_batch(reference_imgs,
-                                n_padding=4,
-                                figsize=(12, 12),
-                                title='reference imgs')
-log_matplotlib_as_png("reference_imgs", reference_imgs_fig)
+_ = show_batch(reference_imgs,
+               n_padding=4,
+               figsize=(12, 12),
+               title="reference imgs",
+               neptune_name="reference_imgs")
 
 # Instantiate model, optimizer and checks
 vae = CompositionalVae(params)
@@ -164,8 +172,6 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                                               prefix_to_add="train_")
 
                 if (epoch % TEST_FREQUENCY) == 0:
-                    output: Output = vae.forward(reference_imgs, draw_image=True, draw_boxes=True, verbose=False)
-                    plot_reconstruction_and_inference(output, epoch=epoch, prefix="rec_", postfix="_train")
 
                     vae.eval()
                     test_metrics = process_one_epoch(model=vae, 
@@ -180,15 +186,20 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                                                   destination=history_dict,
                                                   prefix_exclude="wrong_examples",
                                                   prefix_to_add="test_")
-
+                    
                     output: Output = vae.forward(reference_imgs, draw_image=True, draw_boxes=True, verbose=False)
-                    plot_reconstruction_and_inference(output, epoch=epoch, prefix="rec_", postfix="_test")
+                    plot_reconstruction_and_inference(output, epoch=epoch, prefix="rec_")
+                    reference_n_cells = (output.inference.sample_prob > 0.5).sum().item()
+                    tmp_dict = {"reference_n_cells" : reference_n_cells}
+                    log_dict_metrics(tmp_dict)
+                    history_dict = append_to_dict(source=tmp_dict,
+                                                  destination=history_dict)
 
                     segmentation: Segmentation = vae.segment(batch_imgs=reference_imgs)
-                    plot_segmentation(segmentation, epoch=epoch, prefix="seg_", postfix="_test")
+                    plot_segmentation(segmentation, epoch=epoch, prefix="seg_")
 
                     generated: Output = vae.generate(imgs_in=reference_imgs, draw_boxes=True)
-                    plot_reconstruction_and_inference(generated, epoch=epoch, prefix="gen_", postfix="_test")
+                    plot_reconstruction_and_inference(generated, epoch=epoch, prefix="gen_")
 
                     test_loss = test_metrics.loss
                     min_test_loss = min(min_test_loss, test_loss)
@@ -200,11 +211,11 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                                            hyperparams_dict=params,
                                            history_dict=history_dict)
                         log_object_as_artifact(name="last_ckpt", obj=ckpt)  # log file into neptune
-                        #plot_all_from_dictionary(history_dict,
-                        #                         params,
-                        #                         test_frequency=TEST_FREQUENCY,
-                        #                         train_or_test="test",
-                        #                         verbose=True)
+                        plot_all_from_dictionary(history_dict,
+                                                 params,
+                                                 test_frequency=TEST_FREQUENCY,
+                                                 train_or_test="test",
+                                                 verbose=True)
                         plot_all_from_dictionary(history_dict,
                                                  params,
                                                  test_frequency=TEST_FREQUENCY,
@@ -221,7 +232,7 @@ small_img_to_segment = img_to_segment[None, ..., :crop_size, :crop_size]
 if torch.cuda.is_available():
     small_img_to_segment = small_img_to_segment.cuda()
 segmentation: Segmentation = vae.segment(batch_imgs=small_img_to_segment)
-plot_segmentation(segmentation, epoch="debug_before_tiling", prefix="seg_", postfix="_test")
+plot_segmentation(segmentation, epoch="", prefix="seg_", postfix="_tiling")
 
 # tiling segmentation
 tiling: Segmentation = vae.segment_with_tiling(single_img=img_to_segment,
@@ -234,7 +245,7 @@ tiling: Segmentation = vae.segment_with_tiling(single_img=img_to_segment,
                                                radius_nn=10,
                                                batch_size=64)
 log_object_as_artifact(name="tiling", obj=tiling, verbose=True)
-tiling_fig = plot_tiling(tiling, neptune_name="tiling")
+tiling_fig = plot_tiling(tiling, neptune_name="tiling_before_graph")
 
 # perform graph analysis
 g = GraphSegmentation(tiling, min_fg_prob=0.1, min_edge_weight=0.01, normalize_graph_edges=True)
@@ -245,18 +256,22 @@ partition = g.find_partition_leiden(resolution=1.0,
                                     each_cc_separately=False,
                                     n_iterations=10,
                                     initial_membership=None) 
-g.plot_partition(partition, neptune_name="partition_after_graph")
+g.plot_partition(partition, neptune_name="tiling_after_graph")
 
 label = g.partition_2_label(partition)
-label_after_QC = g.QC_on_label(label, min_area=30)
+try:
+    label_after_QC = g.QC_on_label(label, min_area=30)
+except:
+    label_after_QC = label
+
 plot_label_contours(label=tiling.integer_mask[0, 0],
                     image=tiling.raw_image[0, 0],
                     contour_thickness=2,
-                    neptune_name="contours_based_on_sample")
+                    neptune_name="tiling_contours_based_on_sample")
 
 plot_label_contours(label=label_after_QC,
                     image=tiling.raw_image[0, 0],
                     contour_thickness=2,
-                    neptune_name="contours_based_on_graph")
+                    neptune_name="tiling_contours_based_on_graph")
 
 exp.stop()
