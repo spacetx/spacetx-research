@@ -10,7 +10,7 @@ import skimage.morphology
 import neptune
 
 from .namedtuple import BB, Output, Segmentation
-from .utilities_neptune import log_img_and_chart
+from .utilities_neptune import log_img_and_chart, log_img_only
 
 
 def contours_from_labels(labels: numpy.ndarray,
@@ -66,7 +66,8 @@ def plot_label_contours(label: Union[torch.Tensor, numpy.ndarray],
 
     fig.tight_layout()
     if neptune_name is not None:
-        log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
+        #log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
+        log_img_only(name=neptune_name, fig=fig, experiment=experiment)
     plt.close(fig)
     return fig
 
@@ -156,7 +157,8 @@ def plot_grid(img,
 
     fig.tight_layout()
     if neptune_name is not None:
-        log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
+        #log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
+        log_img_only(name=neptune_name, fig=fig, experiment=experiment)
     plt.close(fig)
     return fig
 
@@ -188,7 +190,8 @@ def show_batch(images: torch.Tensor,
     fig.tight_layout()
 
     if neptune_name is not None:
-        log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
+        #log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
+        log_img_only(name=neptune_name, fig=fig, experiment=experiment)
 
     plt.close(fig)
     return fig
@@ -217,7 +220,8 @@ def plot_tiling(tiling,
     axes[1, 1].set_title("raw image")
     fig.tight_layout()
     if neptune_name is not None:
-        log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
+        #log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
+        log_img_only(name=neptune_name, fig=fig, experiment=experiment)
     plt.close(fig)
     return fig
 

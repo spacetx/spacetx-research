@@ -93,14 +93,11 @@ class Partition(NamedTuple):
         if (self.sizes[1:] > 0).all():
             return self
         else:
-            print("compactify")
             my_filter = self.sizes > 0
             my_filter[0] = True
             count = torch.cumsum(my_filter, dim=-1)
             old_2_new = ((count - count[0]) * my_filter).to(self.membership.dtype)
-            tmp = Partition(sizes=self.sizes[my_filter], membership=old_2_new[self.membership])
-            print("end compactify")
-            return tmp
+            return Partition(sizes=self.sizes[my_filter], membership=old_2_new[self.membership])
 
     def filter_by_vertex(self, keep_vertex: torch.tensor):
         assert self.membership.shape == keep_vertex.shape

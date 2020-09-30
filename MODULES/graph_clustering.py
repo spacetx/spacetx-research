@@ -172,7 +172,9 @@ with torch.no_grad():
                             directed=False)
 
         def partition_2_label(self, partition: Partition):
-            label = torch.zeros_like(self.index_matrix)
+            label = torch.zeros_like(self.index_matrix, 
+                                     dtype=partition.membership.dtype,
+                                     device=partition.membership.device)
             label[self.i_coordinate_fg_pixel, self.j_coordinate_fg_pixel] = partition.membership
             return label
 
@@ -382,7 +384,7 @@ with torch.no_grad():
 
         def QC_on_label(self, old_label, min_area):
             """ This function filter the labels by some criteria. For example by min size"""
-            labels = skimage.measure.label(old_label, background=0, return_num=False, connectivity=2)
+            labels = skimage.measure.label(old_label.cpu(), background=0, return_num=False, connectivity=2)
             mydict = skimage.measure.regionprops_table(labels, properties=['label', 'area'])
             my_filter = mydict["area"] > min_area
 
@@ -417,8 +419,8 @@ with torch.no_grad():
                 sizes_fg = sizes_fg[sizes_fg > 0]  # since I am filtering the vertex some sizes might become zero
                 w = window
 
-            label = self.partition_2_label(partition)[w[0]:w[2], w[1]:w[3]].cpu().numpy()  # shape: w, h
-            image = self.raw_image[:, w[0]:w[2], w[1]:w[3]].permute(1, 2, 0).cpu().numpy()  # shape: w, h, ch
+            label = self.partition_2_label(partition)[w[0]:w[2], w[1]:w[3]].cpu().long().numpy()  # shape: w, h
+            image = self.raw_image[:, w[0]:w[2], w[1]:w[3]].permute(1, 2, 0).cpu().float().numpy()  # shape: w, h, ch
             if len(image.shape) == 3 and (image.shape[-1] != 3):
                 image = image[..., 0]
 

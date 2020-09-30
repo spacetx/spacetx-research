@@ -5,6 +5,17 @@ from typing import Optional
 from .utilities import save_obj
 from neptunecontrib.api import log_chart
 
+def log_img_only(name: str,
+                 fig: matplotlib.figure.Figure,
+                 experiment:  Optional[neptune.experiments.Experiment] = None,
+                 verbose: bool = False):
+    if verbose:
+        print("inside log_img_only -> "+name)
+    _exp = experiment if experiment else neptune
+    _exp.log_image(name, fig)
+    if verbose:
+        print("leaving log_img_only -> "+name)
+
 
 def log_img_and_chart(name: str,
                       fig: matplotlib.figure.Figure,

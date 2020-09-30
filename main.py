@@ -200,11 +200,11 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                                            hyperparams_dict=params,
                                            history_dict=history_dict)
                         log_object_as_artifact(name="last_ckpt", obj=ckpt)  # log file into neptune
-                        plot_all_from_dictionary(history_dict,
-                                                 params,
-                                                 test_frequency=TEST_FREQUENCY,
-                                                 train_or_test="test",
-                                                 verbose=True)
+                        #plot_all_from_dictionary(history_dict,
+                        #                         params,
+                        #                         test_frequency=TEST_FREQUENCY,
+                        #                         train_or_test="test",
+                        #                         verbose=True)
                         plot_all_from_dictionary(history_dict,
                                                  params,
                                                  test_frequency=TEST_FREQUENCY,
