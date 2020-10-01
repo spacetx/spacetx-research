@@ -236,12 +236,18 @@ class Inference_and_Generation(torch.nn.Module):
                                                                              overlap_threshold=overlap_threshold,
                                                                              n_objects_max=n_objects_max,
                                                                              topk_only=topk_only)
-
+        # Select the few probability and boxes corresponding to the non-overlapping bbox
         prob_few: torch.Tensor = torch.gather((prob_all * nms_output.nms_mask), dim=0, index=nms_output.index_top_k)
+
         bounding_box_few: BB = BB(bx=torch.gather(bounding_box_all.bx, dim=0, index=nms_output.index_top_k),
                                   by=torch.gather(bounding_box_all.by, dim=0, index=nms_output.index_top_k),
                                   bw=torch.gather(bounding_box_all.bw, dim=0, index=nms_output.index_top_k),
                                   bh=torch.gather(bounding_box_all.bh, dim=0, index=nms_output.index_top_k))
+
+        zwhere_kl_all = convert_to_box_list(zwhere_map.kl)  # shape (nbox_all, batch_size, ch)
+        new_index = nms_output.index_top_k.unsqueeze(-1).expand(-1, -1,
+                                                                zwhere_kl_all.shape[-1])  # (nbox_few, batch_size, ch)
+        zwhere_kl_few = torch.gather(zwhere_kl_all, dim=0, index=new_index)  # shape (nbox_few, batch_size, ch)
 
         # ------------------------------------------------------------------#
         # 5. Crop the unet_features according to the selected boxes
@@ -299,4 +305,5 @@ class Inference_and_Generation(torch.nn.Module):
                          # the kl of the 3 latent variables
                          kl_logit_map=logit_map.kl,
                          kl_zwhere_map=zwhere_map.kl,
+                         kl_zwhere=zwhere_kl_few,
                          kl_zinstance=zinstance_few.kl)

@@ -24,14 +24,12 @@ exp: neptune.experiments.Experiment = \
                               upload_stdout=True,
                               upload_stderr=True)
 
-
 # Get the training and test data
 preprocessed = load_obj("./data_train.pt")
 img_torch = preprocessed.img.float()
 roi_mask_torch = preprocessed.roi_mask.bool()
 assert len(img_torch.shape) == len(roi_mask_torch.shape) == 4
 # print("GPU GB after opening data ->",torch.cuda.memory_allocated()/1E9)
-
 
 BATCH_SIZE = params["simulation"]["batch_size"]
 SIZE_CROPS = params["input_image"]["size_raw_image"]

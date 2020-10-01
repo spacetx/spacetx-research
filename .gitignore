@@ -1,3 +1,8 @@
 resul*
 *.tif
 *.pt
+/src/*.json
+/src/*.pt
+/src/*sh
+/src/MODULES/__pycache__
+/.idea 
