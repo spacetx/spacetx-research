@@ -15,7 +15,7 @@
 
  "architecture" : {
    "__comment" : "architecture parameters, level_zwhere_output is between 0 and n_max_pool included",
-   "dim_zinstance" : 20,
+   "dim_zinstance" : 5,
    "dim_zwhere" : 4,
    "dim_logit" : 1,
    "cropped_size" : 28,
@@ -31,7 +31,7 @@
    "n_objects_max" : 25,
    "size_object_min" : 5,
    "size_object_max" : 20,
-   "length_scale_GP" : 8.0,
+   "length_scale_GP" : 4.0,
    "size_raw_image" : 80,
    "ch_in" : 1,
    "bg_is_zero" : true,
