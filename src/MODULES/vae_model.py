@@ -211,6 +211,7 @@ class CompositionalVae(torch.nn.Module):
         #                        = fg_fraction_box + fg_fraction_box
         #                        -> lead to many small object b/c there is no cost
         # New solution = add term sum p so that many objects are penalized
+        # TODO: sparsity_box for all boxes or only the selected ones?
         sparsity_mask = torch.sum(mixing_fg) / torch.numel(mixing_fg)  # divide by # total pixel
         sparsity_box = torch.sum(p_times_area_map) / torch.numel(mixing_fg)  # divide by # total pixel
         sparsity_prob = torch.sum(inference.p_map) / (batch_size * n_boxes)  # quickly converge to order 1
@@ -219,6 +220,7 @@ class CompositionalVae(torch.nn.Module):
         # 3. compute KL
 
         # TODO: sum or mean
+        # TODO: kl_zwhere for all or just the selected boxes
         kl_zinstance = torch.mean(inference.kl_zinstance)  # choose latent dim z so that this number is order 1.
         kl_zwhere = torch.sum(inference.kl_zwhere_map) / (batch_size * n_boxes * 4)  # order 1
         kl_logit = torch.sum(inference.kl_logit_map) / batch_size  # will normalize by running average -> order 1

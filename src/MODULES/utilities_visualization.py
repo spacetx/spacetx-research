@@ -125,8 +125,8 @@ def draw_bounding_boxes(prob: Optional[torch.Tensor], bounding_box: BB, width: i
         img = PIL.Image.new('RGB', (width, height), color=0)
         draw = PIL.ImageDraw.Draw(img)
         for box in range(n_boxes):
-            # if prob[box, batch] > 0.5:
-            if prob[box, batch] > -1:
+            if prob[box, batch] > 0.5:
+            # if prob[box, batch] > -1:
                 draw.rectangle(x1y1x3y3[box, batch, :].cpu().numpy(), outline='red', fill=None)
         batch_bb_np[batch, ...] = numpy.array(img.getdata(), numpy.uint8).reshape((width, height, 3))
 
