@@ -33,37 +33,36 @@ task train {
         ln -s ~{ML_parameters} ./src/ML_parameters.json
         ln -s ~{data_train} ./src/data_train.pt
         ln -s ~{data_test} ./src/data_test.pt
-        ln -s ~{credentials_json} ./src/credentials.json
         echo "AFTER CHANGING NAMES --> Content of checkout dir"
         echo $(ls)
 
         # 3. run python code only if NEPTUNE credentials are found
         # extract neptune_token from json file using regexpression
-        token=$(cat credentials.json | grep -o '"NEPTUNE_API_TOKEN"\s*:\s*"[^"]*"' | grep -o '"[^"]*"$')
-        if [ ! -z $token ]; then 
-            export NEPTUNE_API_TOKEN=$token
-            cd ./src
+        token=$(cat ~{credentials_json} | grep -o '"NEPTUNE_API_TOKEN"\s*:\s*"[^"]*"' | grep -o '"[^"]*"$')
+        if [ ! -z $token ]; then
+           export NEPTUNE_API_TOKEN=$token
+           cd ./src 
            python main.py 
         fi
     >>>
     
-    runtime {
-          docker: "python"
-          cpu: 1
-          preemptible: 3
-    }
-    
 #    runtime {
-#         docker: "us.gcr.io/broad-dsde-methods/pyro_matplotlib:0.0.6"
-#         bootDiskSizeGb: 100
-#         memory: "26G"
-#         cpu: 4
-#         zones: "us-east1-d us-east1-c"
-#         gpuCount: 1
-#         gpuType: "nvidia-tesla-k80" #"nvidia-tesla-p100" 
-#         maxRetries: 0
-#         preemptible_tries: 0
+#          docker: "python"
+#          cpu: 1
+#          preemptible: 3
 #    }
+    
+    runtime {
+         docker: "us.gcr.io/broad-dsde-methods/pyro_matplotlib:0.0.6"
+         bootDiskSizeGb: 100
+         memory: "26G"
+         cpu: 4
+         zones: "us-east1-d us-east1-c"
+         gpuCount: 1
+         gpuType: "nvidia-tesla-k80" #"nvidia-tesla-p100" 
+         maxRetries: 0
+         preemptible_tries: 0
+    }
 
 }
 
