@@ -5,7 +5,7 @@ import dill
 from typing import Union, Optional, NamedTuple
 from collections import OrderedDict
 
-from .namedtuple import BB
+from namedtuple import BB
 
 
 def linear_interpolation(t: Union[numpy.array, float], values: tuple, times: tuple) -> Union[numpy.array, float]:

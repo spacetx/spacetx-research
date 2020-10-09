@@ -1,8 +1,8 @@
-from .utilities import *
-from .utilities_ml import Moving_Average_Calculator
-from .utilities_visualization import draw_bounding_boxes, draw_img
-from .vae_parts import *
-from .namedtuple import *
+from utilities import *
+from utilities_ml import Moving_Average_Calculator
+from utilities_visualization import draw_bounding_boxes, draw_img
+from vae_parts import *
+from namedtuple import *
 from typing import Optional
 
 

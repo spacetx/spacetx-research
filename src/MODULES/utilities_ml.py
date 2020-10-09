@@ -4,9 +4,9 @@ from torch.distributions.utils import broadcast_all
 from typing import Union, Callable, Optional
 from collections import OrderedDict
 
-from .utilities_visualization import show_batch
-from .namedtuple import DIST, MetricMiniBatch
-from .utilities_neptune import log_dict_metrics
+from utilities_visualization import show_batch
+from namedtuple import DIST, MetricMiniBatch
+from utilities_neptune import log_dict_metrics
 
 
 def are_broadcastable(a: torch.Tensor, b: torch.Tensor) -> bool:

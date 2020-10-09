@@ -2,8 +2,9 @@ import neptune
 import torch.nn
 import matplotlib.figure
 from typing import Optional
-from .utilities import save_obj
+from utilities import save_obj
 from neptunecontrib.api import log_chart
+
 
 def log_img_only(name: str,
                  fig: matplotlib.figure.Figure,

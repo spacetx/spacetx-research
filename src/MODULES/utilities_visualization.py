@@ -9,8 +9,8 @@ import skimage.color
 import skimage.morphology
 import neptune
 
-from .namedtuple import BB, Output, Segmentation
-from .utilities_neptune import log_img_and_chart, log_img_only
+from namedtuple import BB, Output, Segmentation
+from utilities_neptune import log_img_and_chart, log_img_only
 
 
 def contours_from_labels(labels: numpy.ndarray,
