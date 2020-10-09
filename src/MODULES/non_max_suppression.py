@@ -1,5 +1,6 @@
 import torch
-from .namedtuple import BB, NMSoutput
+from namedtuple import BB, NMSoutput
+from typing import Optional
 
 
 class NonMaxSuppression(object):
@@ -101,34 +102,43 @@ class NonMaxSuppression(object):
                                bounding_box: BB,
                                overlap_threshold: float,
                                n_objects_max: int,
-                               topk_only: bool) -> NMSoutput:
-
-        # compute the indices to do nms + topk filter based on noisy probabilities
+                               topk_only: bool,
+                               active: Optional[torch.Tensor] = None) -> NMSoutput:
+        """ Compute the indices to do nms + topk filter based on noisy probabilities.
+            Only the active elements do NMS """
+        if active is None:
+            active = torch.ones_like(prob).bool()
+        assert prob.shape == active.shape == bounding_box.bx.shape
         assert len(prob.shape) == 2
         n_boxes, batch_size = prob.shape
 
         # this is O(N^2) algorithm
         overlap_measure = NonMaxSuppression.compute_box_intersection_over_min_area(bounding_box=bounding_box)
         binarized_overlap = (overlap_measure > overlap_threshold).float()
+        # Binarized_overlap_ij >0 only if both i and j are active
+        print("check in NMS", active.unsqueeze(0).shape)
+        print("check in NMS", active.unsqueeze(1).shape)
+        binarized_overlap *= active.unsqueeze(0)
+        binarized_overlap *= active.unsqueeze(1)
         assert binarized_overlap.shape == (n_boxes, n_boxes, batch_size)
+
+        # I perform NMS based on binarized_overlap and score
+        score = prob + active
 
         if topk_only:
             # If nms_mask = 1 then this is equivalent to do topk only
             chosen_nms_mask = torch.ones_like(prob)
         else:
-            possible = (prob > 0.0).float()
-            chosen_nms_mask: torch.Tensor = NonMaxSuppression.perform_nms_selection(mask_overlap=binarized_overlap,
-                                                                                    score=prob,
-                                                                                    possible=possible,
-                                                                                    n_objects_max=n_objects_max)
+            chosen_nms_mask = NonMaxSuppression.perform_nms_selection(mask_overlap=binarized_overlap,
+                                                                      score=score,
+                                                                      possible=torch.ones_like(prob).bool(),
+                                                                      n_objects_max=n_objects_max)
+        assert chosen_nms_mask.shape == (n_boxes, batch_size)
 
-            assert chosen_nms_mask.shape == (n_boxes, batch_size)
-
-        # select the indices of the top boxes according to the masked prob.
-        # Note that masked_prob are zero and do not receive gradients for the boxes which underwent NMS
-        masked_prob = chosen_nms_mask * prob
+        # select the indices of the top boxes according to the masked_score.
+        # Note that masked_score are zero for the boxes which underwent NMS
+        masked_score = chosen_nms_mask * score
         k = min(n_objects_max, n_boxes)
-        indices_top_k: torch.Tensor = torch.topk(masked_prob, k=k, dim=-2, largest=True, sorted=True)[1]
-
+        indices_top_k: torch.Tensor = torch.topk(masked_score, k=k, dim=-2, largest=True, sorted=True)[1]
         return NMSoutput(nms_mask=chosen_nms_mask,
                          index_top_k=indices_top_k)
