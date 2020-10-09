@@ -221,9 +221,11 @@ class CompositionalVae(torch.nn.Module):
 
         # TODO: sum or mean
         # TODO: kl_zwhere for all or just the selected boxes
-        kl_zinstance = torch.mean(inference.kl_zinstance)  # choose latent dim z so that this number is order 1.
-        kl_zwhere = torch.sum(inference.kl_zwhere_map) / (batch_size * n_boxes * 4)  # order 1
         kl_logit = torch.sum(inference.kl_logit_map) / batch_size  # will normalize by running average -> order 1
+        #kl_zinstance = torch.mean(inference.kl_zinstance)  # choose latent dim z so that this number is order 1.
+        #kl_zwhere = torch.sum(inference.kl_zwhere_map) / (batch_size * n_boxes * 4)  # order 1
+        kl_zinstance = torch.sum(inference.kl_zinstance)  # choose latent dim z so that this number is order 1.
+        kl_zwhere = torch.sum(inference.kl_zwhere_map)
 
         # 5. compute the moving averages
         with torch.no_grad():
