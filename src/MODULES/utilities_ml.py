@@ -57,18 +57,18 @@ def sample_and_kl_prob(logit_map: torch.Tensor,
     if sample_from_prior:
         with torch.no_grad():
             batch_size = torch.Size([logit_map.shape[0]])
-            c = FiniteDPP(L=similarity_kernel.requires_grad_(False)).sample(sample_shape=batch_size)
-            c_map = c.view_as(logit_map)
+            c_all = FiniteDPP(L=similarity_kernel.requires_grad_(False)).sample(sample_shape=batch_size).transpose(-1, -2)
             kl = torch.zeros(logit_map.shape[0])
 
             # Fake NMS
-            q_map = torch.sigmoid(logit_map)
-            score = convert_to_box_list(q_map + c_map).squeeze(-1)
-            nms_output: NMSoutput = NonMaxSuppression.compute_mask_and_index(score=score,
+            q_all = torch.sigmoid(convert_to_box_list(logit_map).squeeze(-1))
+            assert q_all.shape == c_all.shape
+            nms_output: NMSoutput = NonMaxSuppression.compute_mask_and_index(score=c_all+q_all,
                                                                              bounding_box=bounding_box_no_noise,
                                                                              overlap_threshold=overlap_threshold,
                                                                              n_objects_max=n_objects_max,
                                                                              topk_only=topk_only)
+            return DIST(sample=c_all, kl=kl), nms_output
 
     else:
         # Work with posterior
@@ -102,9 +102,6 @@ def sample_and_kl_prob(logit_map: torch.Tensor,
 
         # Might suppress some of the c.
         c_masked = c*nms_output.nms_mask + (1-c)*(~nms_output.nms_mask)  # grad only thorugh c not nms_mask
-        c_map = invert_convert_to_box_list(c_masked.unsqueeze(-1),
-                                           original_width=logit_map.shape[-2],
-                                           original_height=logit_map.shape[-1])
 
         # Here the gradients are only through log_q and similarity_kernel not c
         c_masked_no_grad = c_masked.bool()  # bool variable has requires_grad = False
@@ -113,32 +110,7 @@ def sample_and_kl_prob(logit_map: torch.Tensor,
         assert log_prob_posterior.shape == log_prob_prior.shape
         kl = log_prob_posterior - log_prob_prior
 
-    return DIST(sample=c_map, kl=kl), nms_output
-
-###def sample_and_kl_with_dpp_prior(posterior_mu: torch.Tensor,
-###                                 posterior_sigma: torch.Tensor,
-###                                 DPP_L_kernel: torch.Tensor,
-###                                 noisy_sampling: bool,
-###                                 sample_from_prior: bool) -> DIST:
-###
-###    #DOTO : fdsfsd
-###
-###    post_L, prior_L = broadcast_all(posterior_L_cov, prior_L_cov)  # (*, n, n)
-###    post_mu, prior_mu = broadcast_all(posterior_mu, prior_mu)  # (*, n)
-###    assert post_L.shape[-1] == post_L.shape[-2] == post_mu.shape[-1]  # number of grid points are the same
-###    assert post_L.shape[:-2] == post_mu.shape[:-1]  # batch_size is the same
-###
-###    if sample_from_prior:
-###        # working with the prior
-###        eps = torch.randn_like(prior_mu)
-###        sample = prior_mu + _batch_mv(prior_L, eps) if noisy_sampling else prior_mu  # size: *, n
-###        kl = torch.zeros_like(prior_mu[..., 0])  # size: *
-###    else:
-###        # working with the posterior
-###        eps = torch.randn_like(post_mu)
-###        sample = post_mu + _batch_mv(post_L, eps) if noisy_sampling else post_mu
-###        kl = kl_multivariate_normal0_normal1(mu0=post_mu, mu1=prior_mu, L_cov0=post_L, L_cov1=prior_L)
-###    return DIST(sample=sample, kl=kl)
+        return DIST(sample=c_masked, kl=kl), nms_output
 
 
 class SimilarityKernel(torch.nn.Module):

@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from MODULES.cropper_uncropper import Uncropper, Cropper
 from MODULES.unet_model import UNet
 from MODULES.encoders_decoders import EncoderConv, DecoderConv, Decoder1by1Linear, EncoderConvLeaky, DecoderConvLeaky
-from MODULES.utilities import tmaps_to_bb, convert_to_box_list
+from MODULES.utilities import tmaps_to_bb, convert_to_box_list, invert_convert_to_box_list
 from MODULES.utilities_ml import sample_and_kl_diagonal_normal, sample_and_kl_prob, SimilarityKernel
 from MODULES.namedtuple import Inference, NMSoutput, BB, UNEToutput, ZZ, DIST
 
@@ -110,9 +110,9 @@ class Inference_and_Generation(torch.nn.Module):
         similarity_kernel = self.similarity_kernel_dpp.forward(n_width=unet_output.logit.mu.shape[-2],
                                                                n_height=unet_output.logit.mu.shape[-1])
 
-        c_map: DIST
+        c_all: DIST
         nms_output: NMSoutput
-        c_map, nms_output = sample_and_kl_prob(logit_map=unet_output.logit.mu,
+        c_all, nms_output = sample_and_kl_prob(logit_map=unet_output.logit.mu,
                                                similarity_kernel=similarity_kernel,
                                                images=imgs_in,
                                                background=big_bg,
@@ -123,16 +123,14 @@ class Inference_and_Generation(torch.nn.Module):
                                                topk_only=topk_only,
                                                noisy_sampling=noisy_sampling,
                                                sample_from_prior=generate_synthetic_data)
-        c_few = torch.gather(convert_to_box_list(c_map.sample).squeeze(-1), dim=0, index=nms_output.index_top_k)
+
+        c_few = torch.gather(c_all.sample, dim=0, index=nms_output.index_top_k)
         logit_few = torch.gather(convert_to_box_list(unet_output.logit.mu).squeeze(-1), dim=0,
                                  index=nms_output.index_top_k)
-        print("AFTER NMS")
-        print(c_few.shape)
-        print(logit_few.shape)
-        print(c_map.sample.shape)
-        print(c_map.kl.shape)
-        print(nms_output.nms_mask.shape)
-        print(nms_output.index_top_k.shape)
+
+        c_map = invert_convert_to_box_list(c_all.sample.unsqueeze(-1),
+                                           original_width=unet_output.logit.mu.shape[-2],
+                                           original_height=unet_output.logit.mu.shape[-1])
 
         zwhere_map: DIST = sample_and_kl_diagonal_normal(posterior_mu=unet_output.zwhere.mu,
                                                          posterior_std=unet_output.zwhere.std,
@@ -202,11 +200,11 @@ class Inference_and_Generation(torch.nn.Module):
                          big_mask_NON_interacting=big_mask_NON_interacting,
                          big_img=big_img,
                          # the sample of the 3 latent variables
-                         sample_c_map=c_map.sample,
+                         sample_c_map=c_map,
                          sample_c=c_few,
                          sample_bb=bounding_box_few,
                          sample_zinstance=zinstance_few.sample,
                          # the kl of the 3 latent variables
-                         kl_logit=c_map.kl,
+                         kl_logit=c_all.kl,
                          kl_zwhere=zwhere_kl_few,
                          kl_zinstance=zinstance_few.kl)
