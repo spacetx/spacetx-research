@@ -7,8 +7,8 @@ from collections import OrderedDict
 from torch.distributions.distribution import Distribution
 from torch.distributions import constraints
 
-from MODULES.utilities import compute_average_in_box, compute_ranking
-from MODULES.utilities import pass_bernoulli, pass_mask, convert_to_box_list, invert_convert_to_box_list
+from MODULES.utilities import compute_average_in_box, compute_ranking, convert_to_box_list, invert_convert_to_box_list
+from MODULES.utilities import pass_bernoulli, pass_mask, differentiable_not
 from MODULES.utilities_visualization import show_batch
 from MODULES.namedtuple import DIST, MetricMiniBatch, BB, NMSoutput
 from MODULES.utilities_neptune import log_dict_metrics
@@ -103,6 +103,7 @@ def sample_and_kl_prob(logit_map: torch.Tensor,
 
         # Might supporess some of the c.
         c_masked = pass_mask(c, nms_output.nms_mask)  # shape: n_box, batch_shape
+        c_masked_not = differentiable_not(c)
         log_prob_posterior = (c_masked * log_q + ~c_masked * log_one_minus_q).sum(dim=0)
         log_prob_prior = FiniteDPP(L=similarity_kernel).log_prob(c_masked.transpose(-1, -2))  # shape: batch_shape
         assert log_prob_posterior.shape == log_prob_prior.shape

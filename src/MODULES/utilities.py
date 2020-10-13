@@ -43,6 +43,20 @@ def tmaps_to_bb(tmaps, width_raw_image: int, height_raw_image: int, min_box_size
               bh=convert_to_box_list(bh_map).squeeze(-1))
 
 
+class LogicalNot(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x):
+        return ~x
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return grad_output.neg()
+
+
+def differentiable_not(x):
+    return LogicalNot.apply(x)
+
+
 class PassBernoulli(torch.autograd.Function):
     """ Forward is c=Bernoulli(p). Backward is identity"""
 

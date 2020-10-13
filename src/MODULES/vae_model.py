@@ -188,7 +188,6 @@ class CompositionalVae(torch.nn.Module):
 
         # Preparation
         batch_size, ch, w, h = imgs_in.shape
-        n_boxes = inference.big_mask.shape[-5]
         # p_times_area_map = inference.p_map * inference.area_map
         mixing_k = inference.big_mask * inference.sample_c[..., None, None, None]
         mixing_fg = torch.sum(mixing_k, dim=-5)  # sum over boxes
