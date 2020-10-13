@@ -363,7 +363,7 @@ class CompositionalVae(torch.nn.Module):
                                                                 bg_is_zero=True,
                                                                 bg_resolution=(1, 1))
 
-            mixing_k = inference.big_mask * inference.sample_prob[..., None, None, None]
+            mixing_k = inference.big_mask * inference.sample_c[..., None, None, None]
 
             # Now compute fg_prob, integer_segmentation_mask, similarity
             most_likely_mixing, index = torch.max(mixing_k, dim=-5, keepdim=True)  # 1, batch_size, 1, w, h
@@ -372,7 +372,7 @@ class CompositionalVae(torch.nn.Module):
 
             fg_prob = torch.sum(mixing_k, dim=-5)  # sum over instances
 
-            bounding_boxes = draw_bounding_boxes(prob=inference.sample_prob,
+            bounding_boxes = draw_bounding_boxes(c=inference.sample_c,
                                                  bounding_box=inference.sample_bb,
                                                  width=integer_mask.shape[-2],
                                                  height=integer_mask.shape[-1]) if draw_boxes else None
