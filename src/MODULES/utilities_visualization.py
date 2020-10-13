@@ -524,7 +524,7 @@ def plot_reconstruction_and_inference(output: Output,
                    n_padding=4,
                    title='imgs, epoch= {0:6d}'.format(epoch),
                    neptune_name=prefix+"imgs"+postfix)
-    _ = show_batch(output.inference.sample_c_map[:8],
+    _ = show_batch(output.inference.sample_c_map[:8].float(),
                    n_col=4,
                    n_padding=4,
                    title='c_map, epoch= {0:6d}'.format(epoch),
