@@ -8,7 +8,7 @@ from torch.distributions.distribution import Distribution
 from torch.distributions import constraints
 
 from MODULES.utilities import compute_average_in_box, compute_ranking, convert_to_box_list, invert_convert_to_box_list
-from MODULES.utilities import pass_bernoulli, pass_mask, differentiable_not
+from MODULES.utilities import pass_bernoulli
 from MODULES.utilities_visualization import show_batch
 from MODULES.namedtuple import DIST, MetricMiniBatch, BB, NMSoutput
 from MODULES.utilities_neptune import log_dict_metrics
@@ -91,26 +91,27 @@ def sample_and_kl_prob(logit_map: torch.Tensor,
             log_q = F.logsigmoid(logit_reshaped)
             log_one_minus_q = F.logsigmoid(-logit_reshaped)
 
-        c = pass_bernoulli(prob=q, noisy_sampling=noisy_sampling)
-        # print(c.dtype)
-        # print(c.shape)
-        # print(bounding_box_no_noise.bx.shape)
-        nms_output: NMSoutput = NonMaxSuppression.compute_mask_and_index(score=q+c,
-                                                                         bounding_box=bounding_box_no_noise,
-                                                                         overlap_threshold=overlap_threshold,
-                                                                         n_objects_max=n_objects_max,
-                                                                         topk_only=topk_only)
+        c = pass_bernoulli(prob=q, noisy_sampling=noisy_sampling)  # float variable which requires grad
 
-        # Might supporess some of the c.
-        c_masked = pass_mask(c, nms_output.nms_mask)  # shape: n_box, batch_shape
-        c_masked_not = differentiable_not(c)
-        log_prob_posterior = (c_masked * log_q + c_masked_not * log_one_minus_q).sum(dim=0)
-        log_prob_prior = FiniteDPP(L=similarity_kernel).log_prob(c_masked.transpose(-1, -2))  # shape: batch_shape
-        assert log_prob_posterior.shape == log_prob_prior.shape
-        kl = log_prob_posterior - log_prob_prior
+        with torch.no_grad():
+            nms_output: NMSoutput = NonMaxSuppression.compute_mask_and_index(score=q+c,
+                                                                             bounding_box=bounding_box_no_noise,
+                                                                             overlap_threshold=overlap_threshold,
+                                                                             n_objects_max=n_objects_max,
+                                                                             topk_only=topk_only)
+
+        # Might suppress some of the c.
+        c_masked = c*nms_output.nms_mask + (1-c)*(~nms_output.nms_mask)  # grad only thorugh c not nms_mask
         c_map = invert_convert_to_box_list(c_masked.unsqueeze(-1),
                                            original_width=logit_map.shape[-2],
                                            original_height=logit_map.shape[-1])
+
+        # Here the gradients are only through log_q and similarity_kernel not c
+        c_masked_no_grad = c_masked.bool()  # bool variable has requires_grad = False
+        log_prob_posterior = (c_masked_no_grad * log_q + ~c_masked_no_grad * log_one_minus_q).sum(dim=0)
+        log_prob_prior = FiniteDPP(L=similarity_kernel).log_prob(c_masked_no_grad.transpose(-1, -2))  # shape: batch_shape
+        assert log_prob_posterior.shape == log_prob_prior.shape
+        kl = log_prob_posterior - log_prob_prior
 
     return DIST(sample=c_map, kl=kl), nms_output
 

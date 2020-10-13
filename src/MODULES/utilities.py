@@ -43,24 +43,6 @@ def tmaps_to_bb(tmaps, width_raw_image: int, height_raw_image: int, min_box_size
               bh=convert_to_box_list(bh_map).squeeze(-1))
 
 
-class LogicalNot(torch.autograd.Function):
-    """ Logical not can be thought as not(x) = 1-x
-        Therefore during backward pass the grad need to be reversed
-    """
-    @staticmethod
-    def forward(ctx, x):
-
-        return ~x
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        return grad_output.neg()
-
-
-def differentiable_not(x):
-    return LogicalNot.apply(x)
-
-
 class PassBernoulli(torch.autograd.Function):
     """ Forward is c=Bernoulli(p). Backward is identity"""
 
@@ -70,7 +52,7 @@ class PassBernoulli(torch.autograd.Function):
             c = torch.rand_like(p) < p
         else:
             c = (p > 0.5)
-        return c
+        return c.float().requires_grad_(True)
 
     @staticmethod
     def backward(ctx, grad_output):
@@ -82,7 +64,7 @@ def pass_bernoulli(prob, noisy_sampling):
 
 
 class PassMask(torch.autograd.Function):
-    """ Forward is masking, Backward is identity"""
+    """ torch.where(Forward is masking which can be interpreted as selectively , Backward is identity"""
 
     @staticmethod
     def forward(ctx, c, nms_mask):
