@@ -56,7 +56,7 @@ class PassBernoulli(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-        return grad_output
+        return grad_output, None  # the gradient of noisy_sampling is None
 
 
 def pass_bernoulli(prob, noisy_sampling):
