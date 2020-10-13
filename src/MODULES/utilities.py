@@ -63,22 +63,6 @@ def pass_bernoulli(prob, noisy_sampling):
     return PassBernoulli.apply(prob, noisy_sampling)
 
 
-class PassMask(torch.autograd.Function):
-    """ torch.where(Forward is masking which can be interpreted as selectively , Backward is identity"""
-
-    @staticmethod
-    def forward(ctx, c, nms_mask):
-        return c * nms_mask
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        return grad_output
-
-
-def pass_mask(c, mask):
-    return PassMask.apply(c, mask)
-
-
 def linear_interpolation(t: Union[numpy.array, float], values: tuple, times: tuple) -> Union[numpy.array, float]:
     """ Makes an interpolation between (t_in,v_in) and (t_fin,v_fin)
         For time t>t_fin and t<t_in the value of v is clamped to either v_in or v_fin
