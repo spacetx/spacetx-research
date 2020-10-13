@@ -1,77 +1,12 @@
 import torch
 import torch.nn.functional as F
-from cropper_uncropper import Uncropper, Cropper
-from non_max_suppression import NonMaxSuppression
-from unet_model import UNet
-from encoders_decoders import EncoderConv, DecoderConv, Decoder1by1Linear, EncoderConvLeaky, DecoderConvLeaky
-from utilities import compute_average_in_box, compute_ranking
-from utilities_ml import sample_and_kl_diagonal_normal, SimilarityKernel, FiniteDPP #, sample_and_kl_multivariate_normal
-from namedtuple import Inference, BB, NMSoutput, UNEToutput, ZZ, DIST
 
-
-class PassBernoulli(torch.autograd.Function):
-    """ Forward is c=Bernoulli(p). Backward is identity"""
-    @staticmethod
-    def forward(ctx, p):
-        c = torch.rand_like(p) < p
-        return c
-    @staticmethod
-    def backward(ctx, grad_output):
-        return grad_output
-
-
-def pass_bernoulli(prob):
-    return PassBernoulli.apply(prob)
-
-
-class PassMask(torch.autograd.Function):
-    """ Forward is masking, Backward is identity"""
-    @staticmethod
-    def forward(ctx, c, nms_mask):
-        return c * nms_mask
-    @staticmethod
-    def backward(ctx, grad_output):
-        return grad_output
-
-def pass_mask(c, mask):
-    return PassMask.apply(c, mask)
-
-
-def convert_to_box_list(x: torch.Tensor) -> torch.Tensor:
-    """ takes input of shape: (batch, ch, width, height)
-        and returns output of shape: (n_list, batch, ch)
-        where n_list = width x height
-    """
-    assert len(x.shape) == 4
-    batch_size, ch, width, height = x.shape
-    return x.permute(2, 3, 0, 1).view(width*height, batch_size, ch)
-
-
-def invert_convert_to_box_list(x: torch.Tensor, original_width: int, original_height: int) -> torch.Tensor:
-    """ takes input of shape: (width x height, batch, ch)
-        and return shape: (batch, ch, width, height)
-    """
-    assert len(x.shape) == 3
-    n_list, batch_size, ch = x.shape
-    assert n_list == original_width * original_height
-    return x.permute(1, 2, 0).view(batch_size, ch, original_width, original_height)
-
-
-def tmaps_to_bb(tmaps, width_raw_image: int, height_raw_image: int, min_box_size: float, max_box_size: float):
-    tx_map, ty_map, tw_map, th_map = torch.split(tmaps, 1, dim=-3)
-    n_width, n_height = tx_map.shape[-2:]
-    ix_array = torch.arange(start=0, end=n_width, dtype=tx_map.dtype, device=tx_map.device)
-    iy_array = torch.arange(start=0, end=n_height, dtype=tx_map.dtype, device=tx_map.device)
-    ix_grid, iy_grid = torch.meshgrid([ix_array, iy_array])
-
-    bx_map: torch.Tensor = width_raw_image * (ix_grid + tx_map) / n_width
-    by_map: torch.Tensor = height_raw_image * (iy_grid + ty_map) / n_height
-    bw_map: torch.Tensor = min_box_size + (max_box_size - min_box_size) * tw_map
-    bh_map: torch.Tensor = min_box_size + (max_box_size - min_box_size) * th_map
-    return BB(bx=convert_to_box_list(bx_map).squeeze(-1),
-              by=convert_to_box_list(by_map).squeeze(-1),
-              bw=convert_to_box_list(bw_map).squeeze(-1),
-              bh=convert_to_box_list(bh_map).squeeze(-1))
+from MODULES.cropper_uncropper import Uncropper, Cropper
+from MODULES.unet_model import UNet
+from MODULES.encoders_decoders import EncoderConv, DecoderConv, Decoder1by1Linear, EncoderConvLeaky, DecoderConvLeaky
+from MODULES.utilities import tmaps_to_bb, convert_to_box_list
+from MODULES.utilities_ml import sample_and_kl_diagonal_normal, sample_and_kl_prob, SimilarityKernel
+from MODULES.namedtuple import Inference, NMSoutput, BB, UNEToutput, ZZ, DIST
 
 
 def from_weights_to_masks(weight: torch.Tensor, dim: int):
@@ -106,7 +41,7 @@ class Inference_and_Generation(torch.nn.Module):
 
 
         # modules
-        self.similarity_kernel_dpp = SimilarityKernel(n_kernels=params["similarity"]["n_kernels"])
+        self.similarity_kernel_dpp = SimilarityKernel(n_kernels=params["DPP"]["n_kernels"])
         self.unet: UNet = UNet(params)
 
         # Decoders
@@ -165,71 +100,40 @@ class Inference_and_Generation(torch.nn.Module):
                                              high_resolution=(imgs_in.shape[-2], imgs_in.shape[-1]))
             big_bg = torch.sigmoid(bg_map)
 
-        # Correction factor
-        if not generate_synthetic_data:
-
-            # Bounding_box_no_noise are used to NMS and prob_correction_factor
-            with torch.no_grad():
-                bounding_box_no_noise: BB = tmaps_to_bb(self.decoder_zwhere(unet_output.zwhere.mu))
-
-            if (prob_corr_factor > 0) and (prob_corr_factor <= 1.0):
-                with torch.no_grad():
-                    av_intensity: torch.Tensor = compute_average_in_box((imgs_in - big_bg).abs(), bounding_box_no_noise)
-                    # av_intensity: torch.Tensor = compute_average_in_box((imgs_in - big_bg).pow(2), bounding_box_no_noise)
-                    assert len(av_intensity.shape) == 2
-                    n_boxes_all, batch_size = av_intensity.shape
-                    ranking = compute_ranking(av_intensity)  # n_boxes_all, batch. It is in [0,n_box_all-1]
-                    tmp = ((ranking + 1).float() / (n_boxes_all + 1))
-                    q_approx = tmp.pow(10)
-
-                q_uncorrected = convert_to_box_list(torch.sigmoid(unet_output.logit)).unsqueeze(-1)
-                q = ((1 - prob_corr_factor) * q_uncorrected + prob_corr_factor * q_approx).clamp(min=1E-4, max=1-1E-4)
-                log_q = torch.log(q)
-                log_one_minus_q = torch.log1p(-q)
-            else:
-                logit_reshaped = convert_to_box_list(unet_output.logit).unsqueeze(-1)
-                q = torch.sigmoid(logit_reshaped)
-                log_q = F.logsigmoid(logit_reshaped)
-                log_one_minus_q = F.logsigmoid(-logit_reshaped)
-
-            # sample, NMS, log_prob
-            c = pass_bernoulli(prob=q)  # forward: c=Bernoulli(prob), Backward=Identity
-            with torch.no_grad():
-                nms_output: NMSoutput = NonMaxSuppression.compute_mask_and_index(prob=q,
-                                                                                 bounding_box=bounding_box_no_noise,
-                                                                                 overlap_threshold=overlap_threshold,
-                                                                                 n_objects_max=n_objects_max,
-                                                                                 topk_only=topk_only,
-                                                                                 active=c) # only if active apply NMS
-
-            print("nms_output.nms_mask.shape", nms_output.nms_mask.shape)
-            c_masked = pass_mask(c, nms_output.nms_mask)  # I might suppress some of the c
-            print("c_masked.shape", c_masked.shape)
-            w_logit, h_logit = unet_output.logit.shape[-2:]
-            log_prob_prior = FiniteDPP(L=self.similarity_kernel_dpp.forward(n_width=w_logit,
-                                                                            n_height=h_logit)).log_prob(c_masked)
-            log_prob_posterior = (c_masked * log_q + ~c_masked * log_one_minus_q).sum(dim=0)
-            print("log_prob_prior.shape", log_prob_prior.shape)
-            print("log_prob_posterior.shape", log_prob_posterior.shape)
-            kl_prob = log_prob_posterior - log_prob_prior
-
-        else:
-            FROM HERE
-            # Here I am generating synthetic data
-
-
-
-        # SAMPLE ZWHERE OF SELECTED BOXES
-        # COMPOUTE KL_ZWHERE OF SELECTED BOXES
-
         with torch.no_grad():
-            bounding_box_all: BB = tmaps_to_bb(self.decoder_zwhere(unet_output.zwhere.mu))
+            bounding_box_no_noise: BB = tmaps_to_bb(tmaps=torch.sigmoid(self.decoder_zwhere(unet_output.zwhere.mu)),
+                                                    width_raw_image=width_raw_image,
+                                                    height_raw_image=height_raw_image,
+                                                    min_box_size=self.size_min,
+                                                    max_box_size=self.size_max)
 
+        similarity_kernel = self.similarity_kernel_dpp.forward(n_width=unet_output.logit.mu.shape[-2],
+                                                               n_height=unet_output.logit.mu.shape[-1])
 
+        c_map: DIST
+        nms_output: NMSoutput
+        c_map, nms_output = sample_and_kl_prob(logit_map=unet_output.logit.mu,
+                                               similarity_kernel=similarity_kernel,
+                                               images=imgs_in,
+                                               background=big_bg,
+                                               bounding_box_no_noise=bounding_box_no_noise,
+                                               prob_corr_factor=prob_corr_factor,
+                                               overlap_threshold=overlap_threshold,
+                                               n_objects_max=n_objects_max,
+                                               topk_only=topk_only,
+                                               noisy_sampling=noisy_sampling,
+                                               sample_from_prior=generate_synthetic_data)
+        c_few = torch.gather(convert_to_box_list(c_map.sample).squeeze(-1), dim=0, index=nms_output.index_top_k)
+        logit_few = torch.gather(convert_to_box_list(unet_output.logit.mu).squeeze(-1), dim=0,
+                                 index=nms_output.index_top_k)
+        print("AFTER NMS")
+        print(c_few.shape)
+        print(logit_few.shape)
+        print(c_map.sample.shape)
+        print(c_map.kl.shape)
+        print(nms_output.nms_mask.shape)
+        print(nms_output.index_top_k.shape)
 
-    # ---------------------------#
-    # 2. ZWHERE to BoundingBoxes
-    # ---------------------------#
         zwhere_map: DIST = sample_and_kl_diagonal_normal(posterior_mu=unet_output.zwhere.mu,
                                                          posterior_std=unet_output.zwhere.std,
                                                          prior_mu=torch.zeros_like(unet_output.zwhere.mu),
@@ -237,25 +141,25 @@ class Inference_and_Generation(torch.nn.Module):
                                                          noisy_sampling=noisy_sampling,
                                                          sample_from_prior=generate_synthetic_data)
 
-        prob_few: torch.Tensor = torch.gather((prob_all * nms_output.nms_mask), dim=0, index=nms_output.index_top_k)
+        bounding_box_all: BB = tmaps_to_bb(tmaps=torch.sigmoid(self.decoder_zwhere(zwhere_map.sample)),
+                                           width_raw_image=width_raw_image,
+                                           height_raw_image=height_raw_image,
+                                           min_box_size=self.size_min,
+                                           max_box_size=self.size_max)
 
         bounding_box_few: BB = BB(bx=torch.gather(bounding_box_all.bx, dim=0, index=nms_output.index_top_k),
                                   by=torch.gather(bounding_box_all.by, dim=0, index=nms_output.index_top_k),
                                   bw=torch.gather(bounding_box_all.bw, dim=0, index=nms_output.index_top_k),
                                   bh=torch.gather(bounding_box_all.bh, dim=0, index=nms_output.index_top_k))
 
-        zwhere_kl_all = convert_to_box_list(zwhere_map.kl)  # shape (nbox_all, batch_size, ch)
-        new_index = nms_output.index_top_k.unsqueeze(-1).expand(-1, -1,
-                                                                zwhere_kl_all.shape[-1])  # (nbox_few, batch_size, ch)
+        zwhere_kl_all = convert_to_box_list(zwhere_map.kl)  # shape: nbox_all, batch_size, ch
+        new_index = nms_output.index_top_k.unsqueeze(-1).expand(-1, -1, zwhere_kl_all.shape[-1])  # shape: nbox_few, batch_size, ch
         zwhere_kl_few = torch.gather(zwhere_kl_all, dim=0, index=new_index)  # shape (nbox_few, batch_size, ch)
 
         # ------------------------------------------------------------------#
         # 5. Crop the unet_features according to the selected boxes
         # ------------------------------------------------------------------#
         n_boxes, batch_size = bounding_box_few.bx.shape
-        # print(unet_output.features.shape)
-        # print(imgs_in.shape)
-        # append the raw image in the channel dimension. 
         unet_features_expanded = unet_output.features.unsqueeze(0).expand(n_boxes, batch_size, -1, -1, -1)
         cropped_feature_map: torch.Tensor = Cropper.crop(bounding_box=bounding_box_few,
                                                          big_stuff=unet_features_expanded,
@@ -291,19 +195,18 @@ class Inference_and_Generation(torch.nn.Module):
         big_mask_NON_interacting = torch.tanh(big_weight)
 
         # 8. Return the inferred quantities
-        return Inference(length_scale_GP=length_scale_GP,
-                         p_map=p_map_cor,
-                         area_map=area_map,
+        return Inference(logit_map=unet_output.logit.mu,
+                         logit_few=logit_few,
                          big_bg=big_bg,
                          big_mask=big_mask,
                          big_mask_NON_interacting=big_mask_NON_interacting,
                          big_img=big_img,
                          # the sample of the 3 latent variables
-                         sample_prob=prob_few,
+                         sample_c_map=c_map.sample,
+                         sample_c=c_few,
                          sample_bb=bounding_box_few,
                          sample_zinstance=zinstance_few.sample,
                          # the kl of the 3 latent variables
-                         kl_logit_map=logit_map.kl,
-                         kl_zwhere_map=zwhere_map.kl,
+                         kl_logit=c_map.kl,
                          kl_zwhere=zwhere_kl_few,
                          kl_zinstance=zinstance_few.kl)

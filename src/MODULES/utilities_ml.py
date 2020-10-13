@@ -7,9 +7,12 @@ from collections import OrderedDict
 from torch.distributions.distribution import Distribution
 from torch.distributions import constraints
 
-from utilities_visualization import show_batch
-from namedtuple import DIST, MetricMiniBatch
-from utilities_neptune import log_dict_metrics
+from MODULES.utilities import compute_average_in_box, compute_ranking
+from MODULES.utilities import pass_bernoulli, pass_mask, convert_to_box_list, invert_convert_to_box_list
+from MODULES.utilities_visualization import show_batch
+from MODULES.namedtuple import DIST, MetricMiniBatch, BB, NMSoutput
+from MODULES.utilities_neptune import log_dict_metrics
+from MODULES.non_max_suppression import NonMaxSuppression
 
 
 def are_broadcastable(a: torch.Tensor, b: torch.Tensor) -> bool:
@@ -37,6 +40,78 @@ def sample_and_kl_diagonal_normal(posterior_mu: torch.Tensor,
 
     return DIST(sample=sample, kl=kl)
 
+
+def sample_and_kl_prob(logit_map: torch.Tensor,
+                       similarity_kernel: torch.Tensor,
+                       images: torch.Tensor,
+                       background: torch.Tensor,
+                       bounding_box_no_noise: BB,
+                       prob_corr_factor: float,
+                       overlap_threshold: float,
+                       n_objects_max: int,
+                       topk_only: bool,
+                       noisy_sampling: bool,
+                       sample_from_prior: bool):
+
+    # Correction factor
+    if sample_from_prior:
+        with torch.no_grad():
+            batch_size = torch.Size([logit_map.shape[0]])
+            c = FiniteDPP(L=similarity_kernel.requires_grad_(False)).sample(sample_shape=batch_size)
+            c_map = c.view_as(logit_map)
+            kl = torch.zeros(logit_map.shape[0])
+
+            # Fake NMS
+            q_map = torch.sigmoid(logit_map)
+            score = convert_to_box_list(q_map + c_map).squeeze(-1)
+            nms_output: NMSoutput = NonMaxSuppression.compute_mask_and_index(score=score,
+                                                                             bounding_box=bounding_box_no_noise,
+                                                                             overlap_threshold=overlap_threshold,
+                                                                             n_objects_max=n_objects_max,
+                                                                             topk_only=topk_only)
+
+    else:
+        # Work with posterior
+        if (prob_corr_factor > 0) and (prob_corr_factor <= 1.0):
+            with torch.no_grad():
+                av_intensity = compute_average_in_box((images - background).abs(), bounding_box_no_noise)
+                assert len(av_intensity.shape) == 2
+                n_boxes_all, batch_size = av_intensity.shape
+                ranking = compute_ranking(av_intensity)  # n_boxes_all, batch. It is in [0,n_box_all-1]
+                tmp = ((ranking + 1).float() / (n_boxes_all + 1))
+                q_approx = tmp.pow(10)
+
+            q_uncorrected = convert_to_box_list(torch.sigmoid(logit_map)).squeeze(-1)
+            q = ((1 - prob_corr_factor) * q_uncorrected + prob_corr_factor * q_approx).clamp(min=1E-4, max=1 - 1E-4)
+            log_q = torch.log(q)
+            log_one_minus_q = torch.log1p(-q)
+        else:
+            logit_reshaped = convert_to_box_list(logit_map).squeeze(-1)
+            q = torch.sigmoid(logit_reshaped)
+            log_q = F.logsigmoid(logit_reshaped)
+            log_one_minus_q = F.logsigmoid(-logit_reshaped)
+
+        c = pass_bernoulli(prob=q, noisy_sampling=noisy_sampling)
+        # print(c.dtype)
+        # print(c.shape)
+        # print(bounding_box_no_noise.bx.shape)
+        nms_output: NMSoutput = NonMaxSuppression.compute_mask_and_index(score=q+c,
+                                                                         bounding_box=bounding_box_no_noise,
+                                                                         overlap_threshold=overlap_threshold,
+                                                                         n_objects_max=n_objects_max,
+                                                                         topk_only=topk_only)
+
+        # Might supporess some of the c.
+        c_masked = pass_mask(c, nms_output.nms_mask)  # shape: n_box, batch_shape
+        log_prob_posterior = (c_masked * log_q + ~c_masked * log_one_minus_q).sum(dim=0)
+        log_prob_prior = FiniteDPP(L=similarity_kernel).log_prob(c_masked.transpose(-1, -2))  # shape: batch_shape
+        assert log_prob_posterior.shape == log_prob_prior.shape
+        kl = log_prob_posterior - log_prob_prior
+        c_map = invert_convert_to_box_list(c_masked.unsqueeze(-1),
+                                           original_width=logit_map.shape[-2],
+                                           original_height=logit_map.shape[-1])
+
+    return DIST(sample=c_map, kl=kl), nms_output
 
 ###def sample_and_kl_with_dpp_prior(posterior_mu: torch.Tensor,
 ###                                 posterior_sigma: torch.Tensor,
@@ -206,6 +281,7 @@ class FiniteDPP(Distribution):
 
             # value.shape = sample_shape + batch_shape + event_shape
             # logdet(L+I).shape = batch_shape
+            :rtype:
         """
         assert are_broadcastable(value, self.L[..., 0])
         assert self.L.device == value.device

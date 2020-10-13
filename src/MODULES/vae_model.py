@@ -1,8 +1,8 @@
-from utilities import *
-from utilities_ml import Moving_Average_Calculator
-from utilities_visualization import draw_bounding_boxes, draw_img
-from vae_parts import *
-from namedtuple import *
+from MODULES.utilities import *
+from MODULES.utilities_ml import Moving_Average_Calculator
+from MODULES.utilities_visualization import draw_bounding_boxes, draw_img
+from MODULES.vae_parts import *
+from MODULES.namedtuple import *
 from typing import Optional
 
 
@@ -151,7 +151,11 @@ class CompositionalVae(torch.nn.Module):
         # 1. Masks should not overlap:
         # A = (x1+x2+x3)^2 = x1^2 + x2^2 + x3^2 + 2 x1*x2 + 2 x1*x3 + 2 x2*x3
         # Therefore sum_{i \ne j} x_i x_j = x1*x2 + x1*x3 + x2*x3 = 0.5 * [(sum xi)^2 - (sum xi^2)]
-        x = inference.sample_prob[..., None, None, None] * inference.big_mask_NON_interacting
+        # print(inference.big_mask_NON_interacting.shape)  # n_box_few, batch, 1, w_big, h_big
+        # print(inference.logit_few.shape)                 # n_box_few, batch
+        # print(inference.sample_c.shape)                  # n_box_few, batch
+
+        x = inference.sample_c[..., None, None, None] * inference.big_mask_NON_interacting
         sum_x = torch.sum(x, dim=-5)  # sum over boxes
         sum_x_squared = torch.sum(x * x, dim=-5)
         tmp_value = (sum_x * sum_x - sum_x_squared).clamp(min=0)
@@ -169,7 +173,7 @@ class CompositionalVae(torch.nn.Module):
                                                             var_value=volume_mask_absolute,
                                                             verbose=verbose,
                                                             chosen=chosen)
-        cost_volume_minibatch = (cost_volume_absolute * inference.sample_prob).sum(dim=-2).mean()  # sum boxes, mean batch_size
+        cost_volume_minibatch = (cost_volume_absolute * inference.sample_c).sum(dim=-2).mean()  # sum boxes, mean batch_size
         return RegMiniBatch(reg_overlap=cost_overlap.mean(),
                             reg_area_obj=cost_volume_minibatch)
 
@@ -185,8 +189,8 @@ class CompositionalVae(torch.nn.Module):
         # Preparation
         batch_size, ch, w, h = imgs_in.shape
         n_boxes = inference.big_mask.shape[-5]
-        p_times_area_map = inference.p_map * inference.area_map
-        mixing_k = inference.big_mask * inference.sample_prob[..., None, None, None]
+        # p_times_area_map = inference.p_map * inference.area_map
+        mixing_k = inference.big_mask * inference.sample_c[..., None, None, None]
         mixing_fg = torch.sum(mixing_k, dim=-5)  # sum over boxes
         mixing_bg = torch.ones_like(mixing_fg) - mixing_fg
         fg_fraction = torch.mean(mixing_fg)  # mean over batch_size
@@ -211,29 +215,19 @@ class CompositionalVae(torch.nn.Module):
         #                        = fg_fraction_box + fg_fraction_box
         #                        -> lead to many small object b/c there is no cost
         # New solution = add term sum p so that many objects are penalized
-        # TODO: sparsity_box for all boxes or only the selected ones?
-        sparsity_mask = torch.sum(mixing_fg) / torch.numel(mixing_fg)  # divide by # total pixel
-        sparsity_box = torch.sum(p_times_area_map) / torch.numel(mixing_fg)  # divide by # total pixel
-        sparsity_prob = torch.sum(inference.p_map) / (batch_size * n_boxes)  # quickly converge to order 1
+        c_times_area = inference.sample_bb.bw * inference.sample_bb.bh * inference.sample_c.float()  # boxes_few, batch_area
+        sparsity_mask = torch.sum(mixing_fg) / torch.numel(mixing_fg)  # divide by total area -> strictly less than 1
+        sparsity_box = torch.sum(c_times_area) / torch.numel(mixing_fg)  # divide by total area -> less than 1 unless overlap
+        sparsity_prob = torch.mean(inference.sample_c.float())  # strictly less than one
         sparsity_av = sparsity_mask + sparsity_box + sparsity_prob
 
         # 3. compute KL
 
-        # TODO: sum or mean
-        # TODO: kl_zwhere for all or just the selected boxes
-        kl_zinstance = torch.mean(inference.kl_zinstance)  # choose latent dim z so that this number is order 1.
-        kl_zwhere = torch.sum(inference.kl_zwhere_map) / (batch_size * n_boxes * 4)  # order 1
-        kl_logit = torch.sum(inference.kl_logit_map) / batch_size  # will normalize by running average -> order 1
-
-        # 5. compute the moving averages
-        with torch.no_grad():
-            input_dict = {"kl_logit": kl_logit.item()}
-            # Only if in training mode I accumulate the moving average
-            if self.training:
-                ma_dict = self.ma_calculator.accumulate(input_dict)
-            else:
-                ma_dict = input_dict
-        kl_av = kl_zinstance + kl_zwhere + kl_logit / (1E-3 + ma_dict["kl_logit"])
+        # TODO: Can add KL background and make sure that all KL have the same order by adding self-balancing hyperparameters.
+        kl_zinstance = torch.sum(inference.kl_zinstance) / batch_size
+        kl_zwhere = torch.sum(inference.kl_zwhere) / batch_size
+        kl_logit = torch.sum(inference.kl_logit) / batch_size
+        kl_av = kl_zinstance + kl_zwhere + kl_logit
 
         # 6. Note that I clamp in_place
         with torch.no_grad():
@@ -295,8 +289,7 @@ class CompositionalVae(torch.nn.Module):
                                geco_sparsity=f_sparsity.detach().item(),
                                geco_balance=f_balance.detach().item(),
                                delta_1=delta_1.detach().item(),
-                               delta_2=delta_2.detach().item(),
-                               length_GP=inference.length_scale_GP.detach().item())
+                               delta_2=delta_2.detach().item())
 
     @staticmethod
     def compute_sparse_similarity_matrix(mixing_k: torch.tensor,
@@ -617,7 +610,7 @@ class CompositionalVae(torch.nn.Module):
 
         with torch.no_grad():
             if draw_image:
-                imgs_rec = draw_img(prob=inference.sample_prob,
+                imgs_rec = draw_img(c=inference.sample_c,
                                     bounding_box=inference.sample_bb,
                                     big_mask=inference.big_mask,
                                     big_img=inference.big_img,

@@ -2,7 +2,7 @@ import neptune
 import torch.nn
 import matplotlib.figure
 from typing import Optional
-from utilities import save_obj
+from MODULES.utilities import save_obj
 from neptunecontrib.api import log_chart
 
 

@@ -1,6 +1,5 @@
 import torch
-from namedtuple import BB, NMSoutput
-from typing import Optional
+from MODULES.namedtuple import BB, NMSoutput
 
 
 class NonMaxSuppression(object):
@@ -36,25 +35,24 @@ class NonMaxSuppression(object):
         # check input formats
         assert len(mask_overlap.shape) == 3
         n_boxes, n_boxes, batch_size = mask_overlap.shape
-        assert score.shape == (n_boxes, batch_size)
-        assert possible.shape == (n_boxes, batch_size)
+        assert score.shape == possible.shape == (n_boxes, batch_size)
 
         # reshape
-        score: torch.Tensor = score.unsqueeze(0)                                                     # 1 x n_box x batch
-        possible: torch.Tensor = possible.unsqueeze(0)                                               # 1 x n_box x batch
+        score: torch.Tensor = score.unsqueeze(0)                                           # 1 x n_box x batch
+        possible: torch.Tensor = possible.unsqueeze(0)                                     # 1 x n_box x batch
         idx: torch.Tensor = torch.arange(start=0, end=n_boxes, step=1,
-                                         device=score.device).view(n_boxes, 1, 1).long()             # n_box x 1 x 1
-        selected: torch.Tensor = torch.zeros((n_boxes, 1, batch_size), device=score.device).float()  # n_box x 1 x batch
+                                         device=score.device).view(n_boxes, 1, 1).long()   # n_box x 1 x 1
+        selected: torch.Tensor = torch.zeros((n_boxes, 1, batch_size),
+                                             device=score.device, dtype=torch.bool)        # n_box x 1 x batch
 
         # Loop
         counter = 0
-        while counter <= n_objects_max and (possible > 0).any():  # you never need more than n_objects_max proposals
-            # could add another condition. That possible == 0
-            score_mask: torch.Tensor = mask_overlap*(score*possible)                       # n_box x n_box x batch
+        while counter <= n_objects_max and possible.any():  # you never need more than n_objects_max proposals
+            score_mask: torch.Tensor = mask_overlap*(score*possible)         # n_box x n_box x batch
             index = torch.max(score_mask, keepdim=True, dim=-2)[1]           # n_box x 1 x batch
-            selected += possible.permute(1, 0, 2)*(idx == index).float()     # n_box x 1 x batch
+            selected += possible.permute(1, 0, 2)*(idx == index)             # n_box x 1 x batch
             blocks = torch.sum(mask_overlap*selected, keepdim=True, dim=-3)  # 1 x n_box x batch
-            possible *= (blocks == 0).float()                                # 1 x n_box x batch
+            possible *= (blocks == 0)                                        # 1 x n_box x batch
             counter += 1
 
         # return
@@ -66,14 +64,11 @@ class NonMaxSuppression(object):
         it creates a matrix of size: batch x n_boxes x n_boxes
         obtained by comparing all vecotr entries with all other vector entries
         The comparison is either: MIN,MAX """
-        assert len(x.shape) == 2
-        n_box, batch_size = x.shape
-        tmp_a = x.view(1, n_box, batch_size)
-        tmp_b = x.view(n_box, 1, batch_size)
+        assert len(x.shape) == 2  # shape: n_box, batch_size
         if label == "MAX":
-            return torch.max(tmp_a, tmp_b)
+            return torch.max(x.unsqueeze(0), x.unsqueeze(1))
         elif label == "MIN":
-            return torch.min(tmp_a, tmp_b)
+            return torch.min(x.unsqueeze(0), x.unsqueeze(1))
         else:
             raise Exception("label is unknown. It is ", label)
 
@@ -98,40 +93,28 @@ class NonMaxSuppression(object):
         return intersection_area / min_area
 
     @staticmethod
-    def compute_mask_and_index(prob: torch.Tensor,
+    def compute_mask_and_index(score: torch.Tensor,
                                bounding_box: BB,
                                overlap_threshold: float,
                                n_objects_max: int,
-                               topk_only: bool,
-                               active: Optional[torch.Tensor] = None) -> NMSoutput:
+                               topk_only: bool) -> NMSoutput:
         """ Compute the indices to do nms + topk filter based on noisy probabilities.
             Only the active elements do NMS """
-        if active is None:
-            active = torch.ones_like(prob).bool()
-        assert prob.shape == active.shape == bounding_box.bx.shape
-        assert len(prob.shape) == 2
-        n_boxes, batch_size = prob.shape
+        assert score.shape == bounding_box.bx.shape
+        assert len(score.shape) == 2
+        n_boxes, batch_size = score.shape
 
         # this is O(N^2) algorithm
         overlap_measure = NonMaxSuppression.compute_box_intersection_over_min_area(bounding_box=bounding_box)
         binarized_overlap = (overlap_measure > overlap_threshold).float()
-        # Binarized_overlap_ij >0 only if both i and j are active
-        print("check in NMS", active.unsqueeze(0).shape)
-        print("check in NMS", active.unsqueeze(1).shape)
-        binarized_overlap *= active.unsqueeze(0)
-        binarized_overlap *= active.unsqueeze(1)
-        assert binarized_overlap.shape == (n_boxes, n_boxes, batch_size)
-
-        # I perform NMS based on binarized_overlap and score
-        score = prob + active
 
         if topk_only:
             # If nms_mask = 1 then this is equivalent to do topk only
-            chosen_nms_mask = torch.ones_like(prob)
+            chosen_nms_mask = torch.ones_like(score)
         else:
             chosen_nms_mask = NonMaxSuppression.perform_nms_selection(mask_overlap=binarized_overlap,
                                                                       score=score,
-                                                                      possible=torch.ones_like(prob).bool(),
+                                                                      possible=torch.ones_like(score).bool(),
                                                                       n_objects_max=n_objects_max)
         assert chosen_nms_mask.shape == (n_boxes, batch_size)
 

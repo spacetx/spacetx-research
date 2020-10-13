@@ -251,21 +251,20 @@ class UNEToutput(NamedTuple):
 
 
 class Inference(NamedTuple):
-    length_scale_GP: torch.Tensor
-    p_map: torch.Tensor
-    area_map: torch.Tensor
+    logit_map: torch.Tensor  # shape -> batch_size, 1, w, h
+    logit_few: torch.Tensor  # shape -> boxes_few, batch_size
     big_bg: torch.Tensor
     big_img: torch.Tensor
     big_mask: torch.Tensor
     big_mask_NON_interacting: torch.Tensor  # Use exclusively to compute overlap penalty
     # the samples of the 3 latent variables
-    sample_prob: torch.Tensor  # shape -> boxes_few, batch_size
-    sample_bb: BB              # each bx,by,bw,bh has shape -> boxes_few, batch_size
+    sample_c_map: torch.Tensor      # shape -> batch, 1, width, height
+    sample_c: torch.Tensor          # boxes_few, batch_size
+    sample_bb: BB                   # each bx,by,bw,bh has shape -> boxes_few, batch_size
     sample_zinstance: torch.Tensor  # boxes_few, batch_size, latent_dim
     # kl of the 3 latent variables
-    kl_logit_map: torch.Tensor  # batch_size, 1, w, h
-    kl_zwhere_map: torch.Tensor  # batch_size, 4, w, h
-    kl_zwhere: torch.Tensor   # boxes_few, batch_size, latent_dim
+    kl_logit: torch.Tensor      # batch_size
+    kl_zwhere: torch.Tensor     # boxes_few, batch_size, latent_dim
     kl_zinstance: torch.Tensor  # boxes_few, batch_size, latent_dim
 
 
@@ -286,7 +285,7 @@ class RegMiniBatch(NamedTuple):
 
 class MetricMiniBatch(NamedTuple):
     # All entries should be scalars obtained by averaging over minibatch
-    loss: Union[torch.Tensor, float] # this is the only tensor b/c I need to take gradients
+    loss: torch.Tensor  # this is the only tensor b/c I need to take gradients
     mse_tot: float
     reg_tot: float
     kl_tot: float
@@ -306,7 +305,6 @@ class MetricMiniBatch(NamedTuple):
     geco_balance: float
     delta_1: float
     delta_2: float
-    length_GP: float
 
     def pretty_print(self, epoch: int=0) -> str:
         s = "[epoch {0:4d}] loss={1:.3f}, mse={2:.3f}, \

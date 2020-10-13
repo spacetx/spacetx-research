@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 
-from .namedtuple import BB
+from MODULES.namedtuple import BB
 
 
 class Cropper(object):

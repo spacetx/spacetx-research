@@ -1,8 +1,8 @@
 import torch
-from .unet_parts import DownBlock, DoubleConvolutionBlock, UpBlock
-from .encoders_decoders import Encoder1by1, MLP_1by1, PredictBackground
+from MODULES.unet_parts import DownBlock, DoubleConvolutionBlock, UpBlock
+from MODULES.encoders_decoders import Encoder1by1, MLP_1by1, PredictBackground
 from collections import deque
-from .namedtuple import UNEToutput
+from MODULES.namedtuple import UNEToutput
 
 
 class UNet(torch.nn.Module):

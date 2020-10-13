@@ -3,9 +3,80 @@ import torch
 import numpy
 import dill
 from typing import Union, Optional, NamedTuple
-from collections import OrderedDict
+from MODULES.namedtuple import BB
 
-from namedtuple import BB
+
+def convert_to_box_list(x: torch.Tensor) -> torch.Tensor:
+    """ takes input of shape: (batch, ch, width, height)
+        and returns output of shape: (n_list, batch, ch)
+        where n_list = width x height
+    """
+    assert len(x.shape) == 4
+    batch_size, ch, width, height = x.shape
+    return x.permute(2, 3, 0, 1).view(width*height, batch_size, ch)
+
+
+def invert_convert_to_box_list(x: torch.Tensor, original_width: int, original_height: int) -> torch.Tensor:
+    """ takes input of shape: (width x height, batch, ch)
+        and return shape: (batch, ch, width, height)
+    """
+    assert len(x.shape) == 3
+    n_list, batch_size, ch = x.shape
+    assert n_list == original_width * original_height
+    return x.permute(1, 2, 0).view(batch_size, ch, original_width, original_height)
+
+
+def tmaps_to_bb(tmaps, width_raw_image: int, height_raw_image: int, min_box_size: float, max_box_size: float):
+    tx_map, ty_map, tw_map, th_map = torch.split(tmaps, 1, dim=-3)
+    n_width, n_height = tx_map.shape[-2:]
+    ix_array = torch.arange(start=0, end=n_width, dtype=tx_map.dtype, device=tx_map.device)
+    iy_array = torch.arange(start=0, end=n_height, dtype=tx_map.dtype, device=tx_map.device)
+    ix_grid, iy_grid = torch.meshgrid([ix_array, iy_array])
+
+    bx_map: torch.Tensor = width_raw_image * (ix_grid + tx_map) / n_width
+    by_map: torch.Tensor = height_raw_image * (iy_grid + ty_map) / n_height
+    bw_map: torch.Tensor = min_box_size + (max_box_size - min_box_size) * tw_map
+    bh_map: torch.Tensor = min_box_size + (max_box_size - min_box_size) * th_map
+    return BB(bx=convert_to_box_list(bx_map).squeeze(-1),
+              by=convert_to_box_list(by_map).squeeze(-1),
+              bw=convert_to_box_list(bw_map).squeeze(-1),
+              bh=convert_to_box_list(bh_map).squeeze(-1))
+
+
+class PassBernoulli(torch.autograd.Function):
+    """ Forward is c=Bernoulli(p). Backward is identity"""
+
+    @staticmethod
+    def forward(ctx, p, noisy_sampling):
+        if noisy_sampling:
+            c = torch.rand_like(p) < p
+        else:
+            c = (p > 0.5)
+        return c
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return grad_output
+
+
+def pass_bernoulli(prob, noisy_sampling):
+    return PassBernoulli.apply(prob, noisy_sampling)
+
+
+class PassMask(torch.autograd.Function):
+    """ Forward is masking, Backward is identity"""
+
+    @staticmethod
+    def forward(ctx, c, nms_mask):
+        return c * nms_mask
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return grad_output
+
+
+def pass_mask(c, mask):
+    return PassMask.apply(c, mask)
 
 
 def linear_interpolation(t: Union[numpy.array, float], values: tuple, times: tuple) -> Union[numpy.array, float]:
