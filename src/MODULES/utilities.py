@@ -44,8 +44,12 @@ def tmaps_to_bb(tmaps, width_raw_image: int, height_raw_image: int, min_box_size
 
 
 class LogicalNot(torch.autograd.Function):
+    """ Logical not can be thought as not(x) = 1-x
+        Therefore during backward pass the grad need to be reversed
+    """
     @staticmethod
     def forward(ctx, x):
+
         return ~x
 
     @staticmethod

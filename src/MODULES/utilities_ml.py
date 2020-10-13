@@ -104,7 +104,7 @@ def sample_and_kl_prob(logit_map: torch.Tensor,
         # Might supporess some of the c.
         c_masked = pass_mask(c, nms_output.nms_mask)  # shape: n_box, batch_shape
         c_masked_not = differentiable_not(c)
-        log_prob_posterior = (c_masked * log_q + ~c_masked * log_one_minus_q).sum(dim=0)
+        log_prob_posterior = (c_masked * log_q + c_masked_not * log_one_minus_q).sum(dim=0)
         log_prob_prior = FiniteDPP(L=similarity_kernel).log_prob(c_masked.transpose(-1, -2))  # shape: batch_shape
         assert log_prob_posterior.shape == log_prob_prior.shape
         kl = log_prob_posterior - log_prob_prior
