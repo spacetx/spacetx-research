@@ -187,8 +187,8 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                     
                     output: Output = vae.forward(reference_imgs, draw_image=True, draw_boxes=True, verbose=False)
                     plot_reconstruction_and_inference(output, epoch=epoch, prefix="rec_")
-                    reference_n_cells = (output.inference.sample_prob > 0.5).sum().item()
-                    tmp_dict = {"reference_n_cells" : reference_n_cells}
+                    reference_n_cells = (output.inference.sample_c_map).sum().item()
+                    tmp_dict = {"reference_n_cells": reference_n_cells}
                     log_dict_metrics(tmp_dict)
                     history_dict = append_to_dict(source=tmp_dict,
                                                   destination=history_dict)
