@@ -71,16 +71,20 @@ def instantiate_optimizer(model: torch.nn.Module,
                           dict_params_optimizer: dict) -> torch.optim.Optimizer:
     
     # split the parameters between GECO and NOT_GECO
-    geco_params, other_params = [], []
+    geco_params, similarity_params, other_params = [], []
     for name, param in model.named_parameters():
         if name.startswith("geco"):
             geco_params.append(param)
+        elif name.startswith("similarity"):
+            similarity_params.append(param)
         else:
             other_params.append(param)
 
     if dict_params_optimizer["type"] == "adam":
         optimizer = torch.optim.Adam([{'params': geco_params, 'lr': dict_params_optimizer["base_lr_geco"],
                                        'betas': dict_params_optimizer["betas_geco"]},
+                                      {'params': similarity_params, 'lr': dict_params_optimizer["base_lr_similarity"],
+                                       'betas': dict_params_optimizer["betas_similarity"]},
                                       {'params': other_params, 'lr': dict_params_optimizer["base_lr"],
                                        'betas': dict_params_optimizer["betas"]}],
                                      eps=dict_params_optimizer["eps"],
@@ -88,6 +92,7 @@ def instantiate_optimizer(model: torch.nn.Module,
         
     elif dict_params_optimizer["type"] == "SGD":
         optimizer = torch.optim.SGD([{'params': geco_params, 'lr': dict_params_optimizer["base_lr_geco"]},
+                                     {'params': similarity_params, 'lr': dict_params_optimizer["base_lr_similarity"]},
                                      {'params': other_params, 'lr': dict_params_optimizer["base_lr"]}],
                                     weight_decay=dict_params_optimizer["weight_decay"])
     else:
