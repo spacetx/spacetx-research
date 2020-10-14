@@ -212,12 +212,6 @@ class CompositionalVae(torch.nn.Module):
         # 3. tight masks
         # The three terms take care of all these requirement.
         # I introduce self tuning parameters so that all terms contribute equally to the loss function
-
-        # Old solution: sparsity = p * area_box -> leads to square masks b/c they have no cost and lead to lower kl_mask
-        # Medium solution: sparsity = \sum_{i,j} (p * area_box) + \sum_k (p_chosen * area_mask_chosen)
-        #                        = fg_fraction_box + fg_fraction_box
-        #                        -> lead to many small object b/c there is no cost
-        # New solution = add term sum p so that many objects are penalized
         sparsity_mask = torch.sum(mixing_fg) / batch_size
         sparsity_box = torch.sum(inference.sample_bb.bw * inference.sample_bb.bh * inference.sample_c) / batch_size
         sparsity_prob = torch.sum(inference.sample_c_map) / batch_size
