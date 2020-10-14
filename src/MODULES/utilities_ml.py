@@ -2,18 +2,16 @@ import torch
 import neptune
 import torch.nn.functional as F
 from torch.distributions.utils import broadcast_all
-from typing import Union, Callable, Optional
+from typing import Union, Callable, Optional, Tuple
 from collections import OrderedDict
 from torch.distributions.distribution import Distribution
 from torch.distributions import constraints
 
 from MODULES.utilities import compute_average_in_box, compute_ranking, convert_to_box_list
-from MODULES.utilities import pass_bernoulli, pass_mask
+from MODULES.utilities import pass_bernoulli
 from MODULES.utilities_visualization import show_batch
-from MODULES.namedtuple import DIST, MetricMiniBatch, BB, NMSoutput
+from MODULES.namedtuple import DIST, MetricMiniBatch, BB
 from MODULES.utilities_neptune import log_dict_metrics
-from MODULES.non_max_suppression import NonMaxSuppression
-
 
 def are_broadcastable(a: torch.Tensor, b: torch.Tensor) -> bool:
     """ Return True if tensor are broadcastable to each other, False otherwise """
@@ -47,11 +45,8 @@ def sample_and_kl_prob(logit_map: torch.Tensor,
                        background: torch.Tensor,
                        bounding_box_no_noise: BB,
                        prob_corr_factor: float,
-                       overlap_threshold: float,
-                       n_objects_max: int,
-                       topk_only: bool,
                        noisy_sampling: bool,
-                       sample_from_prior: bool):
+                       sample_from_prior: bool) -> Tuple[DIST, torch.Tensor]:
 
     # Correction factor
     if sample_from_prior:
@@ -60,16 +55,7 @@ def sample_and_kl_prob(logit_map: torch.Tensor,
             s = similarity_kernel.requires_grad_(False)
             c_all = FiniteDPP(L=s).sample(sample_shape=batch_size).transpose(-1, -2).float()
             kl = torch.zeros(logit_map.shape[0])
-
-            # Fake NMS
             q_all = torch.sigmoid(convert_to_box_list(logit_map).squeeze(-1))
-            assert q_all.shape == c_all.shape
-            nms_output: NMSoutput = NonMaxSuppression.compute_mask_and_index(score=c_all+q_all,
-                                                                             bounding_box=bounding_box_no_noise,
-                                                                             overlap_threshold=overlap_threshold,
-                                                                             n_objects_max=n_objects_max,
-                                                                             topk_only=topk_only)
-            return DIST(sample=c_all, kl=kl), nms_output
 
     else:
         # Work with posterior
@@ -82,36 +68,26 @@ def sample_and_kl_prob(logit_map: torch.Tensor,
                 tmp = ((ranking + 1).float() / (n_boxes_all + 1))
                 q_approx = tmp.pow(10)
 
-            q_uncorrected = convert_to_box_list(torch.sigmoid(logit_map)).squeeze(-1)
-            q = ((1 - prob_corr_factor) * q_uncorrected + prob_corr_factor * q_approx).clamp(min=1E-4, max=1 - 1E-4)
-            log_q = torch.log(q)
-            log_one_minus_q = torch.log1p(-q)
+            q_uncorrected = torch.sigmoid(convert_to_box_list(logit_map).squeeze(-1))
+            q_all = ((1 - prob_corr_factor) * q_uncorrected + prob_corr_factor * q_approx).clamp(min=1E-4, max=1 - 1E-4)
+            log_q = torch.log(q_all)
+            log_one_minus_q = torch.log1p(-q_all)
         else:
             logit_reshaped = convert_to_box_list(logit_map).squeeze(-1)
-            q = torch.sigmoid(logit_reshaped)
+            q_all = torch.sigmoid(logit_reshaped)
             log_q = F.logsigmoid(logit_reshaped)
             log_one_minus_q = F.logsigmoid(-logit_reshaped)
 
-        c = pass_bernoulli(prob=q, noisy_sampling=noisy_sampling)  # float variable which requires grad
-
-        with torch.no_grad():
-            nms_output: NMSoutput = NonMaxSuppression.compute_mask_and_index(score=q+c,
-                                                                             bounding_box=bounding_box_no_noise,
-                                                                             overlap_threshold=overlap_threshold,
-                                                                             n_objects_max=n_objects_max,
-                                                                             topk_only=topk_only)
-
-        # Might suppress some of the c.
-        c_masked = pass_mask(c, nms_output.nms_mask)
+        c_all = pass_bernoulli(prob=q_all, noisy_sampling=noisy_sampling)  # float variable which requires grad
 
         # Here the gradients are only through log_q and similarity_kernel not c
-        c_masked_no_grad = c_masked.bool().detach()  # bool variable has requires_grad = False
-        log_prob_posterior = (c_masked_no_grad * log_q + ~c_masked_no_grad * log_one_minus_q).sum(dim=0)
-        log_prob_prior = FiniteDPP(L=similarity_kernel).log_prob(c_masked_no_grad.transpose(-1, -2))  # shape: batch_shape
+        c_no_grad = c_all.bool().detach()  # bool variable has requires_grad = False
+        log_prob_posterior = (c_no_grad * log_q + ~c_no_grad * log_one_minus_q).sum(dim=0)
+        log_prob_prior = FiniteDPP(L=similarity_kernel).log_prob(c_no_grad.transpose(-1, -2))  # shape: batch_shape
         assert log_prob_posterior.shape == log_prob_prior.shape
         kl = log_prob_posterior - log_prob_prior
 
-        return DIST(sample=c_masked, kl=kl), nms_output
+    return DIST(sample=c_all, kl=kl), q_all
 
 
 class SimilarityKernel(torch.nn.Module):

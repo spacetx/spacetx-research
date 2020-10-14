@@ -7,6 +7,7 @@ from MODULES.encoders_decoders import EncoderConv, DecoderConv, Decoder1by1Linea
 from MODULES.utilities import tmaps_to_bb, convert_to_box_list, invert_convert_to_box_list
 from MODULES.utilities_ml import sample_and_kl_diagonal_normal, sample_and_kl_prob, SimilarityKernel
 from MODULES.namedtuple import Inference, NMSoutput, BB, UNEToutput, ZZ, DIST
+from MODULES.non_max_suppression import NonMaxSuppression
 
 
 def from_weights_to_masks(weight: torch.Tensor, dim: int):
@@ -111,22 +112,15 @@ class Inference_and_Generation(torch.nn.Module):
                                                                n_height=unet_output.logit.mu.shape[-1])
 
         c_all: DIST
-        nms_output: NMSoutput
-        c_all, nms_output = sample_and_kl_prob(logit_map=unet_output.logit.mu,
-                                               similarity_kernel=similarity_kernel,
-                                               images=imgs_in,
-                                               background=big_bg,
-                                               bounding_box_no_noise=bounding_box_no_noise,
-                                               prob_corr_factor=prob_corr_factor,
-                                               overlap_threshold=overlap_threshold,
-                                               n_objects_max=n_objects_max,
-                                               topk_only=topk_only,
-                                               noisy_sampling=noisy_sampling,
-                                               sample_from_prior=generate_synthetic_data)
-
-        c_few = torch.gather(c_all.sample, dim=0, index=nms_output.index_top_k)
-        logit_few = torch.gather(convert_to_box_list(unet_output.logit.mu).squeeze(-1), dim=0,
-                                 index=nms_output.index_top_k)
+        q_all: torch.Tensor
+        c_all, q_all = sample_and_kl_prob(logit_map=unet_output.logit.mu,
+                                          similarity_kernel=similarity_kernel,
+                                          images=imgs_in,
+                                          background=big_bg,
+                                          bounding_box_no_noise=bounding_box_no_noise,
+                                          prob_corr_factor=prob_corr_factor,
+                                          noisy_sampling=noisy_sampling,
+                                          sample_from_prior=generate_synthetic_data)
 
         c_map = invert_convert_to_box_list(c_all.sample.unsqueeze(-1),
                                            original_width=unet_output.logit.mu.shape[-2],
@@ -144,6 +138,17 @@ class Inference_and_Generation(torch.nn.Module):
                                            height_raw_image=height_raw_image,
                                            min_box_size=self.size_min,
                                            max_box_size=self.size_max)
+
+        with torch.no_grad():
+            nms_output: NMSoutput = NonMaxSuppression.compute_mask_and_index(score=q_all+c_all.sample,
+                                                                             bounding_box=bounding_box_all,
+                                                                             overlap_threshold=overlap_threshold,
+                                                                             n_objects_max=n_objects_max,
+                                                                             topk_only=topk_only)
+
+        c_few = torch.gather(c_all.sample, dim=0, index=nms_output.index_top_k)
+        logit_few = torch.gather(convert_to_box_list(unet_output.logit.mu).squeeze(-1), dim=0,
+                                 index=nms_output.index_top_k)
 
         bounding_box_few: BB = BB(bx=torch.gather(bounding_box_all.bx, dim=0, index=nms_output.index_top_k),
                                   by=torch.gather(bounding_box_all.by, dim=0, index=nms_output.index_top_k),

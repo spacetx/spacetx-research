@@ -530,12 +530,12 @@ def plot_reconstruction_and_inference(output: Output,
                    title='c_map, epoch= {0:6d}'.format(epoch),
                    normalize_range=None,
                    neptune_name=prefix+"c_map"+postfix)
-    _ = show_batch(output.inference.logit_map[:8],
+    _ = show_batch(torch.sigmoid(output.inference.logit_map[:8]),
                    n_col=4,
                    n_padding=4,
-                   title='logit_map, epoch= {0:6d}'.format(epoch),
+                   title='p_map, epoch= {0:6d}'.format(epoch),
                    normalize_range=None,
-                   neptune_name=prefix+"logit_map"+postfix)
+                   neptune_name=prefix+"p_map"+postfix)
     _ = show_batch(output.inference.big_bg[:8],
                    n_col=4,
                    n_padding=4,

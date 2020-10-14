@@ -211,12 +211,12 @@ class CompositionalVae(torch.nn.Module):
         # 2. tight bounding boxes
         # 3. tight masks
         # The three terms take care of all these requirement.
-        # I introduce self tuning parameters so that all terms contribute equally to the loss function
-        sparsity_mask = torch.sum(mixing_fg) / batch_size
-        sparsity_box = torch.sum(inference.sample_bb.bw * inference.sample_bb.bh * inference.sample_c) / batch_size
-        sparsity_prob = torch.sum(inference.sample_c_map) / batch_size
-        sparsity_av = (torch.stack((sparsity_mask, sparsity_box, sparsity_prob), dim=0) *
-                       torch.exp(self.normalize_sparsity) - self.normalize_sparsity).sum()
+        n_boxes = inference.sample_c.shape[-2]
+        area_boxes = inference.sample_bb.bw * inference.sample_bb.bh
+        sparsity_mask = torch.sum(mixing_fg) / torch.numel(mixing_fg)  # strictly smaller than 1
+        sparsity_box = torch.sum(area_boxes * inference.sample_c) / torch.numel(mixing_fg)
+        sparsity_prob = torch.sum(inference.sample_c_map) / (batch_size * n_boxes)
+        sparsity_av = sparsity_mask + sparsity_box + sparsity_prob
 
         # 3. compute KL
         # TODO: Can add KL background and make sure that all KL have the same order by adding self-balancing hyperparameters.
