@@ -122,6 +122,9 @@ class Inference_and_Generation(torch.nn.Module):
                                           noisy_sampling=noisy_sampling,
                                           sample_from_prior=generate_synthetic_data)
 
+        q_map = invert_convert_to_box_list(q_all.unsqueeze(-1),
+                                           original_width=unet_output.logit.mu.shape[-2],
+                                           original_height=unet_output.logit.mu.shape[-1])
         c_map = invert_convert_to_box_list(c_all.sample.unsqueeze(-1),
                                            original_width=unet_output.logit.mu.shape[-2],
                                            original_height=unet_output.logit.mu.shape[-1])
@@ -147,8 +150,7 @@ class Inference_and_Generation(torch.nn.Module):
                                                                              topk_only=topk_only)
 
         c_few = torch.gather(c_all.sample, dim=0, index=nms_output.index_top_k)
-        logit_few = torch.gather(convert_to_box_list(unet_output.logit.mu).squeeze(-1), dim=0,
-                                 index=nms_output.index_top_k)
+        q_few = torch.gather(q_all, dim=0, index=nms_output.index_top_k)
 
         bounding_box_few: BB = BB(bx=torch.gather(bounding_box_all.bx, dim=0, index=nms_output.index_top_k),
                                   by=torch.gather(bounding_box_all.by, dim=0, index=nms_output.index_top_k),
@@ -198,8 +200,8 @@ class Inference_and_Generation(torch.nn.Module):
         big_mask_NON_interacting = torch.tanh(big_weight)
 
         # 8. Return the inferred quantities
-        return Inference(logit_map=unet_output.logit.mu,
-                         logit_few=logit_few,
+        return Inference(prob_map=q_map,
+                         prob_few=q_few,
                          big_bg=big_bg,
                          big_mask=big_mask,
                          big_mask_NON_interacting=big_mask_NON_interacting,
