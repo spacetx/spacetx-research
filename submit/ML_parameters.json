@@ -26,6 +26,11 @@
    "n_ch_after_first_two_conv" : 32
  },
 
+  "DPP" : {
+    "__comment" : "parameters for the DPP prior",
+    "n_kernels" : 1
+  },
+
  "input_image" : {
    "__comment" : "parameters describing the input images",
    "n_objects_max" : 25,
@@ -60,6 +65,8 @@
    "type" : "adam",
    "base_lr" : 0.001,
    "betas" : [0.9, 0.999],
+   "base_lr_similarity" : 0.01,
+   "betas_similarity" : [0.9, 0.999],
    "base_lr_geco" : 0.001,
    "betas_geco" : [0.9, 0.999],
    "weight_decay" : 0.0,

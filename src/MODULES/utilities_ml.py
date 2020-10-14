@@ -103,9 +103,9 @@ class SimilarityKernel(torch.nn.Module):
         self.similarity_w = torch.nn.Parameter(data=torch.ones(self.n_kernels,
                                                                device=self.device,
                                                                dtype=torch.float)/self.n_kernels, requires_grad=True)
-        self.similarity_b = torch.nn.Parameter(data=-2.0+3*torch.randn(self.n_kernels,
-                                                                       device=self.device,
-                                                                       dtype=torch.float), requires_grad=True)
+        self.similarity_s2 = torch.nn.Parameter(data=100*torch.randn(self.n_kernels,
+                                                                     device=self.device,
+                                                                     dtype=torch.float), requires_grad=True)
 
         # Initialization
         self.n_width = -1
@@ -133,7 +133,7 @@ class SimilarityKernel(torch.nn.Module):
         return mask
 
     def get_sigma2_w(self):
-        return F.softplus(self.similarity_b), F.softplus(self.similarity_w)
+        return F.softplus(self.similarity_s2), F.softplus(self.similarity_w)
 
     def forward(self, n_width: int, n_height: int):
         """ Implement L = sum_i a_i exp[-b_i d2] """
