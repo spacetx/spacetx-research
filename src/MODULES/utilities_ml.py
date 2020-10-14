@@ -7,8 +7,8 @@ from collections import OrderedDict
 from torch.distributions.distribution import Distribution
 from torch.distributions import constraints
 
-from MODULES.utilities import compute_average_in_box, compute_ranking, convert_to_box_list, invert_convert_to_box_list
-from MODULES.utilities import pass_bernoulli
+from MODULES.utilities import compute_average_in_box, compute_ranking, convert_to_box_list
+from MODULES.utilities import pass_bernoulli, pass_mask
 from MODULES.utilities_visualization import show_batch
 from MODULES.namedtuple import DIST, MetricMiniBatch, BB, NMSoutput
 from MODULES.utilities_neptune import log_dict_metrics
@@ -102,19 +102,10 @@ def sample_and_kl_prob(logit_map: torch.Tensor,
                                                                              topk_only=topk_only)
 
         # Might suppress some of the c.
-
-        THIS IS WRONG!
-        During forward should be masking.
-        During backward should be either identity or negation
-
-        FROM HERE!
-
-        differentiable_mask(c, nms_output.nms_mask)
-
-        c_masked = c*nms_output.nms_mask + (1-c)*(~nms_output.nms_mask)  # grad only through c not nms_mask
+        c_masked = pass_mask(c, nms_output.nms_mask)
 
         # Here the gradients are only through log_q and similarity_kernel not c
-        c_masked_no_grad = c_masked.bool()  # bool variable has requires_grad = False
+        c_masked_no_grad = c_masked.bool().detach()  # bool variable has requires_grad = False
         log_prob_posterior = (c_masked_no_grad * log_q + ~c_masked_no_grad * log_one_minus_q).sum(dim=0)
         log_prob_prior = FiniteDPP(L=similarity_kernel).log_prob(c_masked_no_grad.transpose(-1, -2))  # shape: batch_shape
         assert log_prob_posterior.shape == log_prob_prior.shape

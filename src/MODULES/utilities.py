@@ -43,6 +43,22 @@ def tmaps_to_bb(tmaps, width_raw_image: int, height_raw_image: int, min_box_size
               bh=convert_to_box_list(bh_map).squeeze(-1))
 
 
+class PassMask(torch.autograd.Function):
+    """ Forward is c=c*mask. Backward is identity"""
+
+    @staticmethod
+    def forward(ctx, x, mask):
+        return x*mask
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return grad_output, None  # the gradient of mask is None
+
+
+def pass_mask(x, mask):
+    return PassMask.apply(x, mask)
+
+
 class PassBernoulli(torch.autograd.Function):
     """ Forward is c=Bernoulli(p). Backward is identity"""
 
