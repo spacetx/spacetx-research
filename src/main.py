@@ -5,7 +5,7 @@ import neptune
 from MODULES.utilities_neptune import log_object_as_artifact, log_model_summary, log_last_ckpt, log_img_only, log_dict_metrics
 from MODULES.vae_model import *
 from MODULES.utilities_visualization import show_batch, plot_tiling, plot_all_from_dictionary, plot_label_contours
-from MODULES.utilities_visualization import plot_reconstruction_and_inference, plot_segmentation
+from MODULES.utilities_visualization import plot_reconstruction_and_inference, plot_generation, plot_segmentation
 from MODULES.utilities_ml import ConditionalRandomCrop, SpecialDataSet, process_one_epoch
 from MODULES.graph_clustering import GraphSegmentation
 
@@ -197,7 +197,7 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                     plot_segmentation(segmentation, epoch=epoch, prefix="seg_")
 
                     generated: Output = vae.generate(imgs_in=reference_imgs, draw_boxes=True)
-                    plot_reconstruction_and_inference(generated, epoch=epoch, prefix="gen_")
+                    plot_generation(generated, epoch=epoch, prefix="gen_")
 
                     test_loss = test_metrics.loss
                     min_test_loss = min(min_test_loss, test_loss)

@@ -214,4 +214,7 @@ class Inference_and_Generation(torch.nn.Module):
                          # the kl of the 3 latent variables
                          kl_logit=c_all.kl,
                          kl_zwhere=zwhere_kl_few,
-                         kl_zinstance=zinstance_few.kl)
+                         kl_zinstance=zinstance_few.kl,
+                         # similarity kernels
+                         similarity_inverse_length_scales=self.similarity_kernel_dpp.b,
+                         similarity_weights=self.similarity_kernel_dpp.w)

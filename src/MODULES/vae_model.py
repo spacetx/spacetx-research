@@ -125,7 +125,6 @@ class CompositionalVae(torch.nn.Module):
         self.sigma_bg = torch.nn.Parameter(data=torch.tensor(params["GECO_loss"]["bg_std"],
                                                              dtype=torch.float)[..., None, None],  # singleton w,h
                                            requires_grad=False)
-        self.normalize_sparsity = torch.nn.Parameter(data=torch.ones(3, dtype=torch.float), requires_grad=False)
 
         self.geco_dict = params["GECO_loss"]
         self.input_img_dict = params["input_image"]
@@ -285,7 +284,10 @@ class CompositionalVae(torch.nn.Module):
                                geco_sparsity=f_sparsity.detach().item(),
                                geco_balance=f_balance.detach().item(),
                                delta_1=delta_1.detach().item(),
-                               delta_2=delta_2.detach().item())
+                               delta_2=delta_2.detach().item(),
+
+                               similarity_inverse_length_scales=inference.similarity_inverse_length_scales.detach().numpy(),
+                               similarity_weights=inference.similarity_weights.detach().numpy())
 
     @staticmethod
     def compute_sparse_similarity_matrix(mixing_k: torch.tensor,

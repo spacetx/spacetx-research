@@ -55,8 +55,7 @@ def sample_and_kl_prob(logit_map: torch.Tensor,
             s = similarity_kernel.requires_grad_(False)
             c_all = FiniteDPP(L=s).sample(sample_shape=batch_size).transpose(-1, -2).float()
             kl = torch.zeros(logit_map.shape[0])
-            q_all = torch.sigmoid(convert_to_box_list(logit_map).squeeze(-1))
-
+            q_all = torch.zeros_like(c_all).float()
     else:
         # Work with posterior
         if (prob_corr_factor > 0) and (prob_corr_factor <= 1.0):
@@ -100,9 +99,9 @@ class SimilarityKernel(torch.nn.Module):
         self.eps = eps
         self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
-        self.w = torch.nn.Parameter(data=torch.randn(self.n_kernels,
-                                                     device=self.device,
-                                                     dtype=torch.float), requires_grad=True)
+        self.w = torch.nn.Parameter(data=torch.ones(self.n_kernels,
+                                                    device=self.device,
+                                                    dtype=torch.float)/self.n_kernels, requires_grad=True)
         self.b = torch.nn.Parameter(data=torch.randn(self.n_kernels,
                                                      device=self.device,
                                                      dtype=torch.float), requires_grad=True)
@@ -110,7 +109,6 @@ class SimilarityKernel(torch.nn.Module):
         # Initialization
         self.n_width = -1
         self.n_height = -1
-        self.locations = None
         self.d2 = None
         self.diag = None
 

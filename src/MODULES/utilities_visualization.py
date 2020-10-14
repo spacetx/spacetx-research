@@ -511,6 +511,35 @@ def plot_all_from_dictionary(history_dict: dict,
         print("leaving plot_all_from_dictionary ->"+train_or_test)
 
 
+def plot_generation(output: Output,
+                    epoch: int,
+                    prefix: str = "",
+                    postfix: str = "",
+                    verbose: bool = False):
+    if verbose:
+        print("in plot_reconstruction_and_inference")
+
+    _ = show_batch(output.imgs[:8],
+                   n_col=4,
+                   n_padding=4,
+                   title='imgs, epoch= {0:6d}'.format(epoch),
+                   neptune_name=prefix+"imgs"+postfix)
+    _ = show_batch(output.inference.sample_c_map[:8].float(),
+                   n_col=4,
+                   n_padding=4,
+                   title='c_map, epoch= {0:6d}'.format(epoch),
+                   normalize_range=None,
+                   neptune_name=prefix+"c_map"+postfix)
+    _ = show_batch(output.inference.big_bg[:8],
+                   n_col=4,
+                   n_padding=4,
+                   title='background, epoch= {0:6d}'.format(epoch),
+                   neptune_name=prefix+"bg"+postfix)
+
+    if verbose:
+        print("leaving plot_generation")
+
+
 def plot_reconstruction_and_inference(output: Output,
                                       epoch: int,
                                       prefix: str = "",
