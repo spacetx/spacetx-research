@@ -286,8 +286,8 @@ class CompositionalVae(torch.nn.Module):
                                delta_1=delta_1.detach().item(),
                                delta_2=delta_2.detach().item(),
 
-                               similarity_inverse_length_scales=inference.similarity_inverse_length_scales.detach().numpy(),
-                               similarity_weights=inference.similarity_weights.detach().numpy())
+                               similarity_inverse_length_scales=inference.similarity_inverse_length_scales.detach().cpu().numpy(),
+                               similarity_weights=inference.similarity_weights.detach().cpu().numpy())
 
     @staticmethod
     def compute_sparse_similarity_matrix(mixing_k: torch.tensor,
