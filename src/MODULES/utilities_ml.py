@@ -103,9 +103,9 @@ class SimilarityKernel(torch.nn.Module):
         self.w = torch.nn.Parameter(data=torch.ones(self.n_kernels,
                                                     device=self.device,
                                                     dtype=torch.float)/self.n_kernels, requires_grad=True)
-        self.b = torch.nn.Parameter(data=0.01*torch.randn(self.n_kernels,
-                                                          device=self.device,
-                                                          dtype=torch.float), requires_grad=True)
+        self.b = torch.nn.Parameter(data=-2.0+3*torch.randn(self.n_kernels,
+                                                            device=self.device,
+                                                            dtype=torch.float), requires_grad=True)
 
         # Initialization
         self.n_width = -1
