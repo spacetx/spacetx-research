@@ -1,5 +1,6 @@
 import neptune
 import torch.nn
+import numpy
 import matplotlib.figure
 from typing import Optional
 from MODULES.utilities import save_obj
@@ -89,7 +90,11 @@ def log_dict_metrics(metrics: dict,
     _exp = experiment if experiment else neptune
 
     for key, value in metrics.items():
-        _exp.log_metric(prefix + key, value)
+        if isinstance(value, float):
+            _exp.log_metric(prefix + key, value)
+        elif isinstance(value, numpy.ndarray):
+            for i, x in enumerate(value):
+                _exp.log_metric(prefix + key + "_" + str(i), x)
 
     if verbose:
         print("leaving log_dict_metrics")
