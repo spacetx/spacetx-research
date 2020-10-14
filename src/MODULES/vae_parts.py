@@ -200,6 +200,7 @@ class Inference_and_Generation(torch.nn.Module):
         big_mask_NON_interacting = torch.tanh(big_weight)
 
         # 8. Return the inferred quantities
+        similarity_sigma2, similarity_w = self.similarity_kernel_dpp.get_sigma2_w()
         return Inference(prob_map=q_map,
                          prob_few=q_few,
                          big_bg=big_bg,
@@ -216,5 +217,5 @@ class Inference_and_Generation(torch.nn.Module):
                          kl_zwhere=zwhere_kl_few,
                          kl_zinstance=zinstance_few.kl,
                          # similarity kernels
-                         similarity_inverse_length_scales=self.similarity_kernel_dpp.b,
-                         similarity_weights=self.similarity_kernel_dpp.w)
+                         similarity_sigma2=similarity_sigma2,
+                         similarity_weights=similarity_w)

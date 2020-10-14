@@ -267,7 +267,7 @@ class Inference(NamedTuple):
     kl_zwhere: torch.Tensor     # boxes_few, batch_size, latent_dim
     kl_zinstance: torch.Tensor  # boxes_few, batch_size, latent_dim
     # similarity DPP
-    similarity_inverse_length_scales: torch.Tensor
+    similarity_sigma2: torch.Tensor
     similarity_weights: torch.Tensor
 
 
@@ -309,8 +309,9 @@ class MetricMiniBatch(NamedTuple):
     delta_1: float
     delta_2: float
 
-    similarity_inverse_length_scales: numpy.ndarray
+    similarity_sigma2: numpy.ndarray
     similarity_weights: numpy.ndarray
+
 
     def pretty_print(self, epoch: int=0) -> str:
         s = "[epoch {0:4d}] loss={1:.3f}, mse={2:.3f}, \

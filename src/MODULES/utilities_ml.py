@@ -103,9 +103,9 @@ class SimilarityKernel(torch.nn.Module):
         self.w = torch.nn.Parameter(data=torch.ones(self.n_kernels,
                                                     device=self.device,
                                                     dtype=torch.float)/self.n_kernels, requires_grad=True)
-        self.b = torch.nn.Parameter(data=torch.randn(self.n_kernels,
-                                                     device=self.device,
-                                                     dtype=torch.float), requires_grad=True)
+        self.b = torch.nn.Parameter(data=0.01*torch.randn(self.n_kernels,
+                                                          device=self.device,
+                                                          dtype=torch.float), requires_grad=True)
 
         # Initialization
         self.n_width = -1
@@ -132,17 +132,19 @@ class SimilarityKernel(torch.nn.Module):
         mask = sample.view(independent_dims + [self.n_width, self.n_height])
         return mask
 
+    def get_sigma2_w(self):
+        return F.softplus(self.b), F.softplus(self.w)
+
     def forward(self, n_width: int, n_height: int):
         """ Implement L = sum_i a_i exp[-b_i d2] """
-        b = F.softplus(self.b).view(-1, 1, 1)  # add singleton for w,h
-        w = F.softplus(self.w).view(-1, 1, 1)  # add singleton for w,h
+        sigma2, w = self.get_sigma2_w()
 
         if (n_width != self.n_width) or (n_height != self.n_height):
             self.n_width = n_width
             self.n_height = n_height
             self.d2, self.diag = self._compute_d2_diag(n_width=n_width, n_height=n_height)
 
-        likelihood_kernel = (w * torch.exp(-b * self.d2)).sum(dim=-3) + self.diag
+        likelihood_kernel = (w[..., None, None] * torch.exp(-0.5*self.d2/sigma2[..., None, None])).sum(dim=-3) + self.diag
         return likelihood_kernel  # shape (n_width*n_height, n_width*n_height)
 
 
