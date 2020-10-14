@@ -1,5 +1,6 @@
 import torch
 import neptune
+import numpy
 import torch.nn.functional as F
 from torch.distributions.utils import broadcast_all
 from typing import Union, Callable, Optional, Tuple
@@ -301,6 +302,8 @@ class Accumulator(object):
         if isinstance(value, torch.Tensor):
             x = value.detach().item() * counter_increment
         elif isinstance(value, float):
+            x = value * counter_increment
+        elif isinstance(value, numpy.ndarray):
             x = value * counter_increment
         else:
             print(type(value))
