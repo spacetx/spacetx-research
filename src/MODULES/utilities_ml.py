@@ -303,6 +303,7 @@ class Accumulator(object):
         elif isinstance(value, float):
             x = value * counter_increment
         else:
+            print(type(value))
             raise Exception
         self._dict_accumulate[key] = x + self._dict_accumulate.get(key, 0)
 
