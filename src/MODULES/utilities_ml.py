@@ -102,7 +102,16 @@ def sample_and_kl_prob(logit_map: torch.Tensor,
                                                                              topk_only=topk_only)
 
         # Might suppress some of the c.
-        c_masked = c*nms_output.nms_mask + (1-c)*(~nms_output.nms_mask)  # grad only thorugh c not nms_mask
+
+        THIS IS WRONG!
+        During forward should be masking.
+        During backward should be either identity or negation
+
+        FROM HERE!
+
+        differentiable_mask(c, nms_output.nms_mask)
+
+        c_masked = c*nms_output.nms_mask + (1-c)*(~nms_output.nms_mask)  # grad only through c not nms_mask
 
         # Here the gradients are only through log_q and similarity_kernel not c
         c_masked_no_grad = c_masked.bool()  # bool variable has requires_grad = False
