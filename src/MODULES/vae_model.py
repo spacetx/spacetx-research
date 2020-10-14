@@ -71,7 +71,7 @@ def instantiate_optimizer(model: torch.nn.Module,
                           dict_params_optimizer: dict) -> torch.optim.Optimizer:
     
     # split the parameters between GECO and NOT_GECO
-    geco_params, similarity_params, other_params = [], []
+    geco_params, similarity_params, other_params = [], [], []
     for name, param in model.named_parameters():
         if name.startswith("geco"):
             geco_params.append(param)
