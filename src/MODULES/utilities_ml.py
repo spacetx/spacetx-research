@@ -57,7 +57,8 @@ def sample_and_kl_prob(logit_map: torch.Tensor,
     if sample_from_prior:
         with torch.no_grad():
             batch_size = torch.Size([logit_map.shape[0]])
-            c_all = FiniteDPP(L=similarity_kernel.requires_grad_(False)).sample(sample_shape=batch_size).transpose(-1, -2)
+            s = similarity_kernel.requires_grad_(False)
+            c_all = FiniteDPP(L=s).sample(sample_shape=batch_size).transpose(-1, -2).float()
             kl = torch.zeros(logit_map.shape[0])
 
             # Fake NMS
