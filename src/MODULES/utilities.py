@@ -182,18 +182,22 @@ def append_to_dict(source: Union[tuple, dict],
         else:
             return None, None
 
-    try:
+    if isinstance(source, dict):
         for key, value in source.items():
             x, y = _get_x_y(key, value)
             if x is not None:
                 destination[x] = destination.get(x, []) + [y]
 
-    except AttributeError:
+    elif isinstance(source, tuple):
         for key in source._fields:
             value = getattr(source, key)
             x, y = _get_x_y(key, value)
             if x is not None:
                 destination[x] = destination.get(x, []) + [y]
+
+    else:
+        print(type(source))
+        raise Exception
 
     return destination
 
