@@ -265,8 +265,6 @@ class CompositionalVae(torch.nn.Module):
             loss_av = loss_vae
 
         # add everything you want as long as there is one loss
-        sigma2_similarity, w_similarity = inference.similarity_inverse_length_scales.get_sigma2_w()
-
         return MetricMiniBatch(loss=loss_av,
                                mse_tot=mse_av.detach().item(),
                                reg_tot=reg_av.detach().item(),
@@ -289,7 +287,7 @@ class CompositionalVae(torch.nn.Module):
                                delta_2=delta_2.detach().item(),
 
                                similarity_sigma2=inference.similarity_sigma2.detach().cpu().numpy(),
-                               similarity_weights=inference.similarity_w.detach().cpu().numpy())
+                               similarity_weights=inference.similarity_weights.detach().cpu().numpy())
 
     @staticmethod
     def compute_sparse_similarity_matrix(mixing_k: torch.tensor,
