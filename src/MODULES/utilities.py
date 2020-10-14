@@ -176,7 +176,7 @@ def append_to_dict(source: Union[tuple, dict],
             x = _key if prefix_to_add is None else prefix_to_add + _key
             try:
                 y = _value.item()
-            except AttributeError:
+            except (AttributeError, ValueError):
                 y = _value
             return x, y
         else:
