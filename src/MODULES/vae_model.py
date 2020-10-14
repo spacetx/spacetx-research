@@ -114,25 +114,26 @@ class CompositionalVae(torch.nn.Module):
 
         # Instantiate all the modules
         self.inference_and_generator = Inference_and_Generation(params)
-        self.ma_calculator = Moving_Average_Calculator(beta=0.999)  # i.e. average over the last 100 mini-batches
+        # self.ma_calculator = Moving_Average_Calculator(beta=0.999)  # i.e. average over the last 100 mini-batches
 
         # Raw image parameters
         self.dict_soft_constraints = params["soft_constraint"]
         self.nms_dict = params["nms"]
-        self.sigma_fg = torch.nn.Parameter(data=torch.tensor(params["GECO_loss"]["fg_std"])[..., None, None],
-                                           # add singleton for width, height
+        self.sigma_fg = torch.nn.Parameter(data=torch.tensor(params["GECO_loss"]["fg_std"],
+                                                             dtype=torch.float)[..., None, None],  # singleton w,h
                                            requires_grad=False)
-        self.sigma_bg = torch.nn.Parameter(data=torch.tensor(params["GECO_loss"]["bg_std"])[..., None, None],
-                                           # add singleton for width, height
+        self.sigma_bg = torch.nn.Parameter(data=torch.tensor(params["GECO_loss"]["bg_std"],
+                                                             dtype=torch.float)[..., None, None],  # singleton w,h
                                            requires_grad=False)
+        self.normalize_sparsity = torch.nn.Parameter(data=torch.ones(3, dtype=torch.float), requires_grad=False)
 
         self.geco_dict = params["GECO_loss"]
         self.input_img_dict = params["input_image"]
 
-        self.geco_sparsity_factor = torch.nn.Parameter(data=torch.tensor(self.geco_dict["factor_sparsity_range"][1]),
-                                                       requires_grad=True)
-        self.geco_balance_factor = torch.nn.Parameter(data=torch.tensor(self.geco_dict["factor_balance_range"][1]),
-                                                      requires_grad=True)
+        self.geco_sparsity_factor = torch.nn.Parameter(data=torch.tensor(self.geco_dict["factor_sparsity_range"][1],
+                                                                         dtype=torch.float), requires_grad=True)
+        self.geco_balance_factor = torch.nn.Parameter(data=torch.tensor(self.geco_dict["factor_balance_range"][1],
+                                                                        dtype=torch.float), requires_grad=True)
 
         # Put everything on the cude if cuda available
         if torch.cuda.is_available():
@@ -209,19 +210,21 @@ class CompositionalVae(torch.nn.Module):
         # 1. small probabilities
         # 2. tight bounding boxes
         # 3. tight masks
+        # The three terms take care of all these requirement.
+        # I introduce self tuning parameters so that all terms contribute equally to the loss function
+
         # Old solution: sparsity = p * area_box -> leads to square masks b/c they have no cost and lead to lower kl_mask
         # Medium solution: sparsity = \sum_{i,j} (p * area_box) + \sum_k (p_chosen * area_mask_chosen)
         #                        = fg_fraction_box + fg_fraction_box
         #                        -> lead to many small object b/c there is no cost
         # New solution = add term sum p so that many objects are penalized
-        c_times_area = inference.sample_bb.bw * inference.sample_bb.bh * inference.sample_c.float()  # boxes_few, batch_area
-        sparsity_mask = torch.sum(mixing_fg) / torch.numel(mixing_fg)  # divide by total area -> strictly less than 1
-        sparsity_box = torch.sum(c_times_area) / torch.numel(mixing_fg)  # divide by total area -> less than 1 unless overlap
-        sparsity_prob = torch.mean(inference.sample_c.float())  # strictly less than one
-        sparsity_av = sparsity_mask + sparsity_box + sparsity_prob
+        sparsity_mask = torch.sum(mixing_fg) / batch_size
+        sparsity_box = torch.sum(inference.sample_bb.bw * inference.sample_bb.bh * inference.sample_c) / batch_size
+        sparsity_prob = torch.sum(inference.sample_c_map) / batch_size
+        sparsity_av = (torch.stack((sparsity_mask, sparsity_box, sparsity_prob), dim=0) *
+                       torch.exp(self.normalize_sparsity) - self.normalize_sparsity).sum()
 
         # 3. compute KL
-
         # TODO: Can add KL background and make sure that all KL have the same order by adding self-balancing hyperparameters.
         kl_zinstance = torch.sum(inference.kl_zinstance) / batch_size
         kl_zwhere = torch.sum(inference.kl_zwhere) / batch_size
