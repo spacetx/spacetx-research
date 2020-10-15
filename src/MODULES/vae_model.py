@@ -119,7 +119,7 @@ class CompositionalVae(torch.nn.Module):
 
         # Instantiate all the modules
         self.inference_and_generator = Inference_and_Generation(params)
-        # self.ma_calculator = Moving_Average_Calculator(beta=0.999)  # i.e. average over the last 100 mini-batches
+        self.ma_calculator = Moving_Average_Calculator(beta=0.999)  # i.e. average over the last 100 mini-batches
 
         # Raw image parameters
         self.dict_soft_constraints = params["soft_constraint"]
@@ -227,7 +227,17 @@ class CompositionalVae(torch.nn.Module):
         kl_zinstance = torch.sum(inference.kl_zinstance) / batch_size
         kl_zwhere = torch.sum(inference.kl_zwhere) / batch_size
         kl_logit = torch.sum(inference.kl_logit) / batch_size
-        kl_av = kl_zinstance + kl_zwhere + kl_logit
+
+        # 5. compute the moving averages
+        with torch.no_grad():
+            input_dict = {"kl_logit": kl_logit.item()}
+            # Only if in training mode I accumulate the moving average
+            if self.training:
+                ma_dict = self.ma_calculator.accumulate(input_dict)
+            else:
+                ma_dict = input_dict
+        # kl_av = kl_zinstance + kl_zwhere + kl_logit
+        kl_av = kl_zinstance + kl_zwhere + kl_logit / (1E-3 + ma_dict["kl_logit"])
 
         # 6. Note that I clamp in_place
         with torch.no_grad():

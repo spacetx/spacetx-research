@@ -164,6 +164,10 @@ class FiniteDPP(Distribution):
     has_rsample = False
 
     def __init__(self, K=None, L=None, validate_args=None):
+        if K is not None:
+            print("K.device", K.device)
+        else:
+            print("L.device", L.device)
 
         if (K is None and L is None) or (K is not None and L is not None):
             raise Exception("only one among K and L need to be defined")
@@ -172,23 +176,27 @@ class FiniteDPP(Distribution):
             self.K = 0.5 * (K + K.transpose(-1, -2))  # make sure it is symmetrized
             u, s_k, v = torch.svd(self.K)
             s_l = s_k / (1.0 - s_k)
-            self.L = torch.matmul(u * s_l.unsqueeze(-2), v.transpose(-1, -2))
+            self.L = torch.bmm(u * s_l.unsqueeze(-2), v.transpose(-1, -2))
 
-            tmp = torch.matmul(u * s_k.unsqueeze(-2), v.transpose(-1, -2))
-            check = (tmp - self.K).abs().max()
+            # Debug block
+            # tmp = torch.matmul(u * s_k.unsqueeze(-2), v.transpose(-1, -2))
+            # check = (tmp - self.K).abs().max()
             # print("check ->",check)
-            assert check < 1E-4
+            # assert check < 1E-4
 
-        else:
+        elif L is not None:
             self.L = 0.5 * (L + L.transpose(-1, -2))  # make sure it is symmetrized
             u, s_l, v = torch.svd(self.L)
             s_k = s_l / (1.0 + s_l)
-            self.K = torch.matmul(u * s_k.unsqueeze(-2), v.transpose(-1, -2))
+            self.K = torch.bmm(u * s_k.unsqueeze(-2), v.transpose(-1, -2))
 
-            tmp = torch.matmul(u * s_l.unsqueeze(-2), v.transpose(-1, -2))
-            check = (tmp - self.L).abs().max()
+            # Debug block
+            # tmp = torch.matmul(u * s_l.unsqueeze(-2), v.transpose(-1, -2))
+            # check = (tmp - self.L).abs().max()
             # print("check ->",check)
-            assert check < 1E-4
+            # assert check < 1E-4
+        else:
+            raise Exception
 
         self.s_l = s_l
         batch_shape, event_shape = self.K.shape[:-2], self.K.shape[-1:]
