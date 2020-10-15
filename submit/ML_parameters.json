@@ -22,7 +22,7 @@
    "n_max_pool" : 4,
    "level_zwhere_and_logit_output" : 2,
    "level_background_output" : 4,
-   "n_ch_output_features" : 1,
+   "n_ch_output_features" : 32,
    "n_ch_after_first_two_conv" : 32
  },
 

@@ -133,7 +133,7 @@ class SimilarityKernel(torch.nn.Module):
         return mask
 
     def get_sigma2_w(self):
-        return F.softplus(self.similarity_s2), F.softplus(self.similarity_w)
+        return F.softplus(self.similarity_s2), F.softmax(self.similarity_w, dim=-1)
 
     def forward(self, n_width: int, n_height: int):
         """ Implement L = sum_i a_i exp[-b_i d2] """
@@ -164,10 +164,6 @@ class FiniteDPP(Distribution):
     has_rsample = False
 
     def __init__(self, K=None, L=None, validate_args=None):
-        if K is not None:
-            print("K.device", K.device)
-        else:
-            print("L.device", L.device)
 
         if (K is None and L is None) or (K is not None and L is not None):
             raise Exception("only one among K and L need to be defined")
