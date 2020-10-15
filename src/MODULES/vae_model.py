@@ -160,7 +160,8 @@ class CompositionalVae(torch.nn.Module):
         # print(inference.logit_few.shape)                 # n_box_few, batch
         # print(inference.sample_c.shape)                  # n_box_few, batch
 
-        x = inference.sample_c[..., None, None, None] * inference.big_mask_NON_interacting
+        # x = inference.sample_c[..., None, None, None] * inference.big_mask_NON_interacting
+        x = inference.prob_few[..., None, None, None] * inference.big_mask_NON_interacting
         sum_x = torch.sum(x, dim=-5)  # sum over boxes
         sum_x_squared = torch.sum(x * x, dim=-5)
         tmp_value = (sum_x * sum_x - sum_x_squared).clamp(min=0)
@@ -178,7 +179,8 @@ class CompositionalVae(torch.nn.Module):
                                                             var_value=volume_mask_absolute,
                                                             verbose=verbose,
                                                             chosen=chosen)
-        cost_volume_minibatch = (cost_volume_absolute * inference.sample_c).sum(dim=-2).mean()  # sum boxes, mean batch_size
+        # cost_volume_minibatch = (cost_volume_absolute * inference.sample_c).sum(dim=-2).mean()  # sum boxes, mean batch_size
+        cost_volume_minibatch = (cost_volume_absolute * inference.prob_few).sum(dim=-2).mean()  # sum boxes, mean batch_size
         return RegMiniBatch(reg_overlap=cost_overlap.mean(),
                             reg_area_obj=cost_volume_minibatch)
 
@@ -380,7 +382,7 @@ class CompositionalVae(torch.nn.Module):
                                                                 bg_is_zero=True,
                                                                 bg_resolution=(1, 1))
 
-            mixing_k = inference.big_mask * inference.sample_c[..., None, None, None]
+            mixing_k = inference.big_mask * inference.prob_few[..., None, None, None]
 
             # Now compute fg_prob, integer_segmentation_mask, similarity
             most_likely_mixing, index = torch.max(mixing_k, dim=-5, keepdim=True)  # 1, batch_size, 1, w, h
