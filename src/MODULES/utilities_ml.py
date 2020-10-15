@@ -93,17 +93,20 @@ def sample_and_kl_prob(logit_map: torch.Tensor,
 class SimilarityKernel(torch.nn.Module):
     """ Similarity based on sum of gaussian kernels of different strength and length_scales """
 
-    def __init__(self, n_kernels: int = 4, eps: float = 1E-4):
+    def __init__(self, n_kernels: int = 4, pbc: bool = True, eps: float = 1E-4):
         super().__init__()
 
         self.n_kernels = n_kernels
         self.eps = eps
+        self.pbc = pbc
         self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
         self.similarity_w = torch.nn.Parameter(data=torch.ones(self.n_kernels,
                                                                device=self.device,
                                                                dtype=torch.float)/self.n_kernels, requires_grad=True)
-        self.similarity_s2 = torch.nn.Parameter(data=torch.linspace(100/self.n_kernels, 100, steps=self.n_kernels,
+        LENGTH_2 = 1.0
+        self.similarity_s2 = torch.nn.Parameter(data=torch.linspace(LENGTH_2/self.n_kernels, LENGTH_2,
+                                                                    steps=self.n_kernels,
                                                                     device=self.device,
                                                                     dtype=torch.float), requires_grad=True)
 
@@ -120,7 +123,15 @@ class SimilarityKernel(torch.nn.Module):
             ix_grid, iy_grid = torch.meshgrid([ix_array, iy_array])
             map_points = torch.stack((ix_grid, iy_grid), dim=-1)  # n_width, n_height, 2
             locations = map_points.flatten(start_dim=0, end_dim=-2)  # (n_width*n_height, 2)
-            d2 = (locations.unsqueeze(-2) - locations.unsqueeze(-3)).pow(2).sum(dim=-1).float()
+            d = (locations.unsqueeze(-2) - locations.unsqueeze(-3)).abs()  # (n_width*n_height, n_width*n_height, 2)
+            if self.pbc:
+                d_pbc = d.clone()
+                d_pbc[..., 0] = -d[..., 0] + n_width
+                d_pbc[..., 1] = -d[..., 1] + n_height
+                d2 = torch.min(d, d_pbc).pow(2).sum(dim=-1).float()
+            else:
+                d2 = d.pow(2).sum(dim=-1).float()
+
             diag = torch.eye(d2.shape[-2],
                              dtype=torch.float,
                              device=self.device,
@@ -230,36 +241,36 @@ class FiniteDPP(Distribution):
 
             return value
 
-    def OLD_log_prob(self, value):
-        """ log_prob = logdet(Ls) - logdet(L+I)
-            I am using the fact that eigen(L+I) = eigen(L)+1
-            -> logdet(L+I)=log prod[ eigen(L+I) ] = sum log(eigen(L+I)) = sum log(eigen(L)+1)
-
-            # value.shape = sample_shape + batch_shape + event_shape
-            # logdet(L+I).shape = batch_shape
-            :rtype:
-        """
-        assert are_broadcastable(value, self.L[..., 0])
-        assert self.L.device == value.device
-        assert value.dtype == torch.bool
-
-        if self._validate_args:
-            self._validate_sample(value)
-
-        logdet_L_plus_I = (self.s_l + 1).log().sum(dim=-1)  # batch_shape
-
-        # Reshapes
-        independet_dims = list(value.shape[:-1])
-        value = value.flatten(start_dim=0, end_dim=-2)  # *, event_shape
-        L = self.L.expand(independet_dims + [-1, -1]).flatten(start_dim=0, end_dim=-3)  # *, event_shape, event_shape
-        logdet_Ls = torch.zeros(independet_dims, dtype=self.L.dtype, device=value.device).view(-1)  # *
-
-        # Select rows and columns of the matrix which correspond to selected particles
-        for i in range(logdet_Ls.shape[0]):
-            tmp = L[i, value[i], :][:, value[i]]
-            logdet_Ls[i] = torch.logdet(tmp)
-        logdet_Ls = logdet_Ls.view(independet_dims)  # sample_shape, batch_shape
-        return logdet_Ls - logdet_L_plus_I
+###    def OLD_log_prob(self, value):
+###        """ log_prob = logdet(Ls) - logdet(L+I)
+###            I am using the fact that eigen(L+I) = eigen(L)+1
+###            -> logdet(L+I)=log prod[ eigen(L+I) ] = sum log(eigen(L+I)) = sum log(eigen(L)+1)
+###
+###            # value.shape = sample_shape + batch_shape + event_shape
+###            # logdet(L+I).shape = batch_shape
+###            :rtype:
+###        """
+###        assert are_broadcastable(value, self.L[..., 0])
+###        assert self.L.device == value.device
+###        assert value.dtype == torch.bool
+###
+###        if self._validate_args:
+###            self._validate_sample(value)
+###
+###        logdet_L_plus_I = (self.s_l + 1).log().sum(dim=-1)  # batch_shape
+###
+###        # Reshapes
+###        independet_dims = list(value.shape[:-1])
+###        value = value.flatten(start_dim=0, end_dim=-2)  # *, event_shape
+###        L = self.L.expand(independet_dims + [-1, -1]).flatten(start_dim=0, end_dim=-3)  # *, event_shape, event_shape
+###        logdet_Ls = torch.zeros(independet_dims, dtype=self.L.dtype, device=value.device).view(-1)  # *
+###
+###        # Select rows and columns of the matrix which correspond to selected particles
+###        for i in range(logdet_Ls.shape[0]):
+###            tmp = L[i, value[i], :][:, value[i]]
+###            logdet_Ls[i] = torch.logdet(tmp)
+###        logdet_Ls = logdet_Ls.view(independet_dims)  # sample_shape, batch_shape
+###        return logdet_Ls - logdet_L_plus_I
 
     def log_prob(self, value):
         """ log_prob = logdet(Ls) - logdet(L+I)
