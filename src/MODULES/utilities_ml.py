@@ -176,7 +176,7 @@ class FiniteDPP(Distribution):
             self.K = 0.5 * (K + K.transpose(-1, -2))  # make sure it is symmetrized
             u, s_k, v = torch.svd(self.K)
             s_l = s_k / (1.0 - s_k)
-            self.L = torch.bmm(u * s_l.unsqueeze(-2), v.transpose(-1, -2))
+            self.L = torch.matmul(u * s_l.unsqueeze(-2), v.transpose(-1, -2))
 
             # Debug block
             # tmp = torch.matmul(u * s_k.unsqueeze(-2), v.transpose(-1, -2))
@@ -188,7 +188,7 @@ class FiniteDPP(Distribution):
             self.L = 0.5 * (L + L.transpose(-1, -2))  # make sure it is symmetrized
             u, s_l, v = torch.svd(self.L)
             s_k = s_l / (1.0 + s_l)
-            self.K = torch.bmm(u * s_k.unsqueeze(-2), v.transpose(-1, -2))
+            self.K = torch.matmul(u * s_k.unsqueeze(-2), v.transpose(-1, -2))
 
             # Debug block
             # tmp = torch.matmul(u * s_l.unsqueeze(-2), v.transpose(-1, -2))
