@@ -141,6 +141,10 @@ class Inference_and_Generation(torch.nn.Module):
                                            height_raw_image=height_raw_image,
                                            min_box_size=self.size_min,
                                            max_box_size=self.size_max)
+        area_all = bounding_box_all.bw * bounding_box_all.bh
+        area_map = invert_convert_to_box_list(area_all.unsqueeze(-1),
+                                              original_width=unet_output.logit.mu.shape[-2],
+                                              original_height=unet_output.logit.mu.shape[-1])
 
         with torch.no_grad():
             nms_output: NMSoutput = NonMaxSuppression.compute_mask_and_index(score=q_all+c_all.sample,
@@ -201,7 +205,8 @@ class Inference_and_Generation(torch.nn.Module):
 
         # 8. Return the inferred quantities
         similarity_sigma2, similarity_w = self.similarity_kernel_dpp.get_sigma2_w()
-        return Inference(prob_map=q_map,
+        return Inference(area_map=area_map,
+                         prob_map=q_map,
                          prob_few=q_few,
                          big_bg=big_bg,
                          big_mask=big_mask,

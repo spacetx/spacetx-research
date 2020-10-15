@@ -144,7 +144,7 @@ class SimilarityKernel(torch.nn.Module):
         return mask
 
     def get_sigma2_w(self):
-        return F.softplus(self.similarity_s2)+1.0, F.softmax(self.similarity_w, dim=-1)
+        return F.softplus(self.similarity_s2)+1.0, F.softplus(self.similarity_w)+1E-2
 
     def forward(self, n_width: int, n_height: int):
         """ Implement L = sum_i a_i exp[-b_i d2] """

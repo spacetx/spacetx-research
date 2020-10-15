@@ -192,9 +192,11 @@ class CompositionalVae(torch.nn.Module):
                         regularizations: RegMiniBatch) -> MetricMiniBatch:
 
         # Preparation
+        n_boxes = inference.big_mask.shape[-5]
         batch_size, ch, w, h = imgs_in.shape
-        # p_times_area_map = inference.p_map * inference.area_map
-        mixing_k = inference.big_mask * inference.sample_c[..., None, None, None]
+        p_times_area_map = inference.area_map * inference.prob_map
+        # mixing_k = inference.big_mask * inference.sample_c[..., None, None, None]
+        mixing_k = inference.big_mask * inference.prob_few[..., None, None, None]
         mixing_fg = torch.sum(mixing_k, dim=-5)  # sum over boxes
         mixing_bg = torch.ones_like(mixing_fg) - mixing_fg
         fg_fraction = torch.mean(mixing_fg)  # mean over batch_size
@@ -215,11 +217,12 @@ class CompositionalVae(torch.nn.Module):
         # 2. tight bounding boxes
         # 3. tight masks
         # The three terms take care of all these requirement.
-        n_boxes = inference.sample_c.shape[-2]
-        area_boxes = inference.sample_bb.bw * inference.sample_bb.bh
+        # There is a lot of freedom here:
+        # 1) use c=Bernoulli(p) or p
+        # 2) use map_quantitites or few_quantities
         sparsity_mask = torch.sum(mixing_fg) / torch.numel(mixing_fg)  # strictly smaller than 1
-        sparsity_box = torch.sum(area_boxes * inference.sample_c) / torch.numel(mixing_fg)
-        sparsity_prob = torch.sum(inference.sample_c_map) / (batch_size * n_boxes)
+        sparsity_box = torch.sum(p_times_area_map) / torch.numel(mixing_fg)
+        sparsity_prob = torch.sum(inference.prob_map) / (batch_size * n_boxes)
         sparsity_av = sparsity_mask + sparsity_box + sparsity_prob
 
         # 3. compute KL
