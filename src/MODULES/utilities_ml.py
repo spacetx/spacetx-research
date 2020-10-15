@@ -103,9 +103,9 @@ class SimilarityKernel(torch.nn.Module):
         self.similarity_w = torch.nn.Parameter(data=torch.ones(self.n_kernels,
                                                                device=self.device,
                                                                dtype=torch.float)/self.n_kernels, requires_grad=True)
-        self.similarity_s2 = torch.nn.Parameter(data=100*torch.randn(self.n_kernels,
-                                                                     device=self.device,
-                                                                     dtype=torch.float), requires_grad=True)
+        self.similarity_s2 = torch.nn.Parameter(data=torch.linspace(100/self.n_kernels, 100, steps=self.n_kernels,
+                                                                    device=self.device,
+                                                                    dtype=torch.float), requires_grad=True)
 
         # Initialization
         self.n_width = -1
@@ -133,7 +133,7 @@ class SimilarityKernel(torch.nn.Module):
         return mask
 
     def get_sigma2_w(self):
-        return F.softplus(self.similarity_s2), F.softmax(self.similarity_w, dim=-1)
+        return F.softplus(self.similarity_s2)+1.0, F.softmax(self.similarity_w, dim=-1)
 
     def forward(self, n_width: int, n_height: int):
         """ Implement L = sum_i a_i exp[-b_i d2] """
@@ -230,7 +230,7 @@ class FiniteDPP(Distribution):
 
             return value
 
-    def log_prob(self, value):
+    def OLD_log_prob(self, value):
         """ log_prob = logdet(Ls) - logdet(L+I)
             I am using the fact that eigen(L+I) = eigen(L)+1
             -> logdet(L+I)=log prod[ eigen(L+I) ] = sum log(eigen(L+I)) = sum log(eigen(L)+1)
@@ -259,6 +259,37 @@ class FiniteDPP(Distribution):
             tmp = L[i, value[i], :][:, value[i]]
             logdet_Ls[i] = torch.logdet(tmp)
         logdet_Ls = logdet_Ls.view(independet_dims)  # sample_shape, batch_shape
+        return logdet_Ls - logdet_L_plus_I
+
+    def log_prob(self, value):
+        """ log_prob = logdet(Ls) - logdet(L+I)
+            I am using the fact that eigen(L+I) = eigen(L)+1
+            -> logdet(L+I)=log prod[ eigen(L+I) ] = sum log(eigen(L+I)) = sum log(eigen(L)+1)
+
+            # value.shape = sample_shape + batch_shape + event_shape
+            # logdet(L+I).shape = batch_shape
+            :rtype:
+        """
+        assert are_broadcastable(value, self.L[..., 0])
+        assert self.L.device == value.device
+        assert value.dtype == torch.bool
+
+        if self._validate_args:
+            self._validate_sample(value)
+
+        logdet_L_plus_I = (self.s_l + 1).log().sum(dim=-1)  # batch_shape
+
+        # Reshapes
+        independet_dims = list(value.shape[:-1])
+        value = value.flatten(start_dim=0, end_dim=-2)  # *, event_shape
+        L = self.L.expand(independet_dims + [-1, -1]).flatten(start_dim=0, end_dim=-3)  # *, event_shape, event_shape
+
+        n_max = torch.sum(value, dim=-1).max().item()
+        matrix = torch.eye(n_max, dtype=L.dtype, device=L.device).expand(L.shape[-3], n_max, n_max).clone()
+        for i in range(value.shape[0]):
+            n = torch.sum(value[i]).item()
+            matrix[i, :n, :n] = L[i, value[i], :][:, value[i]]
+        logdet_Ls = torch.logdet(matrix).view(independet_dims)  # sample_shape, batch_shape
         return logdet_Ls - logdet_L_plus_I
 
 
