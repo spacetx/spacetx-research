@@ -22,17 +22,6 @@ class DoubleConvolutionBlock(nn.Module):
             nn.ReLU(inplace=True)
         )
 
-#        self.double_conv = nn.Sequential(
-#            nn.ReplicationPad2d(self.PADDING),  # reflection padding
-#            nn.Conv2d(ch_in, ch_out, self.FILTER_SIZE, bias=False),
-#            nn.BatchNorm2d(ch_out, affine=True, track_running_stats=True),
-#            nn.ReLU(inplace=True),
-#            nn.ReplicationPad2d(self.PADDING),  # reflection padding
-#            nn.Conv2d(ch_out, ch_out, self.FILTER_SIZE, bias=False),
-#            nn.BatchNorm2d(ch_out, affine=True, track_running_stats=True),
-#            nn.ReLU(inplace=True)
-#        )
-
     def forward(self, x, verbose=False):
         y = self.double_conv(x)
         if verbose:

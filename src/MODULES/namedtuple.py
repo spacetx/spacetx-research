@@ -201,11 +201,9 @@ class Partition(NamedTuple):
                                     iou=iou.item(),
                                     n_reversible_mapping=n_reversible_mapping)
 
-
 #  ----------------------------------------------------------------  #
 #  ------- Stuff Related to Processing (i.e. CompositionalVAE) ----  #
 #  ----------------------------------------------------------------  #
-
 
 class DIST(NamedTuple):
     sample: torch.Tensor
@@ -263,7 +261,9 @@ class Inference(NamedTuple):
     sample_c: torch.Tensor          # boxes_few, batch_size
     sample_bb: BB                   # each bx,by,bw,bh has shape -> boxes_few, batch_size
     sample_zinstance: torch.Tensor  # boxes_few, batch_size, latent_dim
+    sample_zbg: torch.Tensor        # batch_size, latent_dim
     # kl of the 3 latent variables
+    kl_zbg: torch.Tensor        # batch_size, latent_dim
     kl_logit: torch.Tensor      # batch_size
     kl_zwhere: torch.Tensor     # boxes_few, batch_size, latent_dim
     kl_zinstance: torch.Tensor  # boxes_few, batch_size, latent_dim
@@ -295,6 +295,7 @@ class MetricMiniBatch(NamedTuple):
     kl_tot: float
     sparsity_tot: float
 
+    kl_zbg: float
     kl_instance: float
     kl_where: float
     kl_logit: float

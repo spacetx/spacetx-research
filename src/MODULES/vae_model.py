@@ -228,10 +228,13 @@ class CompositionalVae(torch.nn.Module):
         sparsity_av = sparsity_mask + sparsity_box + sparsity_prob
 
         # 3. compute KL
-        # TODO: Can add KL background and make sure that all KL have the same order by adding self-balancing hyperparameters.
-        kl_zinstance = torch.sum(inference.kl_zinstance) / batch_size
-        kl_zwhere = torch.sum(inference.kl_zwhere) / batch_size
-        kl_logit = torch.sum(inference.kl_logit) / batch_size
+        # Note that I compute the mean over batch, latent_dimensions and n_object.
+        # This means that latent_dim can effectively control the complexity of the reconstruction,
+        # i.e. more latent more capacity.
+        kl_zbg = torch.mean(inference.kl_zbg)              # mean over: batch, latent_dim
+        kl_zinstance = torch.mean(inference.kl_zinstance)  # mean over: n_boxes, batch, latent_dim
+        kl_zwhere = torch.mean(inference.kl_zwhere)        # mean over: n_boxes, batch, latent_dim
+        kl_logit = torch.mean(inference.kl_logit)          # mean over: batch
 
         # 5. compute the moving averages
         with torch.no_grad():
@@ -242,7 +245,7 @@ class CompositionalVae(torch.nn.Module):
             else:
                 ma_dict = input_dict
         # kl_av = kl_zinstance + kl_zwhere + kl_logit
-        kl_av = kl_zinstance + kl_zwhere + kl_logit / (1E-3 + ma_dict["kl_logit"])
+        kl_av = kl_zbg + kl_zinstance + kl_zwhere + kl_logit / (1E-3 + ma_dict["kl_logit"])
 
         # 6. Note that I clamp in_place
         with torch.no_grad():
@@ -291,6 +294,7 @@ class CompositionalVae(torch.nn.Module):
                                kl_tot=kl_av.detach().item(),
                                sparsity_tot=sparsity_av.detach().item(),
 
+                               kl_zbg=kl_zbg.detach().item(),
                                kl_instance=kl_zinstance.detach().item(),
                                kl_where=kl_zwhere.detach().item(),
                                kl_logit=kl_logit.detach().item(),

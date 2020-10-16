@@ -14,6 +14,7 @@ from MODULES.utilities_visualization import show_batch
 from MODULES.namedtuple import DIST, MetricMiniBatch, BB
 from MODULES.utilities_neptune import log_dict_metrics
 
+
 def are_broadcastable(a: torch.Tensor, b: torch.Tensor) -> bool:
     """ Return True if tensor are broadcastable to each other, False otherwise """
     return all((m == n) or (m == 1) or (n == 1) for m, n in zip(a.shape[::-1], b.shape[::-1]))
@@ -56,7 +57,7 @@ def sample_and_kl_prob(logit_map: torch.Tensor,
             s = similarity_kernel.requires_grad_(False)
             c_all = FiniteDPP(L=s).sample(sample_shape=batch_size).transpose(-1, -2).float()
             kl = torch.zeros(logit_map.shape[0])
-            q_all = torch.zeros_like(c_all).float()
+            q_all = torch.rand_like(c_all).float()
     else:
         # Work with posterior
         if (prob_corr_factor > 0) and (prob_corr_factor <= 1.0):

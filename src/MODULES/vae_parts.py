@@ -3,7 +3,7 @@ import torch.nn.functional as F
 
 from MODULES.cropper_uncropper import Uncropper, Cropper
 from MODULES.unet_model import UNet
-from MODULES.encoders_decoders import EncoderConv, DecoderConv, Decoder1by1Linear, EncoderConvLeaky, DecoderConvLeaky
+from MODULES.encoders_decoders import EncoderConv, DecoderConv, Decoder1by1Linear, DecoderBackground
 from MODULES.utilities import tmaps_to_bb, convert_to_box_list, invert_convert_to_box_list
 from MODULES.utilities_ml import sample_and_kl_diagonal_normal, sample_and_kl_prob, SimilarityKernel
 from MODULES.namedtuple import Inference, NMSoutput, BB, UNEToutput, ZZ, DIST
@@ -20,13 +20,6 @@ def from_weights_to_masks(weight: torch.Tensor, dim: int):
     fg_mask = torch.tanh(sum_weight)
     partitioning = weight / torch.clamp(sum_weight, min=1E-6)
     return fg_mask * partitioning
-
-
-def downsample_and_upsample(x: torch.Tensor, low_resolution: tuple, high_resolution: tuple):
-    low_res_x = F.adaptive_avg_pool2d(x, output_size=low_resolution)
-    # low_res_x = F.adaptive_max_pool2d(x, output_size=low_resolution)
-    high_res_x = F.interpolate(low_res_x, size=high_resolution, mode='bilinear', align_corners=True)
-    return high_res_x
 
 
 class Inference_and_Generation(torch.nn.Module):
@@ -46,33 +39,23 @@ class Inference_and_Generation(torch.nn.Module):
         self.unet: UNet = UNet(params)
 
         # Decoders
+        self.decoder_zbg: DecoderBackground = DecoderBackground(dim_z=params["architecture"]["dim_zbg"],
+                                                                ch_out=params["input_image"]["ch_in"])
+
         self.decoder_zwhere: Decoder1by1Linear = Decoder1by1Linear(dim_z=params["architecture"]["dim_zwhere"],
-                                                                   ch_out=4,
-                                                                   groups=params["architecture"]["dim_zwhere"])
+                                                                   ch_out=4)
 
         self.decoder_logit: Decoder1by1Linear = Decoder1by1Linear(dim_z=params["architecture"]["dim_logit"],
-                                                                  ch_out=1,
-                                                                  groups=1)
+                                                                  ch_out=1)
 
-        leaky = False
-        if leaky:
-            self.decoder_zinstance: DecoderConvLeaky = DecoderConvLeaky(size=params["architecture"]["cropped_size"],
-                                                                        dim_z=params["architecture"]["dim_zinstance"],
-                                                                        ch_out=params["input_image"]["ch_in"] + 1)
+        self.decoder_zinstance: DecoderConv = DecoderConv(size=params["architecture"]["cropped_size"],
+                                                          dim_z=params["architecture"]["dim_zinstance"],
+                                                          ch_out=params["input_image"]["ch_in"] + 1)
 
-            # encoder z_mask (takes the unet_features)
-            self.encoder_zinstance: EncoderConvLeaky = EncoderConvLeaky(size=params["architecture"]["cropped_size"],
-                                                                        ch_in=params["architecture"]["n_ch_output_features"],
-                                                                        dim_z=params["architecture"]["dim_zinstance"])
-        else:
-            self.decoder_zinstance: DecoderConv = DecoderConv(size=params["architecture"]["cropped_size"],
-                                                              dim_z=params["architecture"]["dim_zinstance"],
-                                                              ch_out=params["input_image"]["ch_in"] + 1)
-
-            # encoder z_mask (takes the unet_features)
-            self.encoder_zinstance: EncoderConv = EncoderConv(size=params["architecture"]["cropped_size"],
-                                                              ch_in=params["architecture"]["n_ch_output_features"],
-                                                              dim_z=params["architecture"]["dim_zinstance"])
+        # Encoders
+        self.encoder_zinstance: EncoderConv = EncoderConv(size=params["architecture"]["cropped_size"],
+                                                          ch_in=params["architecture"]["n_ch_output_features"],
+                                                          dim_z=params["architecture"]["dim_zinstance"])
 
     def forward(self, imgs_in: torch.Tensor,
                 generate_synthetic_data: bool,
@@ -91,15 +74,18 @@ class Inference_and_Generation(torch.nn.Module):
         # 1. UNET
         # ---------------------------#
         unet_output: UNEToutput = self.unet.forward(imgs_in, verbose=False)
+
+        zbg: DIST = sample_and_kl_diagonal_normal(posterior_mu=unet_output.zbg.mu,
+                                                  posterior_std=unet_output.zbg.std,
+                                                  prior_mu=torch.zeros_like(unet_output.zbg.mu),
+                                                  prior_std=torch.ones_like(unet_output.zbg.std),
+                                                  noisy_sampling=noisy_sampling,
+                                                  sample_from_prior=generate_synthetic_data)
         if bg_is_zero:
             big_bg = torch.zeros_like(imgs_in)
         else:
-            # I could also sample
-            # bg = unet_output.zbg.mu + eps * unet_output.zbg.std
-            bg_map = downsample_and_upsample(unet_output.zbg.mu,
-                                             low_resolution=bg_resolution,
-                                             high_resolution=(imgs_in.shape[-2], imgs_in.shape[-1]))
-            big_bg = torch.sigmoid(bg_map)
+            big_bg = torch.sigmoid(self.decoder_zbg(z=zbg.sample,
+                                                    high_resolution=(imgs_in.shape[-2], imgs_in.shape[-1])))
 
         with torch.no_grad():
             bounding_box_no_noise: BB = tmaps_to_bb(tmaps=torch.sigmoid(self.decoder_zwhere(unet_output.zwhere.mu)),
@@ -212,15 +198,17 @@ class Inference_and_Generation(torch.nn.Module):
                          big_mask=big_mask,
                          big_mask_NON_interacting=big_mask_NON_interacting,
                          big_img=big_img,
-                         # the sample of the 3 latent variables
+                         # the sample of the 4 latent variables
                          sample_c_map=c_map,
                          sample_c=c_few,
                          sample_bb=bounding_box_few,
                          sample_zinstance=zinstance_few.sample,
-                         # the kl of the 3 latent variables
+                         sample_zbg=zbg.sample,
+                         # the kl of the 4 latent variables
                          kl_logit=c_all.kl,
                          kl_zwhere=zwhere_kl_few,
                          kl_zinstance=zinstance_few.kl,
+                         kl_zbg=zbg.kl,
                          # similarity kernels
                          similarity_sigma2=similarity_sigma2,
                          similarity_weights=similarity_w)
