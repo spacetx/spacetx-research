@@ -94,7 +94,11 @@ def sample_and_kl_prob(logit_map: torch.Tensor,
 class SimilarityKernel(torch.nn.Module):
     """ Similarity based on sum of gaussian kernels of different strength and length_scales """
 
-    def __init__(self, n_kernels: int = 4, pbc: bool = True, eps: float = 1E-4):
+    def __init__(self, n_kernels: int = 4,
+                 pbc: bool = True,
+                 eps: float = 1E-4,
+                 length_scales: Optional[torch.Tensor] = None,
+                 kernel_weights: Optional[torch.Tensor] = None):
         super().__init__()
 
         self.n_kernels = n_kernels
@@ -102,20 +106,34 @@ class SimilarityKernel(torch.nn.Module):
         self.pbc = pbc
         self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
-        self.similarity_w = torch.nn.Parameter(data=torch.ones(self.n_kernels,
-                                                               device=self.device,
-                                                               dtype=torch.float)/self.n_kernels, requires_grad=True)
-        LENGTH_2 = 1.0
-        self.similarity_s2 = torch.nn.Parameter(data=torch.linspace(LENGTH_2/self.n_kernels, LENGTH_2,
-                                                                    steps=self.n_kernels,
-                                                                    device=self.device,
-                                                                    dtype=torch.float), requires_grad=True)
+        if length_scales is None:
+            LENGTH_2 = 1.0
+            length_scales = torch.linspace(LENGTH_2/self.n_kernels, LENGTH_2,
+                                           steps=self.n_kernels,
+                                           device=self.device,
+                                           dtype=torch.float)
+        else:
+            length_scales = self._invertsoftplus(length_scales.float().to(self.device))
+        assert length_scales.shape[0] == self.n_kernels
+        self.similarity_length = torch.nn.Parameter(data=length_scales, requires_grad=True)
+
+        if kernel_weights is None:
+            kernel_weights = torch.ones(self.n_kernels,
+                                        device=self.device,
+                                        dtype=torch.float)/self.n_kernels
+        else:
+            kernel_weights = self._invertsoftplus(kernel_weights.float().to(self.device))
+        assert kernel_weights.shape[0] == self.n_kernels
+        self.similarity_w = torch.nn.Parameter(data=kernel_weights, requires_grad=True)
 
         # Initialization
         self.n_width = -1
         self.n_height = -1
         self.d2 = None
         self.diag = None
+
+    def _invertsoftplus(self, x):
+        return torch.log(torch.exp(x)-1.0)
 
     def _compute_d2_diag(self, n_width: int, n_height: int):
         with torch.no_grad():
@@ -144,19 +162,20 @@ class SimilarityKernel(torch.nn.Module):
         mask = sample.view(independent_dims + [self.n_width, self.n_height])
         return mask
 
-    def get_sigma2_w(self):
-        return F.softplus(self.similarity_s2)+1.0, F.softplus(self.similarity_w)+1E-2
+    def get_l_w(self):
+        return F.softplus(self.similarity_length)+1E-2, F.softplus(self.similarity_w)+1E-2
 
     def forward(self, n_width: int, n_height: int):
         """ Implement L = sum_i a_i exp[-b_i d2] """
-        sigma2, w = self.get_sigma2_w()
+        l, w = self.get_l_w()
 
         if (n_width != self.n_width) or (n_height != self.n_height):
             self.n_width = n_width
             self.n_height = n_height
             self.d2, self.diag = self._compute_d2_diag(n_width=n_width, n_height=n_height)
 
-        likelihood_kernel = (w[..., None, None] * torch.exp(-0.5*self.d2/sigma2[..., None, None])).sum(dim=-3) + self.diag
+        likelihood_kernel = (w[..., None, None] *
+                             torch.exp(-0.5*self.d2/l[..., None, None].pow(2))).sum(dim=-3) + self.diag
         return likelihood_kernel  # shape (n_width*n_height, n_width*n_height)
 
 
@@ -207,6 +226,7 @@ class FiniteDPP(Distribution):
             raise Exception
 
         self.s_l = s_l
+        # print("s_l ->", s_l)
         batch_shape, event_shape = self.K.shape[:-2], self.K.shape[-1:]
         super(FiniteDPP, self).__init__(batch_shape, event_shape, validate_args=validate_args)
 
