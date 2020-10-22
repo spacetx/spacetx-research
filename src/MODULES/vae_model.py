@@ -179,7 +179,8 @@ class CompositionalVae(torch.nn.Module):
                                                             var_value=volume_mask_absolute,
                                                             verbose=verbose,
                                                             chosen=chosen)
-        # cost_volume_minibatch = (cost_volume_absolute * inference.sample_c).sum(dim=-2).mean()  # sum boxes, mean batch_size
+
+        # cost_volume_minibatch = (cost_volume_absolute * inference.c_few).sum(dim=-2).mean()  # sum boxes, mean batch_size
         cost_volume_minibatch = (cost_volume_absolute * inference.prob_few).sum(dim=-2).mean()  # sum boxes, mean batch_size
         return RegMiniBatch(reg_overlap=cost_overlap.mean(),
                             reg_area_obj=cost_volume_minibatch)
@@ -232,8 +233,12 @@ class CompositionalVae(torch.nn.Module):
         # This means that latent_dim can effectively control the complexity of the reconstruction,
         # i.e. more latent more capacity.
         kl_zbg = torch.mean(inference.kl_zbg)              # mean over: batch, latent_dim
-        kl_zinstance = torch.mean(inference.kl_zinstance)  # mean over: n_boxes, batch, latent_dim
-        kl_zwhere = torch.mean(inference.kl_zwhere)        # mean over: n_boxes, batch, latent_dim
+
+        with torch.no_grad():
+            K = torch.sum(inference.c_few)
+            c_few_mask = inference.c_few[..., None].requires_grad_(False)
+        kl_zinstance = torch.sum(inference.kl_zinstance * c_few_mask) / (K*inference.kl_zinstance.shape[-1])
+        kl_zwhere = torch.sum(inference.kl_zwhere * c_few_mask) / (K*inference.kl_zwhere.shape[-1])
         kl_logit = torch.mean(inference.kl_logit)          # mean over: batch
 
         # 5. compute the moving averages
@@ -310,8 +315,8 @@ class CompositionalVae(torch.nn.Module):
                                delta_1=delta_1.detach().item(),
                                delta_2=delta_2.detach().item(),
 
-                               similarity_sigma2=inference.similarity_sigma2.detach().cpu().numpy(),
-                               similarity_weights=inference.similarity_weights.detach().cpu().numpy())
+                               similarity_l=inference.similarity_l.detach().cpu().numpy(),
+                               similarity_w=inference.similarity_w.detach().cpu().numpy())
 
     @staticmethod
     def compute_sparse_similarity_matrix(mixing_k: torch.tensor,
@@ -395,8 +400,8 @@ class CompositionalVae(torch.nn.Module):
 
             fg_prob = torch.sum(mixing_k, dim=-5)  # sum over instances
 
-            bounding_boxes = draw_bounding_boxes(c=inference.sample_c,
-                                                 bounding_box=inference.sample_bb,
+            bounding_boxes = draw_bounding_boxes(c=inference.c_few,
+                                                 bounding_box=inference.bb_few,
                                                  width=integer_mask.shape[-2],
                                                  height=integer_mask.shape[-1]) if draw_boxes else None
 
@@ -632,8 +637,8 @@ class CompositionalVae(torch.nn.Module):
 
         with torch.no_grad():
             if draw_image:
-                imgs_rec = draw_img(c=inference.sample_c,
-                                    bounding_box=inference.sample_bb,
+                imgs_rec = draw_img(c=inference.c_few,
+                                    bounding_box=inference.bb_few,
                                     big_mask=inference.big_mask,
                                     big_img=inference.big_img,
                                     big_bg=inference.big_bg,

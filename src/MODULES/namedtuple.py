@@ -252,14 +252,15 @@ class Inference(NamedTuple):
     area_map: torch.Tensor  # shape -> batch_size, 1, w, h
     prob_map: torch.Tensor  # shape -> batch_size, 1, w, h
     prob_few: torch.Tensor  # shape -> boxes_few, batch_size
+    c_few: torch.Tensor     # shape -> boxes_few, batch_size
+    bb_few: BB              # each bx,by,bw,bh has shape -> boxes_few, batch_size
     big_bg: torch.Tensor
     big_img: torch.Tensor
     big_mask: torch.Tensor
     big_mask_NON_interacting: torch.Tensor  # Use exclusively to compute overlap penalty
     # the samples of the 3 latent variables
     sample_c_map: torch.Tensor      # shape -> batch, 1, width, height
-    sample_c: torch.Tensor          # boxes_few, batch_size
-    sample_bb: BB                   # each bx,by,bw,bh has shape -> boxes_few, batch_size
+    sample_zwhere: torch.Tensor     # boxes_few, batch_size, latent_dim
     sample_zinstance: torch.Tensor  # boxes_few, batch_size, latent_dim
     sample_zbg: torch.Tensor        # batch_size, latent_dim
     # kl of the 3 latent variables
@@ -268,8 +269,8 @@ class Inference(NamedTuple):
     kl_zwhere: torch.Tensor     # boxes_few, batch_size, latent_dim
     kl_zinstance: torch.Tensor  # boxes_few, batch_size, latent_dim
     # similarity DPP
-    similarity_sigma2: torch.Tensor
-    similarity_weights: torch.Tensor
+    similarity_l: torch.Tensor
+    similarity_w: torch.Tensor
 
 
 class RegMiniBatch(NamedTuple):
@@ -311,8 +312,8 @@ class MetricMiniBatch(NamedTuple):
     delta_1: float
     delta_2: float
 
-    similarity_sigma2: numpy.ndarray
-    similarity_weights: numpy.ndarray
+    similarity_l: numpy.ndarray
+    similarity_w: numpy.ndarray
 
 
     def pretty_print(self, epoch: int=0) -> str:
