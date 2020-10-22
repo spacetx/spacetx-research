@@ -55,6 +55,13 @@ def compute_prob_correction(images: torch.Tensor,
     return q_approx
 
 
+def prob_to_logit(prob: torch.Tensor, eps: Optional[float] = None):
+    if eps is not None:
+        prob.clamp_(min=eps, max=1.0-eps)
+    return torch.log(prob) - torch.log1p(-prob)
+
+
+
 ### class PassMask(torch.autograd.Function):
 ###     """ Forward is c=c*mask. Backward is identity"""
 ###

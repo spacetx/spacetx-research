@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from MODULES.cropper_uncropper import Uncropper, Cropper
 from MODULES.unet_model import UNet
 from MODULES.encoders_decoders import EncoderConv, DecoderConv, Decoder1by1Linear, DecoderBackground
-from MODULES.utilities import tmaps_to_bb, convert_to_box_list, invert_convert_to_box_list, compute_prob_correction
+from MODULES.utilities import tmaps_to_bb, convert_to_box_list, invert_convert_to_box_list, compute_prob_correction, prob_to_logit
 from MODULES.utilities_ml import sample_and_kl_diagonal_normal, sample_and_kl_prob, SimilarityKernel
 from MODULES.namedtuple import Inference, BB, UNEToutput, ZZ, DIST
 # from MODULES.non_max_suppression import NonMaxSuppression
@@ -101,7 +101,7 @@ class Inference_and_Generation(torch.nn.Module):
                 logit_uncorrected = convert_to_box_list(unet_output.logit.mu).squeeze(-1)
                 p_uncorrected = torch.sigmoid(logit_uncorrected)
                 p_corrected = ((1 - prob_corr_factor) * p_uncorrected + prob_corr_factor * delta_p)
-                delta_logit = torch.logit(p_corrected, eps=0.0001) - logit_uncorrected
+                delta_logit = prob_to_logit(prob=p_corrected, eps=0.0001) - logit_uncorrected
                 delta_logit_map = invert_convert_to_box_list(delta_logit.unsqueeze(-1),
                                                              original_width=unet_output.logit.mu.shape[-2],
                                                              original_height=unet_output.logit.mu.shape[-2])
