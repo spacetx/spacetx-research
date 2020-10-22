@@ -5,7 +5,7 @@
  "simulation" : {
    "__comment" : "there are 3 types of runs: scratch, resume, pretrained",
    "type" : "scratch",
-   "MAX_EPOCHS" : 1500,
+   "MAX_EPOCHS" : 3500,
    "TEST_FREQUENCY" : 100,
    "CHECKPOINT_FREQUENCY" : 100,
    "batch_size" : 128,
@@ -15,7 +15,7 @@
 
  "architecture" : {
    "__comment" : "architecture parameters, level_zwhere_output is between 0 and n_max_pool included",
-   "dim_zinstance" : 10,
+   "dim_zinstance" : 5,
    "dim_zwhere" : 4,
    "dim_zbg" : 4,
    "dim_logit" : 1,

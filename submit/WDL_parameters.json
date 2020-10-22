@@ -2,7 +2,7 @@
   "neptune_ml.credentials_json": "gs://ld-data-bucket/credentials.json",
   "neptune_ml.data_train": "gs://ld-data-bucket/cell_segmenter/smFISH/streamlined_8_smFISH_stitched_OLEH.tif",
   "neptune_ml.data_test": "gs://ld-data-bucket/cell_segmenter/smFISH/dummy1.pt",
-  "neptune_ml.git_branch_or_commit": "64_dpp",
+  "neptune_ml.git_branch_or_commit": "65_move_NMS_upstream",
   "neptune_ml.git_repo":  "https://github.com/spacetx/spacetx-research.git"
 }
 
