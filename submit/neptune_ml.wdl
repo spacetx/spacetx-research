@@ -59,7 +59,7 @@ task train {
          cpu: 4
          zones: "us-east1-d us-east1-c"
          gpuCount: 1
-         gpuType: "nvidia-tesla-k80" #"nvidia-tesla-p100" 
+         gpuType:  "nvidia-tesla-p100" #"nvidia-tesla-k80"
          maxRetries: 0
          preemptible_tries: 0
     }

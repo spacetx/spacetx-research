@@ -1,8 +1,8 @@
 import torch
-from .unet_parts import DownBlock, DoubleConvolutionBlock, UpBlock
-from .encoders_decoders import Encoder1by1, MLP_1by1, PredictBackground
+from MODULES.unet_parts import DownBlock, DoubleConvolutionBlock, UpBlock
+from MODULES.encoders_decoders import Encoder1by1, MLP_1by1, EncoderBackground
 from collections import deque
-from .namedtuple import UNEToutput
+from MODULES.namedtuple import UNEToutput
 
 
 class UNet(torch.nn.Module):
@@ -15,6 +15,7 @@ class UNet(torch.nn.Module):
         self.level_background_output = params["architecture"]["level_background_output"]
         self.n_ch_output_features = params["architecture"]["n_ch_output_features"]
         self.ch_after_first_two_conv = params["architecture"]["n_ch_after_first_two_conv"]
+        self.dim_zbg = params["architecture"]["dim_zbg"]
         self.dim_zwhere = params["architecture"]["dim_zwhere"]
         self.dim_logit = params["architecture"]["dim_logit"]
         self.ch_raw_image = params["input_image"]["ch_in"]
@@ -61,10 +62,10 @@ class UNet(torch.nn.Module):
                                         ch_hidden=None)  # this means there is ONE hidden layer of automatic size
 
         # I don't need all the channels to predict the background. Few channels are enough
-        self.ch_in_bg = min(5, self.ch_list[-self.level_background_output - 1])
-        self.pred_background = PredictBackground(ch_in=self.ch_in_bg,
-                                                 ch_out=self.ch_raw_image,
-                                                 ch_hidden=-1)  # this means there is NO hidden layer
+        self.ch_in_bg = min(32, self.ch_list[-self.level_background_output - 1])
+        self.pred_background = EncoderBackground(ch_in=self.ch_in_bg,
+                                                 dim_z=self.dim_zbg,
+                                                 low_resolution=(5,5))
 
     def forward(self, x: torch.Tensor, verbose: bool):
         # input_w, input_h = x.shape[-2:]

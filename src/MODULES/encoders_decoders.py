@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional
 
-from .namedtuple import ZZ
+from MODULES.namedtuple import ZZ
 
 EPS_STD = 1E-3  # standard_deviation = F.softplus(x) + EPS_STD >= EPS_STD
 
@@ -25,19 +25,6 @@ class MLP_1by1(nn.Module):
         return self.mlp_1by1(x)
 
 
-class PredictBackground(nn.Module):
-    """ Predict the bg_mu in (0,1) by applying sigmoid"""
-    def __init__(self, ch_in: int, ch_out: int, ch_hidden: Optional[int] = None):
-        super().__init__()
-        self.ch_out = ch_out
-        ch_hidden = (ch_in + ch_out) // 2 if ch_hidden is None else ch_hidden
-        self.predict = MLP_1by1(ch_in=ch_in, ch_out=2*ch_out, ch_hidden=ch_hidden)
-
-    def forward(self, x: torch.Tensor) -> ZZ:
-        mu, std = torch.split(self.predict(x), self.ch_out, dim=-3)
-        return ZZ(mu=mu, std=F.softplus(std) + EPS_STD)
-
-
 class Encoder1by1(nn.Module):
     def __init__(self, ch_in: int, dim_z: int, ch_hidden: Optional[int] = None):
         super().__init__()
@@ -47,12 +34,11 @@ class Encoder1by1(nn.Module):
 
     def forward(self, x: torch.Tensor) -> ZZ:
         mu, std = torch.split(self.predict(x), self.dim_z, dim=-3)
-        # Apply non-linearity and return
         return ZZ(mu=mu, std=F.softplus(std) + EPS_STD)
 
 
 class Decoder1by1Linear(nn.Module):
-    def __init__(self, dim_z: int, ch_out: int, groups: int):
+    def __init__(self, dim_z: int, ch_out: int):
         super().__init__()
         # if groups=1 all inputs convolved to produce all outputs
         # if groups=in_channels each channel is convolved with its set of filters
@@ -62,12 +48,62 @@ class Decoder1by1Linear(nn.Module):
                                  stride=1,
                                  padding=0,
                                  bias=True,
-                                 groups=groups)
+                                 groups=1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.predict(x)
 
 
+class EncoderBackground(nn.Module):
+    def __init__(self, ch_in: int, dim_z: int, low_resolution: Optional[tuple]):
+        super().__init__()
+        self.ch_in = ch_in
+        self.dim_z = dim_z
+        self.low_resolution = [7, 7] if low_resolution is None else low_resolution
+
+        ch_bg_map = 32
+        self.bg_map = MLP_1by1(ch_in=ch_in, ch_out=ch_bg_map, ch_hidden=-1)
+        self.MLP = nn.Sequential(
+            nn.Linear(in_features=2*ch_bg_map*self.low_resolution[0]*self.low_resolution[1], out_features=128, bias=True),
+            nn.ReLU(inplace=True),
+            nn.Linear(in_features=128, out_features=32, bias=True),
+            nn.ReLU(inplace=True),
+            nn.Linear(in_features=32, out_features=2*self.dim_z, bias=True))
+
+    def forward(self, x: torch.Tensor) -> ZZ:
+        # See how fast.ai does UNET
+        y = self.bg_map(x)  # B, 32, small_w, small_h
+        y_av = F.adaptive_avg_pool2d(y, output_size=self.low_resolution)   # B, 32, s, s
+        y_max = F.adaptive_max_pool2d(y, output_size=self.low_resolution)  # B, 32, s, s
+        y2 = torch.cat((y_av, y_max), dim=-3).flatten(start_dim=1, end_dim=-1)  # B, 64 * s * s
+        mu, std = torch.split(self.MLP(y2), self.dim_z, dim=-1)  # B, dim_z
+        return ZZ(mu=mu, std=F.softplus(std) + EPS_STD)
+
+
+class DecoderBackground(nn.Module):
+    def __init__(self, ch_out: int, dim_z: int):
+        super().__init__()
+        self.dim_z = dim_z
+        self.ch_out = ch_out
+        self.upsample = nn.Linear(self.dim_z, 64 * 7 * 7)
+        self.decoder = nn.Sequential(
+            torch.nn.ConvTranspose2d(64, 32, 4, 2, 1),  # B,  64,  14,  14
+            torch.nn.ReLU(inplace=True),
+            torch.nn.ConvTranspose2d(32, 32, 4, 2, 1, 1),  # B,  32, 28, 28
+            torch.nn.ReLU(inplace=True),
+            torch.nn.ConvTranspose2d(32, self.ch_out, 4, 1, 2)  # B, ch, 28, 28
+        )
+
+    def forward(self, z: torch.Tensor, high_resolution: tuple) -> torch.Tensor:
+        # From (B, dim_z) to (B, ch_out, 28, 28) to (B, ch_out, w_raw, h_raw)
+        x0 = self.upsample(z).view(-1, 64, 7, 7)
+        x1 = self.decoder(x0)  # B, ch_out, 28, 28
+        return F.interpolate(x1, size=self.high_resolution, mode='bilinear', align_corners=True)
+
+
+# TODO PUT ON SAME FOOTING:
+# 1. 28x28 and 56x56.
+# 2. Relu and LeakyRelu
 class DecoderConv(nn.Module):
     """ Decode z -> x
         INPUT:  z of shape: ..., dim_z

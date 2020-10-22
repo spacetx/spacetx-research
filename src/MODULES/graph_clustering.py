@@ -113,7 +113,9 @@ with torch.no_grad():
             else:
                 sparse_matrix = similarity.sparse_matrix.cpu()
                 similarity_index_matrix = similarity.index_matrix.cpu()
-                
+
+            assert sparse_matrix._nnz() > 0, "WARNING: Graph is empty. Nothing to do"
+
             # Map the location with small fg_prob to index = -1
             vertex_mask = fg_prob[0, 0] > min_fg_prob
             n_max = torch.max(similarity.index_matrix).item()
@@ -146,23 +148,26 @@ with torch.no_grad():
             self.i_coordinate_fg_pixel = i_matrix[self.index_matrix >= 0]
             self.j_coordinate_fg_pixel = j_matrix[self.index_matrix >= 0]
 
-            # Check
-            tmp = -1 * torch.ones_like(self.index_matrix)
-            tmp[self.i_coordinate_fg_pixel,
-                self.j_coordinate_fg_pixel] = torch.arange(self.n_fg_pixel,
-                                                           dtype=torch.long,
-                                                           device=self.device)
-            assert (tmp == self.index_matrix).all()
+#            # Check
+#            tmp = -1 * torch.ones_like(self.index_matrix)
+#            tmp[self.i_coordinate_fg_pixel,
+#                self.j_coordinate_fg_pixel] = torch.arange(self.n_fg_pixel,
+#                                                           dtype=torch.long,
+#                                                           device=self.device)
+#            assert (tmp == self.index_matrix).all()
 
             # Normalize the edges if necessary
             if normalize_graph_edges:
                 # Before normalization v ~ 1.
                 # After normalization v ~ 1/#neighbors so that sum_i v_ij ~ 1
                 m = torch.sparse.FloatTensor(ij_new, v, torch.Size([self.n_fg_pixel, self.n_fg_pixel]))
-                m_tmp = (torch.sparse.sum(m, dim=-1) + torch.sparse.sum(m, dim=-2)).coalesce()
-                sqrt_sum_edges_at_vertex = torch.sqrt(m_tmp._values())
-                v.div_(sqrt_sum_edges_at_vertex[ij_new[0]]*sqrt_sum_edges_at_vertex[ij_new[1]])
-                
+                if m._nnz() > 0:
+                    m_tmp = (torch.sparse.sum(m, dim=-1) + torch.sparse.sum(m, dim=-2)).coalesce()
+                    sqrt_sum_edges_at_vertex = torch.sqrt(m_tmp._values())
+                    v.div_(sqrt_sum_edges_at_vertex[ij_new[0]]*sqrt_sum_edges_at_vertex[ij_new[1]])
+                else:
+                    raise Exception("WARNING: Graph is empty. Nothing to do")
+
             print("Building the graph with python-igraph")
             return ig.Graph(vertex_attrs={"label": numpy.arange(self.n_fg_pixel, dtype=numpy.int64)},
                             edges=ij_new.permute(1, 0).cpu().numpy(),

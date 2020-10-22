@@ -9,8 +9,8 @@ import skimage.color
 import skimage.morphology
 import neptune
 
-from .namedtuple import BB, Output, Segmentation
-from .utilities_neptune import log_img_and_chart, log_img_only
+from MODULES.namedtuple import BB, Output, Segmentation
+from MODULES.utilities_neptune import log_img_and_chart, log_img_only
 
 
 def contours_from_labels(labels: numpy.ndarray,
@@ -72,23 +72,23 @@ def plot_label_contours(label: Union[torch.Tensor, numpy.ndarray],
     return fig
 
 
-def draw_img(prob: torch.tensor,
+def draw_img(c: torch.tensor,
              bounding_box: BB,
              big_mask: torch.tensor,
              big_img: torch.tensor,
              big_bg: torch.tensor,
              draw_bg: bool,
              draw_boxes: bool) -> torch.tensor:
-    assert len(prob.shape) == 2  # boxes, batch
+    assert len(c.shape) == 2  # boxes, batch
     assert len(big_mask.shape) == len(big_img.shape) == 5  # boxes, batch, ch, w, h
 
-    rec_imgs_no_bb = (prob[..., None, None, None] * big_mask * big_img).sum(dim=-5)  # sum over boxes
-    fg_mask = (prob[..., None, None, None] * big_mask).sum(dim=-5)  # sum over boxes
+    rec_imgs_no_bb = (c[..., None, None, None] * big_mask * big_img).sum(dim=-5)  # sum over boxes
+    fg_mask = (c[..., None, None, None] * big_mask).sum(dim=-5)  # sum over boxes
     background = (1 - fg_mask) * big_bg if draw_bg else torch.zeros_like(big_bg)
 
     width, height = rec_imgs_no_bb.shape[-2:]
 
-    bounding_boxes = draw_bounding_boxes(prob=prob,
+    bounding_boxes = draw_bounding_boxes(c=c,
                                          bounding_box=bounding_box,
                                          width=width,
                                          height=height) if draw_boxes else torch.zeros_like(rec_imgs_no_bb)
@@ -97,13 +97,13 @@ def draw_img(prob: torch.tensor,
     return mask_no_bb * (rec_imgs_no_bb + background) + ~mask_no_bb * bounding_boxes
 
 
-def draw_bounding_boxes(prob: Optional[torch.Tensor], bounding_box: BB, width: int, height: int) -> torch.Tensor:
+def draw_bounding_boxes(c: Optional[torch.Tensor], bounding_box: BB, width: int, height: int) -> torch.Tensor:
     # set all prob to one if they are not passed as input
-    if prob is None:
-        prob = torch.ones_like(bounding_box.bx)
+    if c is None:
+        c = torch.ones_like(bounding_box.bx).bool()
 
     # checks
-    assert prob.shape == bounding_box.bx.shape
+    assert c.shape == bounding_box.bx.shape
     assert len(bounding_box.bx.shape) == 2
     n_boxes, batch_size = bounding_box.bx.shape
 
@@ -125,8 +125,7 @@ def draw_bounding_boxes(prob: Optional[torch.Tensor], bounding_box: BB, width: i
         img = PIL.Image.new('RGB', (width, height), color=0)
         draw = PIL.ImageDraw.Draw(img)
         for box in range(n_boxes):
-            if prob[box, batch] > 0.5:
-            # if prob[box, batch] > -1:
+            if c[box, batch]:
                 draw.rectangle(x1y1x3y3[box, batch, :].cpu().numpy(), outline='red', fill=None)
         batch_bb_np[batch, ...] = numpy.array(img.getdata(), numpy.uint8).reshape((width, height, 3))
 
@@ -512,6 +511,35 @@ def plot_all_from_dictionary(history_dict: dict,
         print("leaving plot_all_from_dictionary ->"+train_or_test)
 
 
+def plot_generation(output: Output,
+                    epoch: int,
+                    prefix: str = "",
+                    postfix: str = "",
+                    verbose: bool = False):
+    if verbose:
+        print("in plot_reconstruction_and_inference")
+
+    _ = show_batch(output.imgs[:8],
+                   n_col=4,
+                   n_padding=4,
+                   title='imgs, epoch= {0:6d}'.format(epoch),
+                   neptune_name=prefix+"imgs"+postfix)
+    _ = show_batch(output.inference.sample_c_map[:8].float(),
+                   n_col=4,
+                   n_padding=4,
+                   title='c_map, epoch= {0:6d}'.format(epoch),
+                   normalize_range=None,
+                   neptune_name=prefix+"c_map"+postfix)
+    _ = show_batch(output.inference.big_bg[:8],
+                   n_col=4,
+                   n_padding=4,
+                   title='background, epoch= {0:6d}'.format(epoch),
+                   neptune_name=prefix+"bg"+postfix)
+
+    if verbose:
+        print("leaving plot_generation")
+
+
 def plot_reconstruction_and_inference(output: Output,
                                       epoch: int,
                                       prefix: str = "",
@@ -525,7 +553,13 @@ def plot_reconstruction_and_inference(output: Output,
                    n_padding=4,
                    title='imgs, epoch= {0:6d}'.format(epoch),
                    neptune_name=prefix+"imgs"+postfix)
-    _ = show_batch(output.inference.p_map[:8],
+    _ = show_batch(output.inference.sample_c_map[:8].float(),
+                   n_col=4,
+                   n_padding=4,
+                   title='c_map, epoch= {0:6d}'.format(epoch),
+                   normalize_range=None,
+                   neptune_name=prefix+"c_map"+postfix)
+    _ = show_batch(output.inference.prob_map[:8],
                    n_col=4,
                    n_padding=4,
                    title='p_map, epoch= {0:6d}'.format(epoch),

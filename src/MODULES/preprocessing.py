@@ -6,8 +6,7 @@ import numpy as np
 import PIL.Image
 PIL.Image.MAX_IMAGE_PIXELS = None
 from typing import Optional
-
-from .namedtuple import ImageBbox
+from MODULES.namedtuple import ImageBbox
 
 
 def pil_to_numpy(pilfile, mode: str = 'L', reduction_factor: int = 1):

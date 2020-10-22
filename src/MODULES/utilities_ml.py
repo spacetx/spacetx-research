@@ -1,12 +1,18 @@
 import torch
 import neptune
+import numpy
+import torch.nn.functional as F
 from torch.distributions.utils import broadcast_all
-from typing import Union, Callable, Optional
+from typing import Union, Callable, Optional, Tuple
 from collections import OrderedDict
+from torch.distributions.distribution import Distribution
+from torch.distributions import constraints
 
-from .utilities_visualization import show_batch
-from .namedtuple import DIST, MetricMiniBatch
-from .utilities_neptune import log_dict_metrics
+from MODULES.utilities import compute_average_in_box, compute_ranking, convert_to_box_list
+from MODULES.utilities import pass_bernoulli
+from MODULES.utilities_visualization import show_batch
+from MODULES.namedtuple import DIST, MetricMiniBatch, BB
+from MODULES.utilities_neptune import log_dict_metrics
 
 
 def are_broadcastable(a: torch.Tensor, b: torch.Tensor) -> bool:
@@ -35,92 +41,288 @@ def sample_and_kl_diagonal_normal(posterior_mu: torch.Tensor,
     return DIST(sample=sample, kl=kl)
 
 
-def _batch_mv(bmat, bvec):
-    """ Performs a batched matrix-vector product, with compatible but different batch shapes.
+def sample_and_kl_prob(logit_map: torch.Tensor,
+                       similarity_kernel: torch.Tensor,
+                       images: torch.Tensor,
+                       background: torch.Tensor,
+                       bounding_box_no_noise: BB,
+                       prob_corr_factor: float,
+                       noisy_sampling: bool,
+                       sample_from_prior: bool) -> Tuple[DIST, torch.Tensor]:
 
-        bmat shape (*, n, n)
-        bvec shape (*, n)
-        result = MatrixVectorMultiplication(bmat,bvec) of shape (*, n)
-
-        * represents all the batched dimensions which might or might not be presents
-
-        Very simple procedure
-        b = bvec.unsqueeze(-1) -> (*, n, 1)
-        c = torch.matmul(bmat, b) = (*, n, n) x (*, n , 1) -> (*, n, 1)
-        result = c.squeeze(-1) -> (*, n)
-    """
-    return torch.matmul(bmat, bvec.unsqueeze(-1)).squeeze(-1)
-
-
-def sample_and_kl_multivariate_normal(posterior_mu: torch.Tensor,
-                                      posterior_L_cov: torch.Tensor,
-                                      prior_mu: torch.Tensor,
-                                      prior_L_cov: torch.Tensor,
-                                      noisy_sampling: bool,
-                                      sample_from_prior: bool) -> DIST:
-
-    post_L, prior_L = broadcast_all(posterior_L_cov, prior_L_cov)  # (*, n, n)
-    post_mu, prior_mu = broadcast_all(posterior_mu, prior_mu)  # (*, n)
-    assert post_L.shape[-1] == post_L.shape[-2] == post_mu.shape[-1]  # number of grid points are the same
-    assert post_L.shape[:-2] == post_mu.shape[:-1]  # batch_size is the same
-
+    # Correction factor
     if sample_from_prior:
-        # working with the prior
-        eps = torch.randn_like(prior_mu)
-        sample = prior_mu + _batch_mv(prior_L, eps) if noisy_sampling else prior_mu  # size: *, n
-        kl = torch.zeros_like(prior_mu[..., 0])  # size: *
+        with torch.no_grad():
+            batch_size = torch.Size([logit_map.shape[0]])
+            s = similarity_kernel.requires_grad_(False)
+            c_all = FiniteDPP(L=s).sample(sample_shape=batch_size).transpose(-1, -2).float()
+            kl = torch.zeros(logit_map.shape[0])
+            q_all = torch.rand_like(c_all).float()
     else:
-        # working with the posterior
-        eps = torch.randn_like(post_mu)
-        sample = post_mu + _batch_mv(post_L, eps) if noisy_sampling else post_mu
-        kl = kl_multivariate_normal0_normal1(mu0=post_mu, mu1=prior_mu, L_cov0=post_L, L_cov1=prior_L)
-    return DIST(sample=sample, kl=kl)
+        # Work with posterior
+        if (prob_corr_factor > 0) and (prob_corr_factor <= 1.0):
+            with torch.no_grad():
+                av_intensity = compute_average_in_box((images - background).abs(), bounding_box_no_noise)
+                assert len(av_intensity.shape) == 2
+                n_boxes_all, batch_size = av_intensity.shape
+                ranking = compute_ranking(av_intensity)  # n_boxes_all, batch. It is in [0,n_box_all-1]
+                tmp = ((ranking + 1).float() / (n_boxes_all + 1))
+                q_approx = tmp.pow(10)
+
+            q_uncorrected = torch.sigmoid(convert_to_box_list(logit_map).squeeze(-1))
+            q_all = ((1 - prob_corr_factor) * q_uncorrected + prob_corr_factor * q_approx).clamp(min=1E-4, max=1 - 1E-4)
+            log_q = torch.log(q_all)
+            log_one_minus_q = torch.log1p(-q_all)
+        else:
+            logit_reshaped = convert_to_box_list(logit_map).squeeze(-1)
+            q_all = torch.sigmoid(logit_reshaped)
+            log_q = F.logsigmoid(logit_reshaped)
+            log_one_minus_q = F.logsigmoid(-logit_reshaped)
+
+        c_all = pass_bernoulli(prob=q_all, noisy_sampling=noisy_sampling)  # float variable which requires grad
+
+        # Here the gradients are only through log_q and similarity_kernel not c
+        c_no_grad = c_all.bool().detach()  # bool variable has requires_grad = False
+        log_prob_posterior = (c_no_grad * log_q + ~c_no_grad * log_one_minus_q).sum(dim=0)
+        log_prob_prior = FiniteDPP(L=similarity_kernel).log_prob(c_no_grad.transpose(-1, -2))  # shape: batch_shape
+        assert log_prob_posterior.shape == log_prob_prior.shape
+        kl = log_prob_posterior - log_prob_prior
+
+    return DIST(sample=c_all, kl=kl), q_all
 
 
-def kl_multivariate_normal0_normal1(mu0: torch.Tensor,
-                                    mu1: torch.Tensor,
-                                    L_cov0: torch.Tensor,
-                                    L_cov1: torch.Tensor) -> torch.Tensor:
+class SimilarityKernel(torch.nn.Module):
+    """ Similarity based on sum of gaussian kernels of different strength and length_scales """
+
+    def __init__(self, n_kernels: int = 4,
+                 pbc: bool = True,
+                 eps: float = 1E-4,
+                 length_scales: Optional[torch.Tensor] = None,
+                 kernel_weights: Optional[torch.Tensor] = None):
+        super().__init__()
+
+        self.n_kernels = n_kernels
+        self.eps = eps
+        self.pbc = pbc
+        self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+
+        if length_scales is None:
+            LENGTH_2 = 1.0
+            length_scales = torch.linspace(LENGTH_2/self.n_kernels, LENGTH_2,
+                                           steps=self.n_kernels,
+                                           device=self.device,
+                                           dtype=torch.float)
+        else:
+            length_scales = self._invertsoftplus(length_scales.float().to(self.device))
+        assert length_scales.shape[0] == self.n_kernels
+        self.similarity_length = torch.nn.Parameter(data=length_scales, requires_grad=True)
+
+        if kernel_weights is None:
+            kernel_weights = torch.ones(self.n_kernels,
+                                        device=self.device,
+                                        dtype=torch.float)/self.n_kernels
+        else:
+            kernel_weights = self._invertsoftplus(kernel_weights.float().to(self.device))
+        assert kernel_weights.shape[0] == self.n_kernels
+        self.similarity_w = torch.nn.Parameter(data=kernel_weights, requires_grad=True)
+
+        # Initialization
+        self.n_width = -1
+        self.n_height = -1
+        self.d2 = None
+        self.diag = None
+
+    def _invertsoftplus(self, x):
+        return torch.log(torch.exp(x)-1.0)
+
+    def _compute_d2_diag(self, n_width: int, n_height: int):
+        with torch.no_grad():
+            ix_array = torch.arange(start=0, end=n_width, dtype=torch.int, device=self.device)
+            iy_array = torch.arange(start=0, end=n_height, dtype=torch.int, device=self.device)
+            ix_grid, iy_grid = torch.meshgrid([ix_array, iy_array])
+            map_points = torch.stack((ix_grid, iy_grid), dim=-1)  # n_width, n_height, 2
+            locations = map_points.flatten(start_dim=0, end_dim=-2)  # (n_width*n_height, 2)
+            d = (locations.unsqueeze(-2) - locations.unsqueeze(-3)).abs()  # (n_width*n_height, n_width*n_height, 2)
+            if self.pbc:
+                d_pbc = d.clone()
+                d_pbc[..., 0] = -d[..., 0] + n_width
+                d_pbc[..., 1] = -d[..., 1] + n_height
+                d2 = torch.min(d, d_pbc).pow(2).sum(dim=-1).float()
+            else:
+                d2 = d.pow(2).sum(dim=-1).float()
+
+            diag = torch.eye(d2.shape[-2],
+                             dtype=torch.float,
+                             device=self.device,
+                             requires_grad=False) * self.eps
+            return d2, diag
+
+    def sample_2_mask(self, sample):
+        independent_dims = list(sample.shape[:-1])
+        mask = sample.view(independent_dims + [self.n_width, self.n_height])
+        return mask
+
+    def get_l_w(self):
+        return F.softplus(self.similarity_length)+1E-2, F.softplus(self.similarity_w)+1E-2
+
+    def forward(self, n_width: int, n_height: int):
+        """ Implement L = sum_i a_i exp[-b_i d2] """
+        l, w = self.get_l_w()
+
+        if (n_width != self.n_width) or (n_height != self.n_height):
+            self.n_width = n_width
+            self.n_height = n_height
+            self.d2, self.diag = self._compute_d2_diag(n_width=n_width, n_height=n_height)
+
+        likelihood_kernel = (w[..., None, None] *
+                             torch.exp(-0.5*self.d2/l[..., None, None].pow(2))).sum(dim=-3) + self.diag
+        return likelihood_kernel  # shape (n_width*n_height, n_width*n_height)
+
+
+class FiniteDPP(Distribution):
+    """ Finite DPP distribution defined via:
+        1. L = likelihood kernel of shape *,n,n
+        2. K = correlation kernel of shape *,n,n
+
+        The constraints are:
+        K = positive semidefinite, symmetric, eigenvalues in [0,1]
+        L = positive semidefinite, symmetric, eigenvalues >= 0
     """
-    Function that analytically computes the KL divergence between two MultivariateNormal distributions
-    (see https://en.wikipedia.org/wiki/Multivariate_normal_distribution#Kullback%E2%80%93Leibler_divergence)
 
-    Each MultivariateNormal is defined in terms of its mean and the cholesky decomposition of the covariance matrix
-    :param mu0: array with mean value of posterior, size (*, n)
-    :param mu1: array with mean value of prior, size (*, n)
-    :param L_cov0: lower triangular matrix with the decomposition on the covariance for the posterior, size (*, n, n)
-    :param L_cov1: lower triangular matrix with the decomposition on the covariance for the prior, size (*, n, n)
-    :return: kl: array with kl divergence between posterior and prior, size (*)
+    arg_constraints = {'K': constraints.positive_definite,
+                       'L': constraints.positive_definite}
+    support = constraints.boolean
+    has_rsample = False
 
-    Note that n is the number of locations where the MultivariateNormal is evaluated,
-    * represents all the batched dimensions which might or might not be presents
-    """
+    def __init__(self, K=None, L=None, validate_args=None):
 
-    assert are_broadcastable(mu0, mu1)  # (*, n)
-    assert are_broadcastable(L_cov0, L_cov1)  # (*, n, n)
-    n = L_cov0.shape[-1]
+        if (K is None and L is None) or (K is not None and L is not None):
+            raise Exception("only one among K and L need to be defined")
 
-    # Tr[cov1^(-1)cov0] = Tr[L L^T] = sum_of_element_wise_square(L)
-    # where L = L1^(-1) L0 -> Solve trilinear problem: L1 L = L0
-    L = torch.triangular_solve(L_cov0, A=L_cov1, upper=False, transpose=False, unitriangular=False)[0]  # (*,n,n)
-    trace_term = torch.sum(L.pow(2), dim=(-1, -2))  # (*)
-    # print("trace_term",trace_term.shape, trace_term)
+        elif K is not None:
+            self.K = 0.5 * (K + K.transpose(-1, -2))  # make sure it is symmetrized
+            u, s_k, v = torch.svd(self.K)
+            s_l = s_k / (1.0 - s_k)
+            self.L = torch.matmul(u * s_l.unsqueeze(-2), v.transpose(-1, -2))
 
-    # x^T conv1^(-1) x = z^T z where z = L1^(-1) x -> solve trilinear problem L1 z = x
-    dmu = (mu0 - mu1).unsqueeze(-1)  # (*,n,1)
-    z = torch.triangular_solve(dmu, A=L_cov1, upper=False, transpose=False, unitriangular=False)[0]  # (*,n,1)
-    # Now z.t*z is the sum over both n_points and dimension
-    square_term = z.pow(2).sum(dim=(-1, -2))  # (*)
-    # print("square_term",square_term.shape, square_term)
+            # Debug block
+            # tmp = torch.matmul(u * s_k.unsqueeze(-2), v.transpose(-1, -2))
+            # check = (tmp - self.K).abs().max()
+            # print("check ->",check)
+            # assert check < 1E-4
 
-    # log[det(cov)]= log[det(L L^T)] = logdet(L) + logdet(L^T) = 2 logdet(L)
-    # where logdet casn be computed as the sum of the diagonal elements
-    logdet1 = torch.diagonal(L_cov1, dim1=-1, dim2=-2).log().sum(-1)
-    logdet0 = torch.diagonal(L_cov0, dim1=-1, dim2=-2).log().sum(-1)
-    logdet_term = 2 * (logdet1 - logdet0)  # (*)  factor of 2 b/c log[det(L L^T)]= 2 log[det(L)]
-    # print("logdet_term",logdet_term.shape, logdet_term)
+        elif L is not None:
+            self.L = 0.5 * (L + L.transpose(-1, -2))  # make sure it is symmetrized
+            u, s_l, v = torch.svd(self.L)
+            s_k = s_l / (1.0 + s_l)
+            self.K = torch.matmul(u * s_k.unsqueeze(-2), v.transpose(-1, -2))
 
-    return 0.5 * (trace_term + square_term - n + logdet_term)
+            # Debug block
+            # tmp = torch.matmul(u * s_l.unsqueeze(-2), v.transpose(-1, -2))
+            # check = (tmp - self.L).abs().max()
+            # print("check ->",check)
+            # assert check < 1E-4
+        else:
+            raise Exception
+
+        self.s_l = s_l
+        # print("s_l ->", s_l)
+        batch_shape, event_shape = self.K.shape[:-2], self.K.shape[-1:]
+        super(FiniteDPP, self).__init__(batch_shape, event_shape, validate_args=validate_args)
+
+    def expand(self, batch_shape, _instance=None):
+        new = self._get_checked_instance(FiniteDPP, _instance)
+        batch_shape = torch.Size(batch_shape)
+        kernel_shape = batch_shape + self.event_shape + self.event_shape
+        value_shape = batch_shape + self.event_shape
+        new.s_l = self.s_l.expand(value_shape)
+        new.L = self.L.expand(kernel_shape)
+        new.K = self.K.expand(kernel_shape)
+        super(FiniteDPP, new).__init__(batch_shape,
+                                       self.event_shape,
+                                       validate_args=False)
+        new._validate_args = self._validate_args
+        return new
+
+    def sample(self, sample_shape=torch.Size()):
+        shape_value = self._extended_shape(sample_shape)  # shape = sample_shape + batch_shape + event_shape
+        shape_kernel = shape_value + self._event_shape  # shape = sample_shape + batch_shape + event_shape + event_shape
+
+        with torch.no_grad():
+            K = self.K.expand(shape_kernel).clone()
+            value = torch.zeros(shape_value, dtype=torch.bool, device=K.device)
+            rand = torch.rand(shape_value, dtype=K.dtype, device=K.device)
+
+            for j in range(rand.shape[-1]):
+                c = rand[..., j] < K[..., j, j]
+                value[..., j] = c
+                K[..., j, j] -= (~c).to(K.dtype)
+                K[..., j + 1:, j] /= K[..., j, j].unsqueeze(-1)
+                K[..., j + 1:, j + 1:] -= K[..., j + 1:, j].unsqueeze(-1) * K[..., j, j + 1:].unsqueeze(-2)
+
+            return value
+
+###    def OLD_log_prob(self, value):
+###        """ log_prob = logdet(Ls) - logdet(L+I)
+###            I am using the fact that eigen(L+I) = eigen(L)+1
+###            -> logdet(L+I)=log prod[ eigen(L+I) ] = sum log(eigen(L+I)) = sum log(eigen(L)+1)
+###
+###            # value.shape = sample_shape + batch_shape + event_shape
+###            # logdet(L+I).shape = batch_shape
+###            :rtype:
+###        """
+###        assert are_broadcastable(value, self.L[..., 0])
+###        assert self.L.device == value.device
+###        assert value.dtype == torch.bool
+###
+###        if self._validate_args:
+###            self._validate_sample(value)
+###
+###        logdet_L_plus_I = (self.s_l + 1).log().sum(dim=-1)  # batch_shape
+###
+###        # Reshapes
+###        independet_dims = list(value.shape[:-1])
+###        value = value.flatten(start_dim=0, end_dim=-2)  # *, event_shape
+###        L = self.L.expand(independet_dims + [-1, -1]).flatten(start_dim=0, end_dim=-3)  # *, event_shape, event_shape
+###        logdet_Ls = torch.zeros(independet_dims, dtype=self.L.dtype, device=value.device).view(-1)  # *
+###
+###        # Select rows and columns of the matrix which correspond to selected particles
+###        for i in range(logdet_Ls.shape[0]):
+###            tmp = L[i, value[i], :][:, value[i]]
+###            logdet_Ls[i] = torch.logdet(tmp)
+###        logdet_Ls = logdet_Ls.view(independet_dims)  # sample_shape, batch_shape
+###        return logdet_Ls - logdet_L_plus_I
+
+    def log_prob(self, value):
+        """ log_prob = logdet(Ls) - logdet(L+I)
+            I am using the fact that eigen(L+I) = eigen(L)+1
+            -> logdet(L+I)=log prod[ eigen(L+I) ] = sum log(eigen(L+I)) = sum log(eigen(L)+1)
+
+            # value.shape = sample_shape + batch_shape + event_shape
+            # logdet(L+I).shape = batch_shape
+            :rtype:
+        """
+        assert are_broadcastable(value, self.L[..., 0])
+        assert self.L.device == value.device
+        assert value.dtype == torch.bool
+
+        if self._validate_args:
+            self._validate_sample(value)
+
+        logdet_L_plus_I = (self.s_l + 1).log().sum(dim=-1)  # batch_shape
+
+        # Reshapes
+        independet_dims = list(value.shape[:-1])
+        value = value.flatten(start_dim=0, end_dim=-2)  # *, event_shape
+        L = self.L.expand(independet_dims + [-1, -1]).flatten(start_dim=0, end_dim=-3)  # *, event_shape, event_shape
+
+        n_max = torch.sum(value, dim=-1).max().item()
+        matrix = torch.eye(n_max, dtype=L.dtype, device=L.device).expand(L.shape[-3], n_max, n_max).clone()
+        for i in range(value.shape[0]):
+            n = torch.sum(value[i]).item()
+            matrix[i, :n, :n] = L[i, value[i], :][:, value[i]]
+        logdet_Ls = torch.logdet(matrix).view(independet_dims)  # sample_shape, batch_shape
+        return logdet_Ls - logdet_L_plus_I
 
 
 class Moving_Average_Calculator(object):
@@ -170,7 +372,10 @@ class Accumulator(object):
             x = value.detach().item() * counter_increment
         elif isinstance(value, float):
             x = value * counter_increment
+        elif isinstance(value, numpy.ndarray):
+            x = value * counter_increment
         else:
+            print(type(value))
             raise Exception
         self._dict_accumulate[key] = x + self._dict_accumulate.get(key, 0)
 
