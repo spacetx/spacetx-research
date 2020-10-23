@@ -109,16 +109,18 @@ class Inference_and_Generation(torch.nn.Module):
                                                              original_height=unet_output.logit.mu.shape[-2])
             else:
                 delta_logit_map = torch.zeros_like(unet_output.logit.mu)
-        logit_map = unet_output.logit.mu + delta_logit_map
+        logit_map_before_sampling = unet_output.logit.mu + delta_logit_map
 
         # similarity kernel is necessary to compute log_prob(c)
-        similarity_kernel = self.similarity_kernel_dpp.forward(n_width=logit_map.shape[-2],
-                                                               n_height=logit_map.shape[-1])
+        similarity_kernel = self.similarity_kernel_dpp.forward(n_width=logit_map_before_sampling.shape[-2],
+                                                               n_height=logit_map_before_sampling.shape[-1])
 
-        c_distribution: DIST = sample_and_kl_prob(logit_map=logit_map,
-                                                  similarity_kernel=similarity_kernel,
-                                                  noisy_sampling=noisy_sampling,
-                                                  sample_from_prior=generate_synthetic_data)
+        c_distribution: DIST
+        prob_map: torch.Tensor
+        c_distribution, prob_map = sample_and_kl_prob(logit_map=logit_map_before_sampling,
+                                                      similarity_kernel=similarity_kernel,
+                                                      noisy_sampling=noisy_sampling,
+                                                      sample_from_prior=generate_synthetic_data)
 
         zwhere_map: DIST = sample_and_kl_diagonal_normal(posterior_mu=unet_output.zwhere.mu,
                                                          posterior_std=unet_output.zwhere.std,
@@ -133,24 +135,20 @@ class Inference_and_Generation(torch.nn.Module):
                                            min_box_size=self.size_min,
                                            max_box_size=self.size_max)
 
-        area_all = bounding_box_all.bw * bounding_box_all.bh
-        area_map = invert_convert_to_box_list(area_all.unsqueeze(-1),
-                                              original_width=unet_output.logit.mu.shape[-2],
-                                              original_height=unet_output.logit.mu.shape[-1])
-
-        prob_map = torch.sigmoid(c_distribution.sample)
+        # select fex probabilities and c
         c_all = convert_to_box_list(c_distribution.sample).squeeze(-1)
+        p_all = convert_to_box_list(prob_map).squeeze(-1)
         with torch.no_grad():
             k = min(n_objects_max,  c_all.shape[0])
-            index_top_k = torch.topk(c_all, k=k, dim=-2, largest=True, sorted=True)[1]
-
+            index_top_k = torch.topk(c_all+p_all, k=k, dim=-2, largest=True, sorted=True)[1]
         c_few = torch.gather(c_all, dim=0, index=index_top_k)
-        prob_few = torch.gather(convert_to_box_list(prob_map).squeeze(-1), dim=0, index=index_top_k)
+        p_few = torch.gather(p_all, dim=0, index=index_top_k)
+
+        # select few zwhere and BoundingBoxes
         bounding_box_few: BB = BB(bx=torch.gather(bounding_box_all.bx, dim=0, index=index_top_k),
                                   by=torch.gather(bounding_box_all.by, dim=0, index=index_top_k),
                                   bw=torch.gather(bounding_box_all.bw, dim=0, index=index_top_k),
                                   bh=torch.gather(bounding_box_all.bh, dim=0, index=index_top_k))
-
         zwhere_kl_all = convert_to_box_list(zwhere_map.kl)  # shape: nbox_all, batch_size, ch
         zwhere_sample_all = convert_to_box_list(zwhere_map.sample)  # shape: nbox_all, batch_size, ch
         new_index = index_top_k.unsqueeze(-1).expand(-1, -1, zwhere_kl_all.shape[-1])  # shape: nbox_few, batch_size, ch
@@ -192,14 +190,19 @@ class Inference_and_Generation(torch.nn.Module):
         # -----------------------
         # 7. From weight to masks
         # ------------------------
-        mixing_interacting, mixing_non_interacting = from_w_to_mixing(w=big_weight * prob_few[..., None, None, None],
+        mixing_interacting, mixing_non_interacting = from_w_to_mixing(w=big_weight * p_few[..., None, None, None],
                                                                       dim=-5)
 
         # 8. Return the inferred quantities
         similarity_l, similarity_w = self.similarity_kernel_dpp.get_l_w()
+
+        area_all = bounding_box_all.bw * bounding_box_all.bh
+        area_map = invert_convert_to_box_list(area_all.unsqueeze(-1),
+                                              original_width=unet_output.logit.mu.shape[-2],
+                                              original_height=unet_output.logit.mu.shape[-1])
         return Inference(area_map=area_map,
                          prob_map=prob_map,
-                         prob_few=prob_few,
+                         prob_few=p_few,
                          c_few=c_few,
                          bb_few=bounding_box_few,
                          big_bg=big_bg,

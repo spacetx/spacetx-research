@@ -387,9 +387,9 @@ class CompositionalVae(torch.nn.Module):
                                                                 bg_is_zero=True,
                                                                 bg_resolution=(1, 1))
 
-            mixing_fg = torch.sum(inference.mixing, dim=-5)
-            mixing_bg = torch.ones_like(mixing_fg) - mixing_fg
-            mixing_all = torch.cat((mixing_bg, mixing_fg), dim=-5)  # shape: n_boxes, batch_size, ch, w, h
+            mixing_fg = torch.sum(inference.mixing, dim=-5, keepdim=False)  # shape: batch_size, ch, w, h
+            mixing_bg = (torch.ones_like(mixing_fg) - mixing_fg)            # shape: batch_size, ch, w, h
+            mixing_all = torch.cat((mixing_bg.unsqueeze(-5), inference.mixing), dim=-5)  # shape: n_boxes+1, batch_size, ch, w, h
 
             # Compute the most_likely component and make sure that it has probability > 0.5
             most_likely_mixing, index = torch.max(mixing_all, dim=-5, keepdim=False)  # 1, batch_size, 1, w, h

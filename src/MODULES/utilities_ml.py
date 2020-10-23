@@ -8,7 +8,7 @@ from collections import OrderedDict
 from torch.distributions.distribution import Distribution
 from torch.distributions import constraints
 
-from MODULES.utilities import invert_convert_to_box_list, pass_bernoulli
+from MODULES.utilities import invert_convert_to_box_list, pass_bernoulli, prob_to_logit
 from MODULES.utilities_visualization import show_batch
 from MODULES.namedtuple import DIST, MetricMiniBatch
 from MODULES.utilities_neptune import log_dict_metrics
@@ -43,7 +43,9 @@ def sample_and_kl_diagonal_normal(posterior_mu: torch.Tensor,
 def sample_and_kl_prob(logit_map: torch.Tensor,
                        similarity_kernel: torch.Tensor,
                        noisy_sampling: bool,
-                       sample_from_prior: bool) -> DIST:
+                       sample_from_prior: bool) -> (DIST, torch.Tensor):
+    """ Return DIST(c_map, kl), prob_map """
+    assert len(logit_map.shape) == 4
 
     # Correction factor
     if sample_from_prior:
@@ -51,15 +53,18 @@ def sample_and_kl_prob(logit_map: torch.Tensor,
             batch_size = torch.Size([logit_map.shape[0]])
             s = similarity_kernel.requires_grad_(False)
             c_all = FiniteDPP(L=s).sample(sample_shape=batch_size).transpose(-1, -2).float()
+            # print("c_all.shape", c_all.shape)
             c_map = invert_convert_to_box_list(c_all.unsqueeze(-1),
                                                original_width=logit_map.shape[-2],
                                                original_height=logit_map.shape[-1])
             kl = torch.zeros(logit_map.shape[0])
+            p_map = c_map.float()
     else:
         # Work with posterior
         log_q_map = F.logsigmoid(logit_map)
         log_one_minus_q_map = F.logsigmoid(-logit_map)
-        c_map = pass_bernoulli(prob=torch.sigmoid(logit_map), noisy_sampling=noisy_sampling)  # float variable which requires grad
+        p_map = torch.sigmoid(logit_map)
+        c_map = pass_bernoulli(prob=p_map, noisy_sampling=noisy_sampling)  # float variable which requires grad
 
         # Here the gradients are only through log_q and similarity_kernel not c
         c_map_no_grad = c_map.bool().detach()  # bool variable has requires_grad = False
@@ -70,7 +75,7 @@ def sample_and_kl_prob(logit_map: torch.Tensor,
         assert log_prob_posterior.shape == log_prob_prior.shape
         kl = log_prob_posterior - log_prob_prior
 
-    return DIST(sample=c_map, kl=kl)
+    return DIST(sample=c_map, kl=kl), p_map
 
 
 class SimilarityKernel(torch.nn.Module):

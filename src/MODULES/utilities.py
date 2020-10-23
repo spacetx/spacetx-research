@@ -84,9 +84,9 @@ class PassBernoulli(torch.autograd.Function):
     @staticmethod
     def forward(ctx, p, noisy_sampling):
         if noisy_sampling:
-            c = torch.rand_like(p) < p
+            c = (torch.rand_like(p) < p)
         else:
-            c = (p > 0.5)
+            c = (0.5 < p)
         return c.float().requires_grad_(True)
 
     @staticmethod
