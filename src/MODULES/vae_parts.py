@@ -134,7 +134,7 @@ class Inference_and_Generation(torch.nn.Module):
                                               original_height=unet_output.logit.mu.shape[-1])
 
         with torch.no_grad():
-            topk_only = True
+            # topk_only = True
             nms_output: NMSoutput = NonMaxSuppression.compute_mask_and_index(score=q_all+c_all.sample,
                                                                              bounding_box=bounding_box_all,
                                                                              overlap_threshold=overlap_threshold,
