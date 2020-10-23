@@ -6,8 +6,8 @@ from MODULES.unet_model import UNet
 from MODULES.encoders_decoders import EncoderConv, DecoderConv, Decoder1by1Linear, DecoderBackground
 from MODULES.utilities import tmaps_to_bb, convert_to_box_list, invert_convert_to_box_list, compute_prob_correction, prob_to_logit
 from MODULES.utilities_ml import sample_and_kl_diagonal_normal, sample_and_kl_prob, SimilarityKernel
-from MODULES.namedtuple import Inference, BB, UNEToutput, ZZ, DIST
-# from MODULES.non_max_suppression import NonMaxSuppression
+from MODULES.namedtuple import Inference, BB, UNEToutput, ZZ, DIST, NMSoutput
+from MODULES.non_max_suppression import NonMaxSuppression
 
 
 def from_w_to_mixing(w: torch.Tensor, dim: int):
@@ -89,17 +89,19 @@ class Inference_and_Generation(torch.nn.Module):
             big_bg = torch.sigmoid(self.decoder_zbg(z=zbg.sample,
                                                     high_resolution=(imgs_in.shape[-2], imgs_in.shape[-1])))
 
-        # correct prob if necessary:
+        # Correct probability if necessary
         with torch.no_grad():
+            bounding_box_no_noise: BB = tmaps_to_bb(tmaps=torch.sigmoid(self.decoder_zwhere(unet_output.zwhere.mu)),
+                                                    width_raw_image=width_raw_image,
+                                                    height_raw_image=height_raw_image,
+                                                    min_box_size=self.size_min,
+                                                    max_box_size=self.size_max)
+
             if (prob_corr_factor > 0) and (prob_corr_factor <= 1.0):
-                bounding_box_no_noise: BB = tmaps_to_bb(tmaps=torch.sigmoid(self.decoder_zwhere(unet_output.zwhere.mu)),
-                                                        width_raw_image=width_raw_image,
-                                                        height_raw_image=height_raw_image,
-                                                        min_box_size=self.size_min,
-                                                        max_box_size=self.size_max)
                 delta_p = compute_prob_correction(images=imgs_in,
                                                   background=big_bg,
                                                   bounding_box=bounding_box_no_noise)
+
                 logit_uncorrected = convert_to_box_list(unet_output.logit.mu).squeeze(-1)
                 p_uncorrected = torch.sigmoid(logit_uncorrected)
                 p_corrected = ((1 - prob_corr_factor) * p_uncorrected + prob_corr_factor * delta_p)
@@ -109,7 +111,26 @@ class Inference_and_Generation(torch.nn.Module):
                                                              original_height=unet_output.logit.mu.shape[-2])
             else:
                 delta_logit_map = torch.zeros_like(unet_output.logit.mu)
-        logit_map_before_sampling = unet_output.logit.mu + delta_logit_map
+        logit_map = unet_output.logit.mu + delta_logit_map
+
+        # similarity kernel is necessary to compute log_prob(c)
+        similarity_kernel = self.similarity_kernel_dpp.forward(n_width=logit_map.shape[-2],
+                                                               n_height=logit_map.shape[-1])
+        c_map: DIST = sample_and_kl_prob(logit_map=logit_map,
+                                         similarity_kernel=similarity_kernel,
+                                         noisy_sampling=noisy_sampling,
+                                         sample_from_prior=generate_synthetic_data)
+        prob_map = torch.sigmoid(logit_map)
+        prob_all = convert_to_box_list(prob_map).squeeze(-1)
+        c_all = convert_to_box_list(c_map.sample).squeeze(-1)
+
+        # NMS based on prob_all + c_all
+        with torch.no_grad():
+            nms_output: NMSoutput = NonMaxSuppression.compute_mask_and_index(score=prob_all + c_all,
+                                                                             bounding_box=bounding_box_no_noise,
+                                                                             overlap_threshold=overlap_threshold,
+                                                                             n_objects_max=n_objects_max,
+                                                                             topk_only=topk_only)
 
         zwhere_map: DIST = sample_and_kl_diagonal_normal(posterior_mu=unet_output.zwhere.mu,
                                                          posterior_std=unet_output.zwhere.std,
@@ -124,34 +145,16 @@ class Inference_and_Generation(torch.nn.Module):
                                            min_box_size=self.size_min,
                                            max_box_size=self.size_max)
 
-        # similarity kernel is necessary to compute log_prob(c)
-        similarity_kernel = self.similarity_kernel_dpp.forward(n_width=logit_map_before_sampling.shape[-2],
-                                                               n_height=logit_map_before_sampling.shape[-1])
-
-        c_distribution: DIST
-        prob_map: torch.Tensor
-        c_distribution, prob_map = sample_and_kl_prob(logit_map=logit_map_before_sampling,
-                                                      similarity_kernel=similarity_kernel,
-                                                      noisy_sampling=noisy_sampling,
-                                                      sample_from_prior=generate_synthetic_data)
-
-        # select fex probabilities and c
-        c_all = convert_to_box_list(c_distribution.sample).squeeze(-1)
-        p_all = convert_to_box_list(prob_map).squeeze(-1)
-        with torch.no_grad():
-            k = min(n_objects_max,  c_all.shape[0])
-            index_top_k = torch.topk(c_all+p_all, k=k, dim=-2, largest=True, sorted=True)[1]
-        c_few = torch.gather(c_all, dim=0, index=index_top_k)
-        p_few = torch.gather(p_all, dim=0, index=index_top_k)
-
-        # select few zwhere and BoundingBoxes
-        bounding_box_few: BB = BB(bx=torch.gather(bounding_box_all.bx, dim=0, index=index_top_k),
-                                  by=torch.gather(bounding_box_all.by, dim=0, index=index_top_k),
-                                  bw=torch.gather(bounding_box_all.bw, dim=0, index=index_top_k),
-                                  bh=torch.gather(bounding_box_all.bh, dim=0, index=index_top_k))
+        # select few based on NMS
+        c_few = torch.gather(c_all, dim=0, index=nms_output.index_top_k)
+        prob_few = torch.gather(prob_all, dim=0, index=nms_output.index_top_k)
+        bounding_box_few: BB = BB(bx=torch.gather(bounding_box_all.bx, dim=0, index=nms_output.index_top_k),
+                                  by=torch.gather(bounding_box_all.by, dim=0, index=nms_output.index_top_k),
+                                  bw=torch.gather(bounding_box_all.bw, dim=0, index=nms_output.index_top_k),
+                                  bh=torch.gather(bounding_box_all.bh, dim=0, index=nms_output.index_top_k))
         zwhere_kl_all = convert_to_box_list(zwhere_map.kl)  # shape: nbox_all, batch_size, ch
         zwhere_sample_all = convert_to_box_list(zwhere_map.sample)  # shape: nbox_all, batch_size, ch
-        new_index = index_top_k.unsqueeze(-1).expand(-1, -1, zwhere_kl_all.shape[-1])  # shape: nbox_few, batch_size, ch
+        new_index = nms_output.index_top_k.unsqueeze(-1).expand(-1, -1, zwhere_kl_all.shape[-1])  # shape: nbox_few, batch_size, ch
         zwhere_sample_few = torch.gather(zwhere_sample_all, dim=0, index=new_index)  # shape: nbox_few, batch_size, ch
         zwhere_kl_few = torch.gather(zwhere_kl_all, dim=0, index=new_index)  # shape: nbox_few, batch_size, ch)
 
@@ -190,7 +193,8 @@ class Inference_and_Generation(torch.nn.Module):
         # -----------------------
         # 7. From weight to masks
         # ------------------------
-        mixing_interacting, mixing_non_interacting = from_w_to_mixing(w=big_weight * p_few[..., None, None, None],
+        # TODO: use prob_few, c_few or nothing?
+        mixing_interacting, mixing_non_interacting = from_w_to_mixing(w=big_weight * prob_few[..., None, None, None],
                                                                       dim=-5)
 
         # 8. Return the inferred quantities
@@ -202,7 +206,7 @@ class Inference_and_Generation(torch.nn.Module):
                                               original_height=unet_output.logit.mu.shape[-1])
         return Inference(area_map=area_map,
                          prob_map=prob_map,
-                         prob_few=p_few,
+                         prob_few=prob_few,
                          c_few=c_few,
                          bb_few=bounding_box_few,
                          big_bg=big_bg,
@@ -210,12 +214,12 @@ class Inference_and_Generation(torch.nn.Module):
                          mixing_non_interacting=mixing_non_interacting,
                          big_img=big_img,
                          # the sample of the 4 latent variables
-                         sample_c_map=c_distribution.sample,
+                         sample_c_map=c_map.sample,
                          sample_zwhere=zwhere_sample_few,
                          sample_zinstance=zinstance_few.sample,
                          sample_zbg=zbg.sample,
                          # the kl of the 4 latent variables
-                         kl_logit=c_distribution.kl,
+                         kl_logit=c_map.kl,
                          kl_zwhere=zwhere_kl_few,
                          kl_zinstance=zinstance_few.kl,
                          kl_zbg=zbg.kl,

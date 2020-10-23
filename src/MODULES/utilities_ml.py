@@ -86,6 +86,7 @@ class SimilarityKernel(torch.nn.Module):
                  eps: float = 1E-3,
                  length_scales: Optional[torch.Tensor] = None,
                  kernel_weights: Optional[torch.Tensor] = None):
+        """ It is safer to set pbc=False b/c the matrix might become ill-conditioned otherwise """
         super().__init__()
 
         self.n_kernels = n_kernels
@@ -173,6 +174,9 @@ class FiniteDPP(Distribution):
         The constraints are:
         K = positive semidefinite, symmetric, eigenvalues in [0,1]
         L = positive semidefinite, symmetric, eigenvalues >= 0
+
+        Need to be careful about svd decomposition which can become unstable on GPU or CPU
+        https://github.com/pytorch/pytorch/issues/28293
     """
 
     arg_constraints = {'K': constraints.positive_definite,
@@ -187,7 +191,11 @@ class FiniteDPP(Distribution):
 
         elif K is not None:
             self.K = 0.5 * (K + K.transpose(-1, -2))  # make sure it is symmetrized
-            u, s_k, v = torch.svd(self.K)
+            try:
+                u, s_k, v = torch.svd(self.K)
+            except:
+                # torch.svd may have convergence issues for GPU and CPU.
+                u, s_k, v = torch.svd(self.K + 1e-3 * self.K.mean() * torch.ones_like(self.K))
             s_l = s_k / (1.0 - s_k)
             self.L = torch.matmul(u * s_l.unsqueeze(-2), v.transpose(-1, -2))
 
@@ -199,7 +207,11 @@ class FiniteDPP(Distribution):
 
         elif L is not None:
             self.L = 0.5 * (L + L.transpose(-1, -2))  # make sure it is symmetrized
-            u, s_l, v = torch.svd(self.L)
+            try:
+                u, s_l, v = torch.svd(self.L)
+            except:
+                # torch.svd may have convergence issues for GPU and CPU.
+                u, s_l, v = torch.svd(self.L + 1e-3 * self.L.mean() * torch.ones_like(self.L))
             s_k = s_l / (1.0 + s_l)
             self.K = torch.matmul(u * s_k.unsqueeze(-2), v.transpose(-1, -2))
 
