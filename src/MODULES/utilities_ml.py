@@ -8,9 +8,10 @@ from collections import OrderedDict
 from torch.distributions.distribution import Distribution
 from torch.distributions import constraints
 
-from MODULES.utilities import pass_bernoulli, invert_convert_to_box_list
+from MODULES.utilities import compute_average_in_box, compute_ranking, convert_to_box_list
+from MODULES.utilities import pass_bernoulli
 from MODULES.utilities_visualization import show_batch
-from MODULES.namedtuple import DIST, MetricMiniBatch
+from MODULES.namedtuple import DIST, MetricMiniBatch, BB
 from MODULES.utilities_neptune import log_dict_metrics
 
 
@@ -42,10 +43,12 @@ def sample_and_kl_diagonal_normal(posterior_mu: torch.Tensor,
 
 def sample_and_kl_prob(logit_map: torch.Tensor,
                        similarity_kernel: torch.Tensor,
+                       images: torch.Tensor,
+                       background: torch.Tensor,
+                       bounding_box_no_noise: BB,
+                       prob_corr_factor: float,
                        noisy_sampling: bool,
-                       sample_from_prior: bool) -> (DIST, torch.Tensor):
-    """ Return DIST(c_map, kl), prob_map """
-    assert len(logit_map.shape) == 4
+                       sample_from_prior: bool) -> Tuple[DIST, torch.Tensor]:
 
     # Correction factor
     if sample_from_prior:
@@ -53,29 +56,39 @@ def sample_and_kl_prob(logit_map: torch.Tensor,
             batch_size = torch.Size([logit_map.shape[0]])
             s = similarity_kernel.requires_grad_(False)
             c_all = FiniteDPP(L=s).sample(sample_shape=batch_size).transpose(-1, -2).float()
-            # print("c_all.shape", c_all.shape)
-            c_map = invert_convert_to_box_list(c_all.unsqueeze(-1),
-                                               original_width=logit_map.shape[-2],
-                                               original_height=logit_map.shape[-1])
             kl = torch.zeros(logit_map.shape[0])
-            p_map = c_map.float()
+            q_all = c_all.clamp(min=1E-3, max=0.999)
     else:
         # Work with posterior
-        log_q_map = F.logsigmoid(logit_map)
-        log_one_minus_q_map = F.logsigmoid(-logit_map)
-        p_map = torch.sigmoid(logit_map)
-        c_map = pass_bernoulli(prob=p_map, noisy_sampling=noisy_sampling)  # float variable which requires grad
+        if (prob_corr_factor > 0) and (prob_corr_factor <= 1.0):
+            with torch.no_grad():
+                av_intensity = compute_average_in_box((images - background).abs(), bounding_box_no_noise)
+                assert len(av_intensity.shape) == 2
+                n_boxes_all, batch_size = av_intensity.shape
+                ranking = compute_ranking(av_intensity)  # n_boxes_all, batch. It is in [0,n_box_all-1]
+                tmp = ((ranking + 1).float() / (n_boxes_all + 1))
+                q_approx = tmp.pow(10)
+
+            q_uncorrected = torch.sigmoid(convert_to_box_list(logit_map).squeeze(-1))
+            q_all = ((1 - prob_corr_factor) * q_uncorrected + prob_corr_factor * q_approx).clamp(min=1E-4, max=1 - 1E-4)
+            log_q = torch.log(q_all)
+            log_one_minus_q = torch.log1p(-q_all)
+        else:
+            logit_reshaped = convert_to_box_list(logit_map).squeeze(-1)
+            q_all = torch.sigmoid(logit_reshaped)
+            log_q = F.logsigmoid(logit_reshaped)
+            log_one_minus_q = F.logsigmoid(-logit_reshaped)
+
+        c_all = pass_bernoulli(prob=q_all, noisy_sampling=noisy_sampling)  # float variable which requires grad
 
         # Here the gradients are only through log_q and similarity_kernel not c
-        c_map_no_grad = c_map.bool().detach()  # bool variable has requires_grad = False
-        log_prob_posterior = (c_map_no_grad * log_q_map + ~c_map_no_grad * log_one_minus_q_map).sum(dim=(-1, -2, -3))
-        c_map_no_grad_flatten = c_map_no_grad.flatten(start_dim=1)
-        log_prob_prior = FiniteDPP(L=similarity_kernel).log_prob(c_map_no_grad_flatten)
-
+        c_no_grad = c_all.bool().detach()  # bool variable has requires_grad = False
+        log_prob_posterior = (c_no_grad * log_q + ~c_no_grad * log_one_minus_q).sum(dim=0)
+        log_prob_prior = FiniteDPP(L=similarity_kernel).log_prob(c_no_grad.transpose(-1, -2))  # shape: batch_shape
         assert log_prob_posterior.shape == log_prob_prior.shape
         kl = log_prob_posterior - log_prob_prior
 
-    return DIST(sample=c_map, kl=kl), p_map
+    return DIST(sample=c_all, kl=kl), q_all
 
 
 class SimilarityKernel(torch.nn.Module):
@@ -149,7 +162,7 @@ class SimilarityKernel(torch.nn.Module):
         return mask
 
     def get_l_w(self):
-        return F.softplus(self.similarity_length)+1E-2, F.softplus(self.similarity_w)+1E-2
+        return F.softplus(self.similarity_length)+1.0, F.softplus(self.similarity_w)+1E-2
 
     def forward(self, n_width: int, n_height: int):
         """ Implement L = sum_i a_i exp[-b_i d2] """
@@ -224,7 +237,6 @@ class FiniteDPP(Distribution):
             raise Exception
 
         self.s_l = s_l
-        # print("s_l ->", s_l)
         batch_shape, event_shape = self.K.shape[:-2], self.K.shape[-1:]
         super(FiniteDPP, self).__init__(batch_shape, event_shape, validate_args=validate_args)
 

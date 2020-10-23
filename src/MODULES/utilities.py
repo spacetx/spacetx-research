@@ -43,24 +43,6 @@ def tmaps_to_bb(tmaps, width_raw_image: int, height_raw_image: int, min_box_size
               bh=convert_to_box_list(bh_map).squeeze(-1))
 
 
-def compute_prob_correction(images: torch.Tensor,
-                            background: torch.Tensor,
-                            bounding_box: BB):
-    av_intensity = compute_average_in_box((images - background).abs(), bounding_box)
-    assert len(av_intensity.shape) == 2
-    n_boxes_all, batch_size = av_intensity.shape
-    ranking = compute_ranking(av_intensity)  # n_boxes_all, batch. It is in [0,n_box_all-1]
-    tmp = ((ranking + 1).float() / (n_boxes_all + 1))
-    q_approx = tmp.pow(10)
-    return q_approx
-
-
-def prob_to_logit(prob: torch.Tensor, eps: Optional[float] = None):
-    if eps is not None:
-        prob = prob.clamp(min=eps, max=1.0-eps)
-    return torch.log(prob) - torch.log1p(-prob)
-
-
 ### class PassMask(torch.autograd.Function):
 ###     """ Forward is c=c*mask. Backward is identity"""
 ###
