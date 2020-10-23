@@ -94,7 +94,7 @@ class SimilarityKernel(torch.nn.Module):
         self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
         if length_scales is None:
-            LENGTH_2 = 1.0
+            LENGTH_2 = 10.0
             length_scales = torch.linspace(LENGTH_2/self.n_kernels, LENGTH_2,
                                            steps=self.n_kernels,
                                            device=self.device,
@@ -155,6 +155,7 @@ class SimilarityKernel(torch.nn.Module):
     def forward(self, n_width: int, n_height: int):
         """ Implement L = sum_i a_i exp[-b_i d2] """
         l, w = self.get_l_w()
+        l2 = l.pow(2)
 
         if (n_width != self.n_width) or (n_height != self.n_height):
             self.n_width = n_width
@@ -162,7 +163,7 @@ class SimilarityKernel(torch.nn.Module):
             self.d2, self.diag = self._compute_d2_diag(n_width=n_width, n_height=n_height)
 
         likelihood_kernel = (w[..., None, None] *
-                             torch.exp(-0.5*self.d2/l[..., None, None].pow(2))).sum(dim=-3) + self.diag
+                             torch.exp(-0.5*self.d2/l2[..., None, None])).sum(dim=-3) + self.diag
         return likelihood_kernel  # shape (n_width*n_height, n_width*n_height)
 
 
