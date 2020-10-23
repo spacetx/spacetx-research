@@ -94,7 +94,7 @@ class SimilarityKernel(torch.nn.Module):
         self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
         if length_scales is None:
-            LENGTH_2 = 10.0
+            LENGTH_2 = 0.1
             length_scales = torch.linspace(LENGTH_2/self.n_kernels, LENGTH_2,
                                            steps=self.n_kernels,
                                            device=self.device,
