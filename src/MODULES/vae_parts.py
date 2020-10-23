@@ -10,8 +10,9 @@ from MODULES.namedtuple import Inference, NMSoutput, BB, UNEToutput, ZZ, DIST
 from MODULES.non_max_suppression import NonMaxSuppression
 
 
-def from_weights_to_masks(weight: torch.Tensor, dim: int):
-    """ Make sure that when summing over dim=dim the mask sum to zero or one
+def from_w_to_pi(weight: torch.Tensor, dim: int):
+    """ Compute the interacting and non-interacting mixing probabilities
+        Make sure that when summing over dim=dim the mask sum to zero or one
         mask_j = fg_mask * partitioning_j
         where fg_mask = tanh ( sum_i w_i) and partitioning_j = w_j / (sum_i w_i)
     """
@@ -19,7 +20,7 @@ def from_weights_to_masks(weight: torch.Tensor, dim: int):
     sum_weight = torch.sum(weight, dim=dim, keepdim=True)
     fg_mask = torch.tanh(sum_weight)
     partitioning = weight / torch.clamp(sum_weight, min=1E-6)
-    return fg_mask * partitioning
+    return fg_mask * partitioning, torch.tanh(weight)
 
 
 class Inference_and_Generation(torch.nn.Module):
@@ -133,6 +134,7 @@ class Inference_and_Generation(torch.nn.Module):
                                               original_height=unet_output.logit.mu.shape[-1])
 
         with torch.no_grad():
+            topk_only = True
             nms_output: NMSoutput = NonMaxSuppression.compute_mask_and_index(score=q_all+c_all.sample,
                                                                              bounding_box=bounding_box_all,
                                                                              overlap_threshold=overlap_threshold,
@@ -186,8 +188,8 @@ class Inference_and_Generation(torch.nn.Module):
         # -----------------------
         # 7. From weight to masks
         # ------------------------
-        big_mask = from_weights_to_masks(weight=big_weight, dim=-5)
-        big_mask_NON_interacting = torch.tanh(big_weight)
+        # TODO: try both q_few and c_few
+        mixing, mixing_non_interacting = from_w_to_pi(weight=big_weight * q_few[..., None, None, None], dim=-5)
 
         # 8. Return the inferred quantities
         similarity_l, similarity_w = self.similarity_kernel_dpp.get_l_w()
@@ -195,8 +197,8 @@ class Inference_and_Generation(torch.nn.Module):
                          prob_map=q_map,
                          prob_few=q_few,
                          big_bg=big_bg,
-                         big_mask=big_mask,
-                         big_mask_NON_interacting=big_mask_NON_interacting,
+                         mixing=mixing,
+                         mixing_non_interacting=mixing_non_interacting,
                          big_img=big_img,
                          # the sample of the 4 latent variables
                          sample_c_map=c_map,
