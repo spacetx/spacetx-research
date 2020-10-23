@@ -37,7 +37,9 @@ class Inference_and_Generation(torch.nn.Module):
 
 
         # modules
-        self.similarity_kernel_dpp = SimilarityKernel(n_kernels=params["DPP"]["n_kernels"])
+        self.similarity_kernel_dpp = SimilarityKernel(n_kernels=params["DPP"]["n_kernels"],
+                                                      length_scales=10.0 * torch.ones(1),
+                                                      kernel_weights=0.1 * torch.ones(1))
         self.unet: UNet = UNet(params)
 
         # Decoders
