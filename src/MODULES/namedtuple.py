@@ -268,8 +268,8 @@ class Inference(NamedTuple):
     kl_zwhere: torch.Tensor     # boxes_few, batch_size, latent_dim
     kl_zinstance: torch.Tensor  # boxes_few, batch_size, latent_dim
     # similarity DPP
-    similarity_sigma2: torch.Tensor
-    similarity_weights: torch.Tensor
+    similarity_l: torch.Tensor
+    similarity_w: torch.Tensor
 
 
 class RegMiniBatch(NamedTuple):
@@ -311,8 +311,8 @@ class MetricMiniBatch(NamedTuple):
     delta_1: float
     delta_2: float
 
-    similarity_sigma2: numpy.ndarray
-    similarity_weights: numpy.ndarray
+    similarity_l: numpy.ndarray
+    similarity_w: numpy.ndarray
 
 
     def pretty_print(self, epoch: int=0) -> str:
