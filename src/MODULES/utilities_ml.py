@@ -82,7 +82,7 @@ class SimilarityKernel(torch.nn.Module):
     """ Similarity based on sum of gaussian kernels of different strength and length_scales """
 
     def __init__(self, n_kernels: int = 4,
-                 pbc: bool = True,
+                 pbc: bool = False,
                  eps: float = 1E-3,
                  length_scales: Optional[torch.Tensor] = None,
                  kernel_weights: Optional[torch.Tensor] = None):
