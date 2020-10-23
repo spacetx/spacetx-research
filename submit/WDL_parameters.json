@@ -2,7 +2,7 @@
   "neptune_ml.credentials_json": "gs://ld-data-bucket/credentials.json",
   "neptune_ml.data_train": "gs://ld-data-bucket/cell_segmenter/smFISH/streamlined_8_smFISH_stitched_OLEH.tif",
   "neptune_ml.data_test": "gs://ld-data-bucket/cell_segmenter/smFISH/dummy1.pt",
-  "neptune_ml.git_branch_or_commit": "exp_mixing_multiplied_by_p_or_c",
-  "neptune_ml.git_repo":  "https://github.com/spacetx/spacetx-research.git"
+  "neptune_ml.git_branch_or_commit": "exp_topk_instead_of_NMS",
+"neptune_ml.git_repo":  "https://github.com/spacetx/spacetx-research.git"
 }
 
