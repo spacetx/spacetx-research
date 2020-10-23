@@ -10,16 +10,18 @@ from MODULES.namedtuple import Inference, BB, UNEToutput, ZZ, DIST
 # from MODULES.non_max_suppression import NonMaxSuppression
 
 
-def from_weights_to_masks(weight: torch.Tensor, dim: int):
-    """ Make sure that when summing over dim=dim the mask sum to zero or one
-        mask_j = fg_mask * partitioning_j
-        where fg_mask = tanh ( sum_i w_i) and partitioning_j = w_j / (sum_i w_i)
+def from_w_to_mixing(w: torch.Tensor, dim: int):
+    """ Compute both the interacting and non-interacting mixing probabilities,
+        pi_k = fg_mask * partitioning_k
+        where:
+        fg_mask = tanh ( sum_k w_k) and partitioning_k = w_k / (sum_j w_j)
+        Note that expression is valid for: w, w*p, w*c .... everything which is >= 0
     """
-    assert len(weight.shape) == 5
-    sum_weight = torch.sum(weight, dim=dim, keepdim=True)
+    assert len(w.shape) == 5
+    sum_weight = torch.sum(w, dim=dim, keepdim=True)
     fg_mask = torch.tanh(sum_weight)
-    partitioning = weight / torch.clamp(sum_weight, min=1E-6)
-    return fg_mask * partitioning
+    partitioning = w / torch.clamp(sum_weight, min=1E-6)
+    return fg_mask * partitioning, torch.tanh(w)
 
 
 class Inference_and_Generation(torch.nn.Module):
@@ -181,7 +183,7 @@ class Inference_and_Generation(torch.nn.Module):
         small_stuff = torch.cat((F.softplus(small_stuff_raw[..., :1, :, :]),
                                  torch.sigmoid(small_stuff_raw[..., 1:, :, :])), dim=-3)
         big_stuff = Uncropper.uncrop(bounding_box=bounding_box_few,
-                                     small_stuff=small_stuff*c_few[..., None, None, None],  # singleton for: ch, w, h
+                                     small_stuff=small_stuff,  # singleton for: ch, w, h
                                      width_big=width_raw_image,
                                      height_big=height_raw_image)  # shape: n_box, batch, ch, w, h
         ch_size = big_stuff.shape[-3]
@@ -190,8 +192,8 @@ class Inference_and_Generation(torch.nn.Module):
         # -----------------------
         # 7. From weight to masks
         # ------------------------
-        big_mask = from_weights_to_masks(weight=big_weight, dim=-5)
-        big_mask_NON_interacting = torch.tanh(big_weight)
+        mixing_interacting, mixing_non_interacting = from_w_to_mixing(w=big_weight * prob_few[..., None, None, None],
+                                                                      dim=-5)
 
         # 8. Return the inferred quantities
         similarity_l, similarity_w = self.similarity_kernel_dpp.get_l_w()
@@ -201,8 +203,8 @@ class Inference_and_Generation(torch.nn.Module):
                          c_few=c_few,
                          bb_few=bounding_box_few,
                          big_bg=big_bg,
-                         big_mask=big_mask,
-                         big_mask_NON_interacting=big_mask_NON_interacting,
+                         mixing=mixing_interacting,
+                         mixing_non_interacting=mixing_non_interacting,
                          big_img=big_img,
                          # the sample of the 4 latent variables
                          sample_c_map=c_distribution.sample,

@@ -4,6 +4,7 @@ from MODULES.utilities_visualization import draw_bounding_boxes, draw_img
 from MODULES.vae_parts import *
 from MODULES.namedtuple import *
 from typing import Optional
+import torch.distributions as dist
 
 
 def create_ckpt(model: torch.nn.Module,
@@ -156,14 +157,11 @@ class CompositionalVae(torch.nn.Module):
         # 1. Masks should not overlap:
         # A = (x1+x2+x3)^2 = x1^2 + x2^2 + x3^2 + 2 x1*x2 + 2 x1*x3 + 2 x2*x3
         # Therefore sum_{i \ne j} x_i x_j = x1*x2 + x1*x3 + x2*x3 = 0.5 * [(sum xi)^2 - (sum xi^2)]
-        # print(inference.big_mask_NON_interacting.shape)  # n_box_few, batch, 1, w_big, h_big
-        # print(inference.logit_few.shape)                 # n_box_few, batch
-        # print(inference.sample_c.shape)                  # n_box_few, batch
+        # print(inference.mixing_non_interacting.shape)  # n_box_few, batch, 1, w_big, h_big
+        # print(inference.c_few.shape)                   # n_box_few, batch
 
-        # x = inference.sample_c[..., None, None, None] * inference.big_mask_NON_interacting
-        x = inference.prob_few[..., None, None, None] * inference.big_mask_NON_interacting
-        sum_x = torch.sum(x, dim=-5)  # sum over boxes
-        sum_x_squared = torch.sum(x * x, dim=-5)
+        sum_x = torch.sum(inference.mixing_non_interacting, dim=-5)
+        sum_x_squared = torch.sum(inference.mixing_non_interacting.pow(2), dim=-5)
         tmp_value = (sum_x * sum_x - sum_x_squared).clamp(min=0)
         overlap = 0.5 * torch.sum(tmp_value, dim=(-1, -2, -3))  # sum over ch, w, h
         cost_overlap = sample_from_constraints_dict(dict_soft_constraints=self.dict_soft_constraints,
@@ -172,18 +170,16 @@ class CompositionalVae(torch.nn.Module):
                                                     verbose=verbose,
                                                     chosen=chosen)
 
-        # Mask should have a min and max volume
-        volume_mask_absolute = torch.sum(inference.big_mask, dim=(-1, -2, -3))  # sum over ch,w,h
+        volume_mask_absolute = torch.sum(inference.mixing, dim=(-1, -2, -3))  # sum over ch,w,h
         cost_volume_absolute = sample_from_constraints_dict(dict_soft_constraints=self.dict_soft_constraints,
                                                             var_name="mask_volume_absolute",
                                                             var_value=volume_mask_absolute,
                                                             verbose=verbose,
                                                             chosen=chosen)
+        cost_volume_minibatch = (cost_volume_absolute * inference.c_few).sum(dim=-2)
 
-        # cost_volume_minibatch = (cost_volume_absolute * inference.c_few).sum(dim=-2).mean()  # sum boxes, mean batch_size
-        cost_volume_minibatch = (cost_volume_absolute * inference.prob_few).sum(dim=-2).mean()  # sum boxes, mean batch_size
         return RegMiniBatch(reg_overlap=cost_overlap.mean(),
-                            reg_area_obj=cost_volume_minibatch)
+                            reg_area_obj=cost_volume_minibatch.mean())
 
     @staticmethod
     def NLL_MSE(output: torch.tensor, target: torch.tensor, sigma: torch.tensor) -> torch.Tensor:
@@ -195,12 +191,10 @@ class CompositionalVae(torch.nn.Module):
                         regularizations: RegMiniBatch) -> MetricMiniBatch:
 
         # Preparation
-        n_boxes = inference.big_mask.shape[-5]
+        n_boxes = inference.mixing.shape[-5]
         batch_size, ch, w, h = imgs_in.shape
         p_times_area_map = inference.area_map * inference.prob_map
-        # mixing_k = inference.big_mask * inference.sample_c[..., None, None, None]
-        mixing_k = inference.big_mask * inference.prob_few[..., None, None, None]
-        mixing_fg = torch.sum(mixing_k, dim=-5)  # sum over boxes
+        mixing_fg = torch.sum(inference.mixing, dim=-5)  # sum over boxes
         mixing_bg = torch.ones_like(mixing_fg) - mixing_fg
         fg_fraction = torch.mean(mixing_fg)  # mean over batch_size
         assert len(mixing_fg.shape) == 4  # batch, ch=1, w, h
@@ -210,10 +204,10 @@ class CompositionalVae(torch.nn.Module):
         # 1. Observation model
         # if the observation_std is fixed then normalization 1.0/sqrt(2*pi*sigma^2) is irrelevant.
         # We are better off using MeanSquareError metric
-        mse_k = CompositionalVae.NLL_MSE(output=inference.big_img, target=imgs_in, sigma=self.sigma_fg)
+        mse = CompositionalVae.NLL_MSE(output=inference.big_img, target=imgs_in, sigma=self.sigma_fg)
         mse_bg = CompositionalVae.NLL_MSE(output=inference.big_bg, target=imgs_in,
                                           sigma=self.sigma_bg)  # batch_size, ch, w, h
-        mse_av = (torch.sum(mixing_k * mse_k, dim=-5) + mixing_bg * mse_bg).mean()  # mean over batch_size, ch, w, h
+        mse_av = (torch.sum(inference.mixing * mse, dim=-5) + mixing_bg * mse_bg).mean()  # mean over batch_size, ch, w, h
 
         # 2. Sparsity should encourage:
         # 1. small probabilities
@@ -234,11 +228,13 @@ class CompositionalVae(torch.nn.Module):
         # i.e. more latent more capacity.
         kl_zbg = torch.mean(inference.kl_zbg)              # mean over: batch, latent_dim
 
-        with torch.no_grad():
-            K = torch.sum(inference.c_few)
-            c_few_mask = inference.c_few[..., None].requires_grad_(False)
-        kl_zinstance = torch.sum(inference.kl_zinstance * c_few_mask) / (K*inference.kl_zinstance.shape[-1])
-        kl_zwhere = torch.sum(inference.kl_zwhere * c_few_mask) / (K*inference.kl_zwhere.shape[-1])
+        #with torch.no_grad():
+        #    K = torch.sum(inference.prob_few)
+        #    prob_few_mask = inference.prob_few[..., None].detach()
+        #kl_zinstance = torch.sum(inference.kl_zinstance * prob_few_mask) / (K*inference.kl_zinstance.shape[-1])
+        #kl_zwhere = torch.sum(inference.kl_zwhere * prob_few_mask) / (K*inference.kl_zwhere.shape[-1])
+        kl_zinstance = torch.mean(inference.kl_zinstance)
+        kl_zwhere = torch.mean(inference.kl_zwhere)
         kl_logit = torch.mean(inference.kl_logit)          # mean over: batch
 
         # 5. compute the moving averages
@@ -391,14 +387,17 @@ class CompositionalVae(torch.nn.Module):
                                                                 bg_is_zero=True,
                                                                 bg_resolution=(1, 1))
 
-            mixing_k = inference.big_mask * inference.prob_few[..., None, None, None]
+            mixing_fg = torch.sum(inference.mixing, dim=-5)
+            mixing_bg = torch.ones_like(mixing_fg) - mixing_fg
+            mixing_all = torch.cat((mixing_bg, mixing_fg), dim=-5)  # shape: n_boxes, batch_size, ch, w, h
 
-            # Now compute fg_prob, integer_segmentation_mask, similarity
-            most_likely_mixing, index = torch.max(mixing_k, dim=-5, keepdim=True)  # 1, batch_size, 1, w, h
-            integer_mask = ((most_likely_mixing > 0.5) * (index + 1)).squeeze(-5).to(
-                dtype=torch.int32)  # bg = 0 fg = 1,2,3,...
+            # Compute the most_likely component and make sure that it has probability > 0.5
+            most_likely_mixing, index = torch.max(mixing_all, dim=-5, keepdim=False)  # 1, batch_size, 1, w, h
+            integer_mask = ((most_likely_mixing > 0.5) * index).to(dtype=torch.int32)  # bg = 0 fg = 1,2,3,...
 
-            fg_prob = torch.sum(mixing_k, dim=-5)  # sum over instances
+            # # The other way to compute integer mask would be to do categorical sampling from mixing
+            # categorical_sample = dist.Categorical(probs=mixing_all.flatten(start_dim=1).permute(1, 0)).sample()
+            # integer_mask = categorical_sample.permute(1, 0).view_as(mixing_fg).to(dtype=torch.int32)
 
             bounding_boxes = draw_bounding_boxes(c=inference.c_few,
                                                  bounding_box=inference.bb_few,
@@ -409,20 +408,20 @@ class CompositionalVae(torch.nn.Module):
 
             if batch_of_index is None:
                 return Segmentation(raw_image=batch_imgs,
-                                    fg_prob=fg_prob,
+                                    fg_prob=mixing_fg,
                                     integer_mask=integer_mask,
                                     bounding_boxes=bounding_boxes,
                                     similarity=None)
 
             else:
                 max_index = torch.max(batch_of_index) if max_index is None else max_index
-                similarity_matrix = CompositionalVae.compute_sparse_similarity_matrix(mixing_k=mixing_k,
+                similarity_matrix = CompositionalVae.compute_sparse_similarity_matrix(mixing_k=inference.mixing,
                                                                                       batch_of_index=batch_of_index,
                                                                                       max_index=max_index,
                                                                                       radius_nn=radius_nn,
                                                                                       min_threshold=0.1)
                 return Segmentation(raw_image=batch_imgs,
-                                    fg_prob=fg_prob,
+                                    fg_prob=mixing_fg,
                                     integer_mask=integer_mask,
                                     bounding_boxes=bounding_boxes,
                                     similarity=SparseSimilarity(sparse_matrix=similarity_matrix,
@@ -639,7 +638,7 @@ class CompositionalVae(torch.nn.Module):
             if draw_image:
                 imgs_rec = draw_img(c=inference.c_few,
                                     bounding_box=inference.bb_few,
-                                    big_mask=inference.big_mask,
+                                    mixing_k=inference.mixing,
                                     big_img=inference.big_img,
                                     big_bg=inference.big_bg,
                                     draw_bg=draw_bg,

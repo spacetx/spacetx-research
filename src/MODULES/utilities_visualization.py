@@ -72,32 +72,37 @@ def plot_label_contours(label: Union[torch.Tensor, numpy.ndarray],
     return fig
 
 
-def draw_img(c: torch.tensor,
-             bounding_box: BB,
-             big_mask: torch.tensor,
+def draw_img(bounding_box: BB,
+             mixing_k: torch.tensor,
              big_img: torch.tensor,
              big_bg: torch.tensor,
              draw_bg: bool,
-             draw_boxes: bool) -> torch.tensor:
+             draw_boxes: bool,
+             c: Optional[torch.Tensor] = None) -> torch.tensor:
+    if c is None:
+        c = torch.ones_like(bounding_box.bx).bool()
     assert len(c.shape) == 2  # boxes, batch
-    assert len(big_mask.shape) == len(big_img.shape) == 5  # boxes, batch, ch, w, h
+    assert len(mixing_k.shape) == len(big_img.shape) == 5  # boxes, batch, ch, w, h
 
-    rec_imgs_no_bb = (c[..., None, None, None] * big_mask * big_img).sum(dim=-5)  # sum over boxes
-    fg_mask = (c[..., None, None, None] * big_mask).sum(dim=-5)  # sum over boxes
-    background = (1 - fg_mask) * big_bg if draw_bg else torch.zeros_like(big_bg)
+    rec_imgs_no_bb = (mixing_k * big_img).sum(dim=-5)  # sum over boxes
+    fg_mask = mixing_k.sum(dim=-5)  # sum over boxes
+    background = (torch.ones_like(fg_mask) - fg_mask) * big_bg if draw_bg else torch.zeros_like(big_bg)
 
     width, height = rec_imgs_no_bb.shape[-2:]
 
-    bounding_boxes = draw_bounding_boxes(c=c,
-                                         bounding_box=bounding_box,
+    bounding_boxes = draw_bounding_boxes(bounding_box=bounding_box,
                                          width=width,
-                                         height=height) if draw_boxes else torch.zeros_like(rec_imgs_no_bb)
+                                         height=height,
+                                         c=c) if draw_boxes else torch.zeros_like(rec_imgs_no_bb)
     mask_no_bb = (torch.sum(bounding_boxes, dim=-3, keepdim=True) == 0)
 
     return mask_no_bb * (rec_imgs_no_bb + background) + ~mask_no_bb * bounding_boxes
 
 
-def draw_bounding_boxes(c: Optional[torch.Tensor], bounding_box: BB, width: int, height: int) -> torch.Tensor:
+def draw_bounding_boxes(bounding_box: BB,
+                        width: int,
+                        height: int,
+                        c: Optional[torch.Tensor] = None) -> torch.Tensor:
     # set all prob to one if they are not passed as input
     if c is None:
         c = torch.ones_like(bounding_box.bx).bool()
