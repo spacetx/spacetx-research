@@ -113,14 +113,15 @@ class Inference_and_Generation(torch.nn.Module):
                 delta_logit_map = torch.zeros_like(unet_output.logit.mu)
         logit_map = unet_output.logit.mu + delta_logit_map
 
-        # similarity kernel is necessary to compute log_prob(c)
+        # Sample c from logit_map
         similarity_kernel = self.similarity_kernel_dpp.forward(n_width=logit_map.shape[-2],
                                                                n_height=logit_map.shape[-1])
-        c_map: DIST = sample_and_kl_prob(logit_map=logit_map,
-                                         similarity_kernel=similarity_kernel,
-                                         noisy_sampling=noisy_sampling,
-                                         sample_from_prior=generate_synthetic_data)
-        prob_map = torch.sigmoid(logit_map)
+        c_map: DIST
+        prob_map: torch.Tensor
+        c_map, prob_map = sample_and_kl_prob(logit_map=logit_map,
+                                             similarity_kernel=similarity_kernel,
+                                             noisy_sampling=noisy_sampling,
+                                             sample_from_prior=generate_synthetic_data)
         prob_all = convert_to_box_list(prob_map).squeeze(-1)
         c_all = convert_to_box_list(c_map.sample).squeeze(-1)
 
