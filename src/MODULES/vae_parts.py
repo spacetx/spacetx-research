@@ -34,8 +34,6 @@ class Inference_and_Generation(torch.nn.Module):
         self.size_min: int = params["input_image"]["size_object_min"]
         self.cropped_size: int = params["architecture"]["cropped_size"]
 
-
-
         # modules
         self.similarity_kernel_dpp = SimilarityKernel(n_kernels=params["DPP"]["n_kernels"],
                                                       length_scales=10.0 * torch.ones(1),
@@ -113,17 +111,6 @@ class Inference_and_Generation(torch.nn.Module):
                 delta_logit_map = torch.zeros_like(unet_output.logit.mu)
         logit_map_before_sampling = unet_output.logit.mu + delta_logit_map
 
-        # similarity kernel is necessary to compute log_prob(c)
-        similarity_kernel = self.similarity_kernel_dpp.forward(n_width=logit_map_before_sampling.shape[-2],
-                                                               n_height=logit_map_before_sampling.shape[-1])
-
-        c_distribution: DIST
-        prob_map: torch.Tensor
-        c_distribution, prob_map = sample_and_kl_prob(logit_map=logit_map_before_sampling,
-                                                      similarity_kernel=similarity_kernel,
-                                                      noisy_sampling=noisy_sampling,
-                                                      sample_from_prior=generate_synthetic_data)
-
         zwhere_map: DIST = sample_and_kl_diagonal_normal(posterior_mu=unet_output.zwhere.mu,
                                                          posterior_std=unet_output.zwhere.std,
                                                          prior_mu=torch.zeros_like(unet_output.zwhere.mu),
@@ -136,6 +123,17 @@ class Inference_and_Generation(torch.nn.Module):
                                            height_raw_image=height_raw_image,
                                            min_box_size=self.size_min,
                                            max_box_size=self.size_max)
+
+        # similarity kernel is necessary to compute log_prob(c)
+        similarity_kernel = self.similarity_kernel_dpp.forward(n_width=logit_map_before_sampling.shape[-2],
+                                                               n_height=logit_map_before_sampling.shape[-1])
+
+        c_distribution: DIST
+        prob_map: torch.Tensor
+        c_distribution, prob_map = sample_and_kl_prob(logit_map=logit_map_before_sampling,
+                                                      similarity_kernel=similarity_kernel,
+                                                      noisy_sampling=noisy_sampling,
+                                                      sample_from_prior=generate_synthetic_data)
 
         # select fex probabilities and c
         c_all = convert_to_box_list(c_distribution.sample).squeeze(-1)

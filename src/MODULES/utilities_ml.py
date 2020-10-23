@@ -141,7 +141,7 @@ class SimilarityKernel(torch.nn.Module):
             diag = torch.eye(d2.shape[-2],
                              dtype=torch.float,
                              device=self.device,
-                             requires_grad=False) * self.eps
+                             requires_grad=False) * self.eps * torch.rand(d2.shape[-2])
             return d2, diag
 
     def sample_2_mask(self, sample):
