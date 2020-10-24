@@ -185,8 +185,8 @@ class Inference_and_Generation(torch.nn.Module):
         # ------------------------
         # TODO: try both q_few and c_few
         mixing_tmp, mixing_non_interacting_tmp = from_w_to_pi(weight=big_weight, dim=-5)
-        mixing = q_few[..., None, None, None] * mixing_tmp
-        mixing_non_interacting = mixing_non_interacting_tmp * q_few[..., None, None, None]
+        mixing = c_few[..., None, None, None] * mixing_tmp
+        mixing_non_interacting = mixing_non_interacting_tmp * c_few[..., None, None, None]
 
         # 8. Return the inferred quantities
         similarity_l, similarity_w = self.similarity_kernel_dpp.get_l_w()
