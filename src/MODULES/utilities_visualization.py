@@ -178,11 +178,10 @@ def show_batch(images: torch.Tensor,
     assert len(images.shape) == 4  # batch, ch, width, height
     if images.device != "cpu":
         images = images.cpu()
-    if normalize_range is None:
-        grid = utils.make_grid(images, n_col, n_padding, normalize=True, pad_value=pad_value)
-    else:
-        grid = utils.make_grid(images, n_col, n_padding, normalize=True, range=normalize_range,
-                               scale_each=False, pad_value=pad_value)
+
+    # Always normalize the image in (0,1) either using min_max of tensor or normalize_range
+    grid = utils.make_grid(images, n_col, n_padding, normalize=True, range=normalize_range,
+                           scale_each=False, pad_value=pad_value)
         
     fig = plt.figure(figsize=figsize)
     plt.imshow(grid.detach().permute(1, 2, 0).squeeze(-1).numpy())
@@ -524,17 +523,19 @@ def plot_generation(output: Output,
     _ = show_batch(output.imgs[:8],
                    n_col=4,
                    n_padding=4,
+                   normalize_range=(0.0, 1.0),
                    title='imgs, epoch= {0:6d}'.format(epoch),
                    neptune_name=prefix+"imgs"+postfix)
     _ = show_batch(output.inference.sample_c_map[:8].float(),
                    n_col=4,
                    n_padding=4,
+                   normalize_range=(0.0, 1.0),
                    title='c_map, epoch= {0:6d}'.format(epoch),
-                   normalize_range=None,
                    neptune_name=prefix+"c_map"+postfix)
     _ = show_batch(output.inference.big_bg[:8],
                    n_col=4,
                    n_padding=4,
+                   normalize_range=(0.0, 1.0),
                    title='background, epoch= {0:6d}'.format(epoch),
                    neptune_name=prefix+"bg"+postfix)
 
@@ -553,28 +554,31 @@ def plot_reconstruction_and_inference(output: Output,
     _ = show_batch(output.imgs[:8],
                    n_col=4,
                    n_padding=4,
+                   normalize_range=(0.0, 1.0),
                    title='imgs, epoch= {0:6d}'.format(epoch),
                    neptune_name=prefix+"imgs"+postfix)
     _ = show_batch(output.inference.sample_c_map[:8].float(),
                    n_col=4,
                    n_padding=4,
+                   normalize_range=(0.0, 1.0),
                    title='c_map, epoch= {0:6d}'.format(epoch),
-                   normalize_range=None,
                    neptune_name=prefix+"c_map"+postfix)
     _ = show_batch(output.inference.prob_map[:8],
                    n_col=4,
                    n_padding=4,
+                   normalize_range=(0.0, 1.0),
                    title='p_map, epoch= {0:6d}'.format(epoch),
-                   normalize_range=None,
                    neptune_name=prefix+"p_map"+postfix)
     _ = show_batch(output.inference.big_bg[:8],
                    n_col=4,
                    n_padding=4,
+                   normalize_range=(0.0, 1.0),
                    title='background, epoch= {0:6d}'.format(epoch),
                    neptune_name=prefix+"bg"+postfix)
     _ = show_batch(output.inference.area_map[:8],
                    n_col=4,
                    n_padding=4,
+                   normalize_range=None,  # use min_max of tensor
                    title='area_map, epoch= {0:6d}'.format(epoch),
                    neptune_name=prefix + "area_map" + postfix)
 
@@ -597,13 +601,15 @@ def plot_segmentation(segmentation: Segmentation,
     else:
         raise Exception
 
-    _ = show_batch(segmentation.integer_mask,
+    _ = show_batch(segmentation.integer_mask.float(),
                    n_padding=4,
+                   normalize_range=None,  # use min_max of tensor
                    figsize=(12, 12),
                    title='integer_mask, '+title_postfix,
                    neptune_name=prefix+"integer_mask"+postfix)
     _ = show_batch(segmentation.fg_prob,
                    n_padding=4,
+                   normalize_range=(0.0, 1.0),
                    figsize=(12, 12),
                    title='fg_prob, '+title_postfix,
                    neptune_name=prefix+"fg_prob"+postfix)
