@@ -203,9 +203,9 @@ class Inference_and_Generation(torch.nn.Module):
                                               original_width=unet_output.logit.mu.shape[-2],
                                               original_height=unet_output.logit.mu.shape[-1])
 
-        return Inference(area_map=area_map,
-                         prob_map=q_map,
-                         prob_few=q_few,
+        return Inference(area_map=area_map,  # remove
+                         prob_map=q_map,     # remove
+                         prob_few=q_few,     # remove
                          big_bg=big_bg,
                          mixing=mixing,
                          mixing_non_interacting=mixing_non_interacting,
