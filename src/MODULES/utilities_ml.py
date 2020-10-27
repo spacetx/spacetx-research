@@ -582,7 +582,7 @@ class SpecialDataSet(object):
         img, labels, index = self.__getitem__(index[:batch_size])
         print("MINIBATCH: img.shapes labels.shape, index.shape ->", img.shape, labels.shape, index.shape)
         print("MINIBATCH: min and max of minibatch", torch.min(img), torch.max(img))
-        return show_batch(img, n_col=4, n_padding=4, pad_value=1, figsize=(24, 24))
+        return show_batch(img, n_col=4, n_padding=4, normalize_range=(0.0, 1.0), pad_value=1, figsize=(24, 24))
 
 
 def process_one_epoch(model: torch.nn.Module,

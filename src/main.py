@@ -79,6 +79,7 @@ if torch.cuda.is_available():
     reference_imgs = reference_imgs.cuda()
 _ = show_batch(reference_imgs,
                n_padding=4,
+               normalize_range=(0.0, 1.0),
                figsize=(12, 12),
                title="reference imgs",
                neptune_name="reference_imgs")
