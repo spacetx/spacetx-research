@@ -124,12 +124,8 @@ class CompositionalVae(torch.nn.Module):
         # Raw image parameters
         self.dict_soft_constraints = params["soft_constraint"]
         self.nms_dict = params["nms"]
-        self.sigma_fg = torch.nn.Parameter(data=torch.tensor(params["GECO_loss"]["fg_std"],
-                                                             dtype=torch.float)[..., None, None],  # singleton w,h
-                                           requires_grad=False)
-        self.sigma_bg = torch.nn.Parameter(data=torch.tensor(params["GECO_loss"]["bg_std"],
-                                                             dtype=torch.float)[..., None, None],  # singleton w,h
-                                           requires_grad=False)
+        self.sigma_fg = torch.tensor(params["GECO_loss"]["fg_std"], dtype=torch.float)[..., None, None]  # singleton w,h
+        self.sigma_bg = torch.tensor(params["GECO_loss"]["bg_std"], dtype=torch.float)[..., None, None]  # singleton w,h
 
         self.geco_dict = params["GECO_loss"]
         self.input_img_dict = params["input_image"]
@@ -138,10 +134,14 @@ class CompositionalVae(torch.nn.Module):
                                                                          dtype=torch.float), requires_grad=True)
         self.geco_balance_factor = torch.nn.Parameter(data=torch.tensor(self.geco_dict["factor_balance_range"][1],
                                                                         dtype=torch.float), requires_grad=True)
+        self.running_avarage_kl_logit = torch.nn.Parameter(data=torch.ones(1, dtype=torch.float), requires_grad=True)
 
         # Put everything on the cude if cuda available
         if torch.cuda.is_available():
             self.cuda()
+            self.sigma_fg = self.sigma_fg.cuda()
+            self.sigma_bg = self.sigma_bg.cuda()
+
 
     def compute_regularizations(self,
                                 inference: Inference,
@@ -164,7 +164,7 @@ class CompositionalVae(torch.nn.Module):
         sum_x = inference.mixing_non_interacting.sum(dim=-5)  # sum over boxes
         sum_x_squared = inference.mixing_non_interacting.pow(2).sum(dim=-5)
         tmp_value = (sum_x * sum_x - sum_x_squared).clamp(min=0)
-        overlap = 0.5 * torch.sum(tmp_value, dim=(-1, -2, -3))  # sum over ch, w, h
+        overlap = 0.5 * tmp_value.sum(dim=(-1, -2, -3))  # sum over ch, w, h
         cost_overlap = sample_from_constraints_dict(dict_soft_constraints=self.dict_soft_constraints,
                                                     var_name="overlap",
                                                     var_value=overlap,
@@ -194,10 +194,10 @@ class CompositionalVae(torch.nn.Module):
         # Preparation
         n_boxes = inference.mixing.shape[-5]
         batch_size, ch, w, h = imgs_in.shape
-        p_times_area_map = inference.area_map * inference.prob_map
+        area_box_few = inference.sample_bb.bw * inference.sample_bb.bh
         mixing_fg = torch.sum(inference.mixing, dim=-5)  # sum over boxes
         mixing_bg = torch.ones_like(mixing_fg) - mixing_fg
-        fg_fraction = torch.mean(mixing_fg)  # mean over batch_size
+        assert area_box_few.shape == inference.sample_c.shape
         assert len(mixing_fg.shape) == 4  # batch, ch=1, w, h
 
         # 0. Get the regularization
@@ -205,10 +205,13 @@ class CompositionalVae(torch.nn.Module):
         # 1. Observation model
         # if the observation_std is fixed then normalization 1.0/sqrt(2*pi*sigma^2) is irrelevant.
         # We are better off using MeanSquareError metric
-        mse = CompositionalVae.NLL_MSE(output=inference.big_img, target=imgs_in, sigma=self.sigma_fg)
-        mse_bg = CompositionalVae.NLL_MSE(output=inference.big_bg, target=imgs_in,
+        mse = CompositionalVae.NLL_MSE(output=inference.big_img,
+                                       target=imgs_in,
+                                       sigma=self.sigma_fg)  # boxes, batch_size, ch, w, h
+        mse_bg = CompositionalVae.NLL_MSE(output=inference.big_bg,
+                                          target=imgs_in,
                                           sigma=self.sigma_bg)  # batch_size, ch, w, h
-        mse_av = (torch.sum(inference.mixing * mse, dim=-5) + mixing_bg * mse_bg).mean()  # mean over batch_size, ch, w, h
+        mse_av = ((inference.mixing * mse).sum(dim=-5) + mixing_bg * mse_bg).mean()  # mean over batch_size, ch, w, h
 
         # 2. Sparsity should encourage:
         # 1. small probabilities
@@ -218,9 +221,10 @@ class CompositionalVae(torch.nn.Module):
         # There is a lot of freedom here:
         # 1) use c=Bernoulli(p) or p
         # 2) use map_quantitites or few_quantities
-        sparsity_mask = torch.sum(mixing_fg) / torch.numel(mixing_fg)  # strictly smaller than 1
-        sparsity_box = torch.sum(p_times_area_map) / torch.numel(mixing_fg)
-        sparsity_prob = torch.sum(inference.prob_map) / (batch_size * n_boxes)
+        num_pixel = torch.numel(mixing_fg)
+        sparsity_mask = torch.sum(mixing_fg) / num_pixel
+        sparsity_box = torch.sum(area_box_few * inference.sample_c) / num_pixel
+        sparsity_prob = torch.sum(inference.sample_c_map) / (batch_size * n_boxes)
         sparsity_av = sparsity_mask + sparsity_box + sparsity_prob
 
         # 3. compute KL
@@ -231,17 +235,8 @@ class CompositionalVae(torch.nn.Module):
         kl_zinstance = torch.mean(inference.kl_zinstance)  # mean over: n_boxes, batch, latent_dim
         kl_zwhere = torch.mean(inference.kl_zwhere)        # mean over: n_boxes, batch, latent_dim
         kl_logit = torch.mean(inference.kl_logit)          # mean over: batch
-
-        # 5. compute the moving averages
-        with torch.no_grad():
-            input_dict = {"kl_logit": kl_logit.item()}
-            # Only if in training mode I accumulate the moving average
-            if self.training:
-                ma_dict = self.ma_calculator.accumulate(input_dict)
-            else:
-                ma_dict = input_dict
-        # kl_av = kl_zinstance + kl_zwhere + kl_logit
-        kl_av = kl_zbg + kl_zinstance + kl_zwhere + kl_logit / (1E-3 + ma_dict["kl_logit"])
+        kl_av = kl_zbg + kl_zinstance + kl_zwhere + \
+                torch.exp(-self.running_avarage_kl_logit) * kl_logit + self.running_avarage_kl_logit
 
         # 6. Note that I clamp in_place
         with torch.no_grad():
@@ -265,8 +260,8 @@ class CompositionalVae(torch.nn.Module):
             with torch.no_grad():
                 # If fg_fraction_av > max(target) -> tmp1 > 0 -> delta_1 < 0 -> too much fg -> increase sparsity
                 # If fg_fraction_av < min(target) -> tmp2 > 0 -> delta_1 > 0 -> too little fg -> decrease sparsity
-                tmp1 = (fg_fraction - max(self.geco_dict["target_fg_fraction"])).clamp(min=0)
-                tmp2 = (min(self.geco_dict["target_fg_fraction"]) - fg_fraction).clamp(min=0)
+                tmp1 = (sparsity_mask - max(self.geco_dict["target_fg_fraction"])).clamp(min=0)
+                tmp2 = (min(self.geco_dict["target_fg_fraction"]) - sparsity_mask).clamp(min=0)
                 delta_1 = (tmp2 - tmp1).requires_grad_(False).to(loss_vae.device)
 
                 # If nll_av > max(target) -> tmp3 > 0 -> delta_2 < 0 -> bad reconstruction -> increase f_balance
@@ -300,7 +295,7 @@ class CompositionalVae(torch.nn.Module):
                                reg_overlap=regularizations.reg_overlap.detach().item(),
                                reg_area_obj=regularizations.reg_area_obj.detach().item(),
 
-                               fg_fraction=fg_fraction.detach().item(),
+                               fg_fraction=sparsity_mask.detach().item(),
                                geco_sparsity=f_sparsity.detach().item(),
                                geco_balance=f_balance.detach().item(),
                                delta_1=delta_1.detach().item(),

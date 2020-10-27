@@ -20,7 +20,7 @@ def from_w_to_pi(weight: torch.Tensor, dim: int):
     sum_weight = torch.sum(weight, dim=dim, keepdim=True)
     fg_mask = torch.tanh(sum_weight)
     partitioning = weight / torch.clamp(sum_weight, min=1E-6)
-    return fg_mask * partitioning, torch.tanh(weight)
+    return fg_mask * partitioning
 
 
 class Inference_and_Generation(torch.nn.Module):
@@ -192,7 +192,8 @@ class Inference_and_Generation(torch.nn.Module):
         # 7. From weight to masks
         # ------------------------
         # TODO: try both q_few and c_few
-        mixing, mixing_non_interacting = from_w_to_pi(weight=big_weight * q_few[..., None, None, None], dim=-5)
+        mixing = from_w_to_pi(weight=big_weight, dim=-5) * c_few[..., None, None, None]
+        mixing_non_interacting = torch.tanh(big_weight) * c_few[..., None, None, None]
 
         # 8. Return the inferred quantities
         similarity_l, similarity_w = self.similarity_kernel_dpp.get_l_w()
@@ -213,6 +214,7 @@ class Inference_and_Generation(torch.nn.Module):
                          sample_c_map=c_dist.sample,
                          sample_c=c_few,
                          sample_bb=bounding_box_few,
+                         sample_zwhere=zwhere_sample_few,
                          sample_zinstance=zinstance_few.sample,
                          sample_zbg=zbg.sample,
                          # the kl of the 4 latent variables
