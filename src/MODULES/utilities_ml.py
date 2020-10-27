@@ -90,15 +90,15 @@ def sample_and_kl_prob(logit_map: torch.Tensor,
 
         # Here the gradients are only through log_q and similarity_kernel not c
         c_no_grad = c_all.bool().detach()  # bool variable has requires_grad = False
-        log_prob_posterior = (c_no_grad * log_q + ~c_no_grad * log_one_minus_q).sum(dim=0)
+        log_prob_posterior = (c_no_grad * log_q + ~c_no_grad * log_one_minus_q).sum(dim=0)  # sum over all_boxes
         log_prob_prior = FiniteDPP(L=similarity_kernel).log_prob(c_no_grad.transpose(-1, -2))  # shape: batch_shape
         assert log_prob_posterior.shape == log_prob_prior.shape
         kl = log_prob_posterior - log_prob_prior
 
-        c_map = invert_convert_to_box_list(c_all,
+        c_map = invert_convert_to_box_list(c_all.unsqueeze(-1),
                                            original_width=logit_map.shape[-2],
                                            original_height=logit_map.shape[-1])
-        q_map = invert_convert_to_box_list(q_all,
+        q_map = invert_convert_to_box_list(q_all.unsqueeze(-1),
                                            original_width=logit_map.shape[-2],
                                            original_height=logit_map.shape[-1])
         return DIST(sample=c_map, kl=kl), q_map
