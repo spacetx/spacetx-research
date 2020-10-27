@@ -572,6 +572,11 @@ def plot_reconstruction_and_inference(output: Output,
                    n_padding=4,
                    title='background, epoch= {0:6d}'.format(epoch),
                    neptune_name=prefix+"bg"+postfix)
+    _ = show_batch(output.inference.area_map[:8],
+                   n_col=4,
+                   n_padding=4,
+                   title='area_map, epoch= {0:6d}'.format(epoch),
+                   neptune_name=prefix + "area_map" + postfix)
 
     if verbose:
         print("leaving plot_reconstruction_and_inference")

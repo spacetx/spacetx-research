@@ -223,8 +223,10 @@ class CompositionalVae(torch.nn.Module):
         # 2) use map_quantitites or few_quantities
         num_pixel = torch.numel(mixing_fg)
         sparsity_mask = torch.sum(mixing_fg) / num_pixel
-        sparsity_box = torch.sum(area_box_few * inference.sample_c) / num_pixel
-        sparsity_prob = torch.sum(inference.sample_c_map) / (batch_size * n_boxes)
+        # sparsity_box = torch.sum(area_box_few * inference.sample_c) / num_pixel
+        # sparsity_prob = torch.sum(inference.sample_c_map) / (batch_size * n_boxes)
+        sparsity_box = torch.sum(inference.area_map * inference.prob_map) / num_pixel
+        sparsity_prob = torch.sum(inference.prob_map) / (batch_size * n_boxes)
         sparsity_av = sparsity_mask + sparsity_box + sparsity_prob
 
         # 3. compute KL
@@ -235,8 +237,19 @@ class CompositionalVae(torch.nn.Module):
         kl_zinstance = torch.mean(inference.kl_zinstance)  # mean over: n_boxes, batch, latent_dim
         kl_zwhere = torch.mean(inference.kl_zwhere)        # mean over: n_boxes, batch, latent_dim
         kl_logit = torch.mean(inference.kl_logit)          # mean over: batch
-        kl_av = kl_zbg + kl_zinstance + kl_zwhere + \
-                torch.exp(-self.running_avarage_kl_logit) * kl_logit + self.running_avarage_kl_logit
+
+        # kl_av = kl_zbg + kl_zinstance + kl_zwhere + \
+        #         torch.exp(-self.running_avarage_kl_logit) * kl_logit + self.running_avarage_kl_logit
+
+        # 5. compute the moving averages
+        with torch.no_grad():
+            input_dict = {"kl_logit": kl_logit.item()}
+            # Only if in training mode I accumulate the moving average
+            if self.training:
+                ma_dict = self.ma_calculator.accumulate(input_dict)
+            else:
+                ma_dict = input_dict
+        kl_av = kl_zbg + kl_zinstance + kl_zwhere + kl_logit / (1E-3 + ma_dict["kl_logit"])
 
         # 6. Note that I clamp in_place
         with torch.no_grad():
