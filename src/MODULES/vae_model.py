@@ -195,8 +195,10 @@ class CompositionalVae(torch.nn.Module):
         n_boxes = inference.mixing.shape[-5]
         batch_size, ch, w, h = imgs_in.shape
         area_box_few = inference.sample_bb.bw * inference.sample_bb.bh
+        p_times_area_map = inference.area_map * inference.prob_map
         mixing_fg = torch.sum(inference.mixing, dim=-5)  # sum over boxes
         mixing_bg = torch.ones_like(mixing_fg) - mixing_fg
+        fg_fraction = torch.mean(mixing_fg)  # mean over batch_size
         assert area_box_few.shape == inference.sample_c.shape
         assert len(mixing_fg.shape) == 4  # batch, ch=1, w, h
 
@@ -225,7 +227,7 @@ class CompositionalVae(torch.nn.Module):
         sparsity_mask = torch.sum(mixing_fg) / num_pixel
         # sparsity_box = torch.sum(area_box_few * inference.sample_c) / num_pixel
         # sparsity_prob = torch.sum(inference.sample_c_map) / (batch_size * n_boxes)
-        sparsity_box = torch.sum(inference.area_map * inference.prob_map) / num_pixel
+        sparsity_box = torch.sum(p_times_area_map) / num_pixel
         sparsity_prob = torch.sum(inference.prob_map) / (batch_size * n_boxes)
         sparsity_av = sparsity_mask + sparsity_box + sparsity_prob
 
@@ -273,8 +275,8 @@ class CompositionalVae(torch.nn.Module):
             with torch.no_grad():
                 # If fg_fraction_av > max(target) -> tmp1 > 0 -> delta_1 < 0 -> too much fg -> increase sparsity
                 # If fg_fraction_av < min(target) -> tmp2 > 0 -> delta_1 > 0 -> too little fg -> decrease sparsity
-                tmp1 = (sparsity_mask - max(self.geco_dict["target_fg_fraction"])).clamp(min=0)
-                tmp2 = (min(self.geco_dict["target_fg_fraction"]) - sparsity_mask).clamp(min=0)
+                tmp1 = (fg_fraction - max(self.geco_dict["target_fg_fraction"])).clamp(min=0)
+                tmp2 = (min(self.geco_dict["target_fg_fraction"]) - fg_fraction).clamp(min=0)
                 delta_1 = (tmp2 - tmp1).requires_grad_(False).to(loss_vae.device)
 
                 # If nll_av > max(target) -> tmp3 > 0 -> delta_2 < 0 -> bad reconstruction -> increase f_balance
@@ -308,7 +310,7 @@ class CompositionalVae(torch.nn.Module):
                                reg_overlap=regularizations.reg_overlap.detach().item(),
                                reg_area_obj=regularizations.reg_area_obj.detach().item(),
 
-                               fg_fraction=sparsity_mask.detach().item(),
+                               fg_fraction=fg_fraction.detach().item(),
                                geco_sparsity=f_sparsity.detach().item(),
                                geco_balance=f_balance.detach().item(),
                                delta_1=delta_1.detach().item(),
