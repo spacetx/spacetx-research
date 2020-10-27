@@ -179,7 +179,7 @@ def show_batch(images: torch.Tensor,
     if images.device != "cpu":
         images = images.cpu()
     if normalize_range is None:
-        grid = utils.make_grid(images, n_col, n_padding, normalize=False, pad_value=pad_value)
+        grid = utils.make_grid(images, n_col, n_padding, normalize=True, pad_value=pad_value)
     else:
         grid = utils.make_grid(images, n_col, n_padding, normalize=True, range=normalize_range,
                                scale_each=False, pad_value=pad_value)
