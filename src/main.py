@@ -10,10 +10,15 @@ from MODULES.utilities_ml import ConditionalRandomCrop, SpecialDataSet, process_
 from MODULES.graph_clustering import GraphSegmentation
 
 # Check versions
+import torch
+import numpy
 from platform import python_version
 print("python_version() ---> ", python_version())
 print("torch.__version__ --> ", torch.__version__)
 
+# make sure to fix the randomness at the very beginning
+torch.manual_seed(0)
+numpy.random.seed(0)
 
 params = load_json_as_dict("./ML_parameters.json")
 
@@ -67,10 +72,10 @@ log_img_only(name="train_batch_example", fig=train_batch_example_fig, experiment
 # print("GPU GB after train_loader ->",torch.cuda.memory_allocated()/1E9)
 
 # Make a batch of reference images by cropping the train_data at consecutive locations
-reference_imgs_list = [] 
+reference_imgs_list = []
 crop_size = params["input_image"]["size_raw_image"]
 for ni in range(2):
-    i = 1000 + ni * crop_size
+    i = 1060 + ni * crop_size
     for nj in range(4):
         j = 2100 + nj * crop_size
         reference_imgs_list.append(img_torch[..., i:i+crop_size, j:j+crop_size])
@@ -87,7 +92,6 @@ _ = show_batch(reference_imgs,
 vae = CompositionalVae(params)
 log_model_summary(vae)
 optimizer = instantiate_optimizer(model=vae, dict_params_optimizer=params["optimizer"])
-# print("GPU GB after model and optimizer ->",torch.cuda.memory_allocated()/1E9)
 
 imgs_out = vae.inference_and_generator.unet.show_grid(reference_imgs)
 unet_grid_fig = show_batch(imgs_out[:, 0], normalize_range=(0.0, 1.0), neptune_name="unet_grid")
@@ -99,7 +103,7 @@ if params["simulation"]["type"] == "scratch":
     
     epoch_restart = -1
     history_dict = {}
-    min_test_loss = 99999999
+    min_test_loss = 999999
 
 elif params["simulation"]["type"] == "resume":
     
@@ -111,13 +115,17 @@ elif params["simulation"]["type"] == "resume":
                    optimizer=optimizer,
                    overwrite_member_var=True)
 
-    epoch_restart = ckpt.epoch
-    history_dict = ckpt.history_dict
-    min_test_loss = min(history_dict["test_loss"])
-    
+    epoch_restart = ckpt.get('epoch', -1)
+    history_dict = ckpt.get('history_dict', {})
+    try:
+        min_test_loss = min(history_dict.get("test_loss", 999999))
+    except:
+        min_test_loss = 999999
+
 elif params["simulation"]["type"] == "pretrained":
 
     ckpt = file2ckpt(path="ckpt.pt", device=None)
+    # ckpt = file2ckpt(path="ckpt.pt", device='cpu')
 
     load_from_ckpt(ckpt=ckpt,
                    model=vae,
@@ -126,7 +134,7 @@ elif params["simulation"]["type"] == "pretrained":
        
     epoch_restart = -1
     history_dict = {}
-    min_test_loss = 99999999
+    min_test_loss = 999999
     
 else:
     raise Exception("simulation type is NOT recognized")
@@ -205,7 +213,7 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
 
                     if (test_loss == min_test_loss) or (epoch % CHECKPOINT_FREQUENCY == 0):
                         ckpt = create_ckpt(model=vae,
-                                           optimizer=None,
+                                           optimizer=optimizer,
                                            epoch=epoch,
                                            hyperparams_dict=params,
                                            history_dict=history_dict)
@@ -222,8 +230,8 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                                                  verbose=True)
 
 # # Check segmentation WITH and WITHOUT tiling
-img_to_segment = train_loader.img[0, :, 1000:1300, 2100:2400]
-roi_mask_to_segment = train_loader.roi_mask[0, :, 1000:1300, 2100:2400]
+img_to_segment = train_loader.img[0, :, 1060:1360, 2100:2400]
+roi_mask_to_segment = train_loader.roi_mask[0, :, 1060:1360, 2100:2400]
 
 # check simple segmentation
 crop_size = params["input_image"]["size_raw_image"]
@@ -243,18 +251,18 @@ tiling: Segmentation = vae.segment_with_tiling(single_img=img_to_segment,
                                                overlap_threshold=None,
                                                radius_nn=10,
                                                batch_size=64)
-log_object_as_artifact(name="tiling", obj=tiling, verbose=True)
+# log_object_as_artifact(name="tiling", obj=tiling, verbose=True)
 tiling_fig = plot_tiling(tiling, neptune_name="tiling_before_graph")
 
 # perform graph analysis
 g = GraphSegmentation(tiling, min_fg_prob=0.1, min_edge_weight=0.01, normalize_graph_edges=True)
 partition = g.find_partition_leiden(resolution=1.0,
                                     window=None,
-                                    min_size=30, 
-                                    cpm_or_modularity="modularity", 
+                                    min_size=30,
+                                    cpm_or_modularity="modularity",
                                     each_cc_separately=False,
                                     n_iterations=10,
-                                    initial_membership=None) 
+                                    initial_membership=None)
 g.plot_partition(partition, neptune_name="tiling_after_graph")
 
 label = g.partition_2_label(partition)

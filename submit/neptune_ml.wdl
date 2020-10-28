@@ -8,6 +8,7 @@ task train {
         File ML_parameters
         File data_train
         File data_test
+        File ckpt 
         File credentials_json
         String git_repo
         String git_branch_or_commit
@@ -33,6 +34,7 @@ task train {
         ln -s ~{ML_parameters} ./src/ML_parameters.json
         ln -s ~{data_train} ./src/data_train.pt
         ln -s ~{data_test} ./src/data_test.pt
+        ln -s ~{ckpt} ./src/ckpt.pt
         echo "AFTER CHANGING NAMES --> Content of checkout dir"
         echo $(ls)
 
@@ -72,6 +74,7 @@ workflow neptune_ml {
         File ML_parameters 
         File data_train 
         File data_test
+        File ckpt
         File credentials_json 
         String git_repo
         String git_branch_or_commit 
@@ -83,6 +86,7 @@ workflow neptune_ml {
             credentials_json = credentials_json,
             data_train = data_train,
             data_test = data_test,
+            ckpt = ckpt,
             git_repo = git_repo,
             git_branch_or_commit = git_branch_or_commit
     }

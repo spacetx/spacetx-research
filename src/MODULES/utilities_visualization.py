@@ -72,32 +72,34 @@ def plot_label_contours(label: Union[torch.Tensor, numpy.ndarray],
     return fig
 
 
-def draw_img(c: torch.tensor,
-             bounding_box: BB,
-             big_mask: torch.tensor,
+def draw_img(bounding_box: BB,
+             mixing_k: torch.tensor,
              big_img: torch.tensor,
              big_bg: torch.tensor,
              draw_bg: bool,
-             draw_boxes: bool) -> torch.tensor:
+             draw_boxes: bool,
+             c: Optional[torch.tensor] = None) -> torch.tensor:
+    if c is None:
+        c = torch.ones_like(bounding_box.bx).bool()
     assert len(c.shape) == 2  # boxes, batch
-    assert len(big_mask.shape) == len(big_img.shape) == 5  # boxes, batch, ch, w, h
+    assert len(mixing_k.shape) == len(big_img.shape) == 5  # boxes, batch, ch, w, h
 
-    rec_imgs_no_bb = (c[..., None, None, None] * big_mask * big_img).sum(dim=-5)  # sum over boxes
-    fg_mask = (c[..., None, None, None] * big_mask).sum(dim=-5)  # sum over boxes
+    rec_imgs_no_bb = (c[..., None, None, None] * mixing_k * big_img).sum(dim=-5)  # sum over boxes
+    fg_mask = (c[..., None, None, None] * mixing_k).sum(dim=-5)  # sum over boxes
     background = (1 - fg_mask) * big_bg if draw_bg else torch.zeros_like(big_bg)
 
     width, height = rec_imgs_no_bb.shape[-2:]
 
-    bounding_boxes = draw_bounding_boxes(c=c,
-                                         bounding_box=bounding_box,
+    bounding_boxes = draw_bounding_boxes(bounding_box=bounding_box,
                                          width=width,
-                                         height=height) if draw_boxes else torch.zeros_like(rec_imgs_no_bb)
+                                         height=height,
+                                         c=c) if draw_boxes else torch.zeros_like(rec_imgs_no_bb)
     mask_no_bb = (torch.sum(bounding_boxes, dim=-3, keepdim=True) == 0)
 
     return mask_no_bb * (rec_imgs_no_bb + background) + ~mask_no_bb * bounding_boxes
 
 
-def draw_bounding_boxes(c: Optional[torch.Tensor], bounding_box: BB, width: int, height: int) -> torch.Tensor:
+def draw_bounding_boxes(bounding_box: BB, width: int, height: int, c: Optional[torch.Tensor] = None) -> torch.Tensor:
     # set all prob to one if they are not passed as input
     if c is None:
         c = torch.ones_like(bounding_box.bx).bool()
@@ -176,11 +178,10 @@ def show_batch(images: torch.Tensor,
     assert len(images.shape) == 4  # batch, ch, width, height
     if images.device != "cpu":
         images = images.cpu()
-    if normalize_range is None:
-        grid = utils.make_grid(images, n_col, n_padding, normalize=False, pad_value=pad_value)
-    else:
-        grid = utils.make_grid(images, n_col, n_padding, normalize=True, range=normalize_range,
-                               scale_each=False, pad_value=pad_value)
+
+    # Always normalize the image in (0,1) either using min_max of tensor or normalize_range
+    grid = utils.make_grid(images, n_col, n_padding, normalize=True, range=normalize_range,
+                           scale_each=False, pad_value=pad_value)
         
     fig = plt.figure(figsize=figsize)
     plt.imshow(grid.detach().permute(1, 2, 0).squeeze(-1).numpy())
@@ -522,17 +523,19 @@ def plot_generation(output: Output,
     _ = show_batch(output.imgs[:8],
                    n_col=4,
                    n_padding=4,
+                   normalize_range=(0.0, 1.0),
                    title='imgs, epoch= {0:6d}'.format(epoch),
                    neptune_name=prefix+"imgs"+postfix)
     _ = show_batch(output.inference.sample_c_map[:8].float(),
                    n_col=4,
                    n_padding=4,
+                   normalize_range=(0.0, 1.0),
                    title='c_map, epoch= {0:6d}'.format(epoch),
-                   normalize_range=None,
                    neptune_name=prefix+"c_map"+postfix)
     _ = show_batch(output.inference.big_bg[:8],
                    n_col=4,
                    n_padding=4,
+                   normalize_range=(0.0, 1.0),
                    title='background, epoch= {0:6d}'.format(epoch),
                    neptune_name=prefix+"bg"+postfix)
 
@@ -551,25 +554,33 @@ def plot_reconstruction_and_inference(output: Output,
     _ = show_batch(output.imgs[:8],
                    n_col=4,
                    n_padding=4,
+                   normalize_range=(0.0, 1.0),
                    title='imgs, epoch= {0:6d}'.format(epoch),
                    neptune_name=prefix+"imgs"+postfix)
     _ = show_batch(output.inference.sample_c_map[:8].float(),
                    n_col=4,
                    n_padding=4,
+                   normalize_range=(0.0, 1.0),
                    title='c_map, epoch= {0:6d}'.format(epoch),
-                   normalize_range=None,
                    neptune_name=prefix+"c_map"+postfix)
     _ = show_batch(output.inference.prob_map[:8],
                    n_col=4,
                    n_padding=4,
+                   normalize_range=(0.0, 1.0),
                    title='p_map, epoch= {0:6d}'.format(epoch),
-                   normalize_range=None,
                    neptune_name=prefix+"p_map"+postfix)
     _ = show_batch(output.inference.big_bg[:8],
                    n_col=4,
                    n_padding=4,
+                   normalize_range=(0.0, 1.0),
                    title='background, epoch= {0:6d}'.format(epoch),
                    neptune_name=prefix+"bg"+postfix)
+    _ = show_batch(output.inference.area_map[:8],
+                   n_col=4,
+                   n_padding=4,
+                   normalize_range=None,  # use min_max of tensor
+                   title='area_map, epoch= {0:6d}'.format(epoch),
+                   neptune_name=prefix + "area_map" + postfix)
 
     if verbose:
         print("leaving plot_reconstruction_and_inference")
@@ -590,13 +601,15 @@ def plot_segmentation(segmentation: Segmentation,
     else:
         raise Exception
 
-    _ = show_batch(segmentation.integer_mask,
+    _ = show_batch(segmentation.integer_mask.float(),
                    n_padding=4,
+                   normalize_range=None,  # use min_max of tensor
                    figsize=(12, 12),
                    title='integer_mask, '+title_postfix,
                    neptune_name=prefix+"integer_mask"+postfix)
     _ = show_batch(segmentation.fg_prob,
                    n_padding=4,
+                   normalize_range=(0.0, 1.0),
                    figsize=(12, 12),
                    title='fg_prob, '+title_postfix,
                    neptune_name=prefix+"fg_prob"+postfix)

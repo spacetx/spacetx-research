@@ -8,8 +8,8 @@ from collections import OrderedDict
 from torch.distributions.distribution import Distribution
 from torch.distributions import constraints
 
-from MODULES.utilities import compute_average_in_box, compute_ranking, convert_to_box_list
-from MODULES.utilities import pass_bernoulli
+from MODULES.utilities import pass_bernoulli, compute_ranking, compute_average_in_box
+from MODULES.utilities import invert_convert_to_box_list, convert_to_box_list
 from MODULES.utilities_visualization import show_batch
 from MODULES.namedtuple import DIST, MetricMiniBatch, BB
 from MODULES.utilities_neptune import log_dict_metrics
@@ -48,7 +48,9 @@ def sample_and_kl_prob(logit_map: torch.Tensor,
                        bounding_box_no_noise: BB,
                        prob_corr_factor: float,
                        noisy_sampling: bool,
-                       sample_from_prior: bool) -> Tuple[DIST, torch.Tensor]:
+                       sample_from_prior: bool) -> (DIST, torch.Tensor):
+    """ Return DIST(c_map, kl), prob_map """
+    assert len(logit_map.shape) == 4
 
     # Correction factor
     if sample_from_prior:
@@ -56,8 +58,13 @@ def sample_and_kl_prob(logit_map: torch.Tensor,
             batch_size = torch.Size([logit_map.shape[0]])
             s = similarity_kernel.requires_grad_(False)
             c_all = FiniteDPP(L=s).sample(sample_shape=batch_size).transpose(-1, -2).float()
+            # print("c_all.shape", c_all.shape)
+            c_map = invert_convert_to_box_list(c_all.unsqueeze(-1),
+                                               original_width=logit_map.shape[-2],
+                                               original_height=logit_map.shape[-1])
             kl = torch.zeros(logit_map.shape[0])
-            q_all = torch.rand_like(c_all).float()
+            q_map = c_map.float()
+            return DIST(sample=c_map, kl=kl), q_map
     else:
         # Work with posterior
         if (prob_corr_factor > 0) and (prob_corr_factor <= 1.0):
@@ -83,22 +90,29 @@ def sample_and_kl_prob(logit_map: torch.Tensor,
 
         # Here the gradients are only through log_q and similarity_kernel not c
         c_no_grad = c_all.bool().detach()  # bool variable has requires_grad = False
-        log_prob_posterior = (c_no_grad * log_q + ~c_no_grad * log_one_minus_q).sum(dim=0)
+        log_prob_posterior = (c_no_grad * log_q + ~c_no_grad * log_one_minus_q).sum(dim=0)  # sum over all_boxes
         log_prob_prior = FiniteDPP(L=similarity_kernel).log_prob(c_no_grad.transpose(-1, -2))  # shape: batch_shape
         assert log_prob_posterior.shape == log_prob_prior.shape
         kl = log_prob_posterior - log_prob_prior
 
-    return DIST(sample=c_all, kl=kl), q_all
+        c_map = invert_convert_to_box_list(c_all.unsqueeze(-1),
+                                           original_width=logit_map.shape[-2],
+                                           original_height=logit_map.shape[-1])
+        q_map = invert_convert_to_box_list(q_all.unsqueeze(-1),
+                                           original_width=logit_map.shape[-2],
+                                           original_height=logit_map.shape[-1])
+        return DIST(sample=c_map, kl=kl), q_map
 
 
 class SimilarityKernel(torch.nn.Module):
     """ Similarity based on sum of gaussian kernels of different strength and length_scales """
 
     def __init__(self, n_kernels: int = 4,
-                 pbc: bool = True,
+                 pbc: bool = False,
                  eps: float = 1E-4,
                  length_scales: Optional[torch.Tensor] = None,
                  kernel_weights: Optional[torch.Tensor] = None):
+        """ It is safer to set pbc=False b/c the matrix might become ill-conditioned otherwise """
         super().__init__()
 
         self.n_kernels = n_kernels
@@ -107,7 +121,7 @@ class SimilarityKernel(torch.nn.Module):
         self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
         if length_scales is None:
-            LENGTH_2 = 1.0
+            LENGTH_2 = 10.0
             length_scales = torch.linspace(LENGTH_2/self.n_kernels, LENGTH_2,
                                            steps=self.n_kernels,
                                            device=self.device,
@@ -132,7 +146,8 @@ class SimilarityKernel(torch.nn.Module):
         self.d2 = None
         self.diag = None
 
-    def _invertsoftplus(self, x):
+    @staticmethod
+    def _invertsoftplus(x):
         return torch.log(torch.exp(x)-1.0)
 
     def _compute_d2_diag(self, n_width: int, n_height: int):
@@ -151,10 +166,8 @@ class SimilarityKernel(torch.nn.Module):
             else:
                 d2 = d.pow(2).sum(dim=-1).float()
 
-            diag = torch.eye(d2.shape[-2],
-                             dtype=torch.float,
-                             device=self.device,
-                             requires_grad=False) * self.eps
+            values = self.eps * torch.ones(d2.shape[-2], dtype=torch.float, device=self.device)
+            diag = torch.diag_embed(values, offset=0, dim1=-2, dim2=-1)
             return d2, diag
 
     def sample_2_mask(self, sample):
@@ -163,11 +176,12 @@ class SimilarityKernel(torch.nn.Module):
         return mask
 
     def get_l_w(self):
-        return F.softplus(self.similarity_length)+1E-2, F.softplus(self.similarity_w)+1E-2
+        return F.softplus(self.similarity_length)+1.0, F.softplus(self.similarity_w)+1E-2
 
     def forward(self, n_width: int, n_height: int):
         """ Implement L = sum_i a_i exp[-b_i d2] """
         l, w = self.get_l_w()
+        l2 = l.pow(2)
 
         if (n_width != self.n_width) or (n_height != self.n_height):
             self.n_width = n_width
@@ -175,7 +189,7 @@ class SimilarityKernel(torch.nn.Module):
             self.d2, self.diag = self._compute_d2_diag(n_width=n_width, n_height=n_height)
 
         likelihood_kernel = (w[..., None, None] *
-                             torch.exp(-0.5*self.d2/l[..., None, None].pow(2))).sum(dim=-3) + self.diag
+                             torch.exp(-0.5*self.d2/l2[..., None, None])).sum(dim=-3) + self.diag
         return likelihood_kernel  # shape (n_width*n_height, n_width*n_height)
 
 
@@ -187,6 +201,9 @@ class FiniteDPP(Distribution):
         The constraints are:
         K = positive semidefinite, symmetric, eigenvalues in [0,1]
         L = positive semidefinite, symmetric, eigenvalues >= 0
+
+        Need to be careful about svd decomposition which can become unstable on GPU or CPU
+        https://github.com/pytorch/pytorch/issues/28293
     """
 
     arg_constraints = {'K': constraints.positive_definite,
@@ -201,7 +218,11 @@ class FiniteDPP(Distribution):
 
         elif K is not None:
             self.K = 0.5 * (K + K.transpose(-1, -2))  # make sure it is symmetrized
-            u, s_k, v = torch.svd(self.K)
+            try:
+                u, s_k, v = torch.svd(self.K)
+            except:
+                # torch.svd may have convergence issues for GPU and CPU.
+                u, s_k, v = torch.svd(self.K + 1e-3 * self.K.mean() * torch.ones_like(self.K))
             s_l = s_k / (1.0 - s_k)
             self.L = torch.matmul(u * s_l.unsqueeze(-2), v.transpose(-1, -2))
 
@@ -213,7 +234,11 @@ class FiniteDPP(Distribution):
 
         elif L is not None:
             self.L = 0.5 * (L + L.transpose(-1, -2))  # make sure it is symmetrized
-            u, s_l, v = torch.svd(self.L)
+            try:
+                u, s_l, v = torch.svd(self.L)
+            except:
+                # torch.svd may have convergence issues for GPU and CPU.
+                u, s_l, v = torch.svd(self.L + 1e-3 * self.L.mean() * torch.ones_like(self.L))
             s_k = s_l / (1.0 + s_l)
             self.K = torch.matmul(u * s_k.unsqueeze(-2), v.transpose(-1, -2))
 
@@ -226,7 +251,6 @@ class FiniteDPP(Distribution):
             raise Exception
 
         self.s_l = s_l
-        # print("s_l ->", s_l)
         batch_shape, event_shape = self.K.shape[:-2], self.K.shape[-1:]
         super(FiniteDPP, self).__init__(batch_shape, event_shape, validate_args=validate_args)
 
@@ -261,37 +285,6 @@ class FiniteDPP(Distribution):
                 K[..., j + 1:, j + 1:] -= K[..., j + 1:, j].unsqueeze(-1) * K[..., j, j + 1:].unsqueeze(-2)
 
             return value
-
-###    def OLD_log_prob(self, value):
-###        """ log_prob = logdet(Ls) - logdet(L+I)
-###            I am using the fact that eigen(L+I) = eigen(L)+1
-###            -> logdet(L+I)=log prod[ eigen(L+I) ] = sum log(eigen(L+I)) = sum log(eigen(L)+1)
-###
-###            # value.shape = sample_shape + batch_shape + event_shape
-###            # logdet(L+I).shape = batch_shape
-###            :rtype:
-###        """
-###        assert are_broadcastable(value, self.L[..., 0])
-###        assert self.L.device == value.device
-###        assert value.dtype == torch.bool
-###
-###        if self._validate_args:
-###            self._validate_sample(value)
-###
-###        logdet_L_plus_I = (self.s_l + 1).log().sum(dim=-1)  # batch_shape
-###
-###        # Reshapes
-###        independet_dims = list(value.shape[:-1])
-###        value = value.flatten(start_dim=0, end_dim=-2)  # *, event_shape
-###        L = self.L.expand(independet_dims + [-1, -1]).flatten(start_dim=0, end_dim=-3)  # *, event_shape, event_shape
-###        logdet_Ls = torch.zeros(independet_dims, dtype=self.L.dtype, device=value.device).view(-1)  # *
-###
-###        # Select rows and columns of the matrix which correspond to selected particles
-###        for i in range(logdet_Ls.shape[0]):
-###            tmp = L[i, value[i], :][:, value[i]]
-###            logdet_Ls[i] = torch.logdet(tmp)
-###        logdet_Ls = logdet_Ls.view(independet_dims)  # sample_shape, batch_shape
-###        return logdet_Ls - logdet_L_plus_I
 
     def log_prob(self, value):
         """ log_prob = logdet(Ls) - logdet(L+I)
@@ -584,7 +577,7 @@ class SpecialDataSet(object):
         img, labels, index = self.__getitem__(index[:batch_size])
         print("MINIBATCH: img.shapes labels.shape, index.shape ->", img.shape, labels.shape, index.shape)
         print("MINIBATCH: min and max of minibatch", torch.min(img), torch.max(img))
-        return show_batch(img, n_col=4, n_padding=4, pad_value=1, figsize=(24, 24))
+        return show_batch(img, n_col=4, n_padding=4, normalize_range=(0.0, 1.0), pad_value=1, figsize=(24, 24))
 
 
 def process_one_epoch(model: torch.nn.Module,

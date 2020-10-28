@@ -254,12 +254,13 @@ class Inference(NamedTuple):
     prob_few: torch.Tensor  # shape -> boxes_few, batch_size
     big_bg: torch.Tensor
     big_img: torch.Tensor
-    big_mask: torch.Tensor
-    big_mask_NON_interacting: torch.Tensor  # Use exclusively to compute overlap penalty
+    mixing: torch.Tensor
+    mixing_non_interacting: torch.Tensor  # Use exclusively to compute overlap penalty
     # the samples of the 3 latent variables
     sample_c_map: torch.Tensor      # shape -> batch, 1, width, height
     sample_c: torch.Tensor          # boxes_few, batch_size
     sample_bb: BB                   # each bx,by,bw,bh has shape -> boxes_few, batch_size
+    sample_zwhere: torch.Tensor     # boxes_few, batch_size, latent_dim
     sample_zinstance: torch.Tensor  # boxes_few, batch_size, latent_dim
     sample_zbg: torch.Tensor        # batch_size, latent_dim
     # kl of the 3 latent variables
