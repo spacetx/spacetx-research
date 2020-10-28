@@ -75,9 +75,9 @@ log_img_only(name="train_batch_example", fig=train_batch_example_fig, experiment
 reference_imgs_list = []
 crop_size = params["input_image"]["size_raw_image"]
 for ni in range(2):
-    i = 1060 + ni * crop_size
+    i = 1080 + ni * crop_size
     for nj in range(4):
-        j = 2100 + nj * crop_size
+        j = 2140 + nj * crop_size
         reference_imgs_list.append(img_torch[..., i:i+crop_size, j:j+crop_size])
 reference_imgs = torch.cat(reference_imgs_list, dim=-4)
 if torch.cuda.is_available():
@@ -230,8 +230,8 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                                                  verbose=True)
 
 # # Check segmentation WITH and WITHOUT tiling
-img_to_segment = train_loader.img[0, :, 1060:1360, 2100:2400]
-roi_mask_to_segment = train_loader.roi_mask[0, :, 1060:1360, 2100:2400]
+img_to_segment = train_loader.img[0, :, 940:1240, 2140:2440]
+roi_mask_to_segment = train_loader.roi_mask[0, :, 940:1240, 2140:2440]
 
 # check simple segmentation
 crop_size = params["input_image"]["size_raw_image"]
