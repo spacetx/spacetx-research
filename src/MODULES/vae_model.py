@@ -394,9 +394,7 @@ class CompositionalVae(torch.nn.Module):
 
             # Now compute fg_prob, integer_segmentation_mask, similarity
             most_likely_mixing, index = torch.max(inference.mixing, dim=-5, keepdim=True)  # 1, batch_size, 1, w, h
-            integer_mask = ((most_likely_mixing > 0.5) * (index + 1)).squeeze(-5).to(
-                dtype=torch.int32)  # bg = 0 fg = 1,2,3,...
-
+            integer_mask = ((most_likely_mixing > 0.5) * (index + 1)).squeeze(-5).to(dtype=torch.int32)  # bg = 0 fg = 1,2,3,...
             fg_prob = torch.sum(inference.mixing, dim=-5)  # sum over instances
 
             bounding_boxes = draw_bounding_boxes(c=inference.sample_c,
@@ -502,8 +500,10 @@ class CompositionalVae(torch.nn.Module):
 
             if roi_mask is not None:
                 assert roi_mask.shape[-2:] == single_img.shape[-2:]
-                cum_roi_mask = F.pad(torch.cumsum(torch.cumsum(roi_mask, dim=-1), dim=-2),
-                                     pad=pad_list, mode='constant', value=0)
+
+                # pad before computing the cumsum
+                roi_mask_padded = F.pad(roi_mask, pad=pad_list, mode='constant', value=0)
+                cum_roi_mask = torch.cumsum(torch.cumsum(roi_mask_padded, dim=-1), dim=-2)
                 assert cum_roi_mask.shape[-2:] == img_padded.shape[-2:]
 
                 # Exclude stuff if outside the roi_mask
