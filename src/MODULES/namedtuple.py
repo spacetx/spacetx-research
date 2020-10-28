@@ -314,6 +314,7 @@ class MetricMiniBatch(NamedTuple):
 
     similarity_l: numpy.ndarray
     similarity_w: numpy.ndarray
+    lambda_logit: float
 
 
     def pretty_print(self, epoch: int=0) -> str:
