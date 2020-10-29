@@ -2,12 +2,16 @@
 # coding: utf-8
 
 import neptune
-from MODULES.utilities_neptune import log_object_as_artifact, log_model_summary, log_last_ckpt, log_img_only, log_dict_metrics
+from MODULES.utilities_neptune import log_object_as_artifact, log_model_summary, log_img_only
+from MODULES.utilities_neptune import log_dict_metrics, log_concordance
 from MODULES.vae_model import *
 from MODULES.utilities_visualization import show_batch, plot_tiling, plot_all_from_dictionary, plot_label_contours
 from MODULES.utilities_visualization import plot_reconstruction_and_inference, plot_generation, plot_segmentation
+from MODULES.utilities_visualization import plot_concordance
 from MODULES.utilities_ml import ConditionalRandomCrop, SpecialDataSet, process_one_epoch
 from MODULES.graph_clustering import GraphSegmentation
+from MODULES.utilities import QC_on_integer_mask, concordance_integer_masks
+import skimage.io
 
 # Check versions
 import torch
@@ -229,17 +233,10 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                                                  train_or_test="train",
                                                  verbose=True)
 
-# # Check segmentation WITH and WITHOUT tiling
+# # Check segmentation WITH and WITHOUT tiling to the GROUND_TRUTH
 img_to_segment = train_loader.img[0, :, 940:1240, 2140:2440]
 roi_mask_to_segment = train_loader.roi_mask[0, :, 940:1240, 2140:2440]
-
-# check simple segmentation
-crop_size = params["input_image"]["size_raw_image"]
-small_img_to_segment = img_to_segment[None, ..., :crop_size, :crop_size]
-if torch.cuda.is_available():
-    small_img_to_segment = small_img_to_segment.cuda()
-segmentation: Segmentation = vae.segment(batch_imgs=small_img_to_segment)
-plot_segmentation(segmentation, epoch="", prefix="seg_", postfix="_tiling")
+gt_numpy = skimage.io.imread("./ground_truth").astype(numpy.int32)[940:1240, 2140:2440]
 
 # tiling segmentation
 tiling: Segmentation = vae.segment_with_tiling(single_img=img_to_segment,
@@ -256,29 +253,56 @@ tiling_fig = plot_tiling(tiling, neptune_name="tiling_before_graph")
 
 # perform graph analysis
 g = GraphSegmentation(tiling, min_fg_prob=0.1, min_edge_weight=0.01, normalize_graph_edges=True)
-partition = g.find_partition_leiden(resolution=1.0,
-                                    window=None,
-                                    min_size=30,
-                                    cpm_or_modularity="modularity",
-                                    each_cc_separately=False,
-                                    n_iterations=10,
-                                    initial_membership=None)
-g.plot_partition(partition, neptune_name="tiling_after_graph")
+partition_graph = g.find_partition_leiden(resolution=1.0,
+                                          window=None,
+                                          min_size=30,
+                                          cpm_or_modularity="modularity",
+                                          each_cc_separately=False,
+                                          n_iterations=10,
+                                          initial_membership=None)
+g.plot_partition(partition_graph, neptune_name="tiling_after_graph")
+graph_integer_mask = g.partition_2_integer_mask(partition_graph)
+if torch.cuda.is_available():
+    graph_integer_mask = graph_integer_mask.cuda()
 
-label = g.partition_2_label(partition)
-try:
-    label_after_QC = g.QC_on_label(label, min_area=30)
-except:
-    label_after_QC = label
+# qualitative comparison segmentation
+simple_integer_mask = QC_on_integer_mask(tiling.integer_mask[0, 0], min_area=30).to(dtype=graph_integer_mask.dtype,
+                                                                                    device=graph_integer_mask.device)
 
-plot_label_contours(label=tiling.integer_mask[0, 0],
+gt_integer_mask = torch.from_numpy(QC_on_integer_mask(gt_numpy, min_area=30)).to(dtype=graph_integer_mask.dtype,
+                                                                                 device=graph_integer_mask.device)
+
+# compare with ground truth
+# print("graph_integer_mask", graph_integer_mask.device, graph_integer_mask.dtype, graph_integer_mask.shape)
+# print("gt_integer_mask", gt_integer_mask.device, gt_integer_mask.dtype, gt_integer_mask.shape)
+# print("simple_integer_mask", simple_integer_mask.device, simple_integer_mask.dtype, simple_integer_mask.shape)
+
+plot_label_contours(label=gt_integer_mask,
                     image=tiling.raw_image[0, 0],
                     contour_thickness=2,
-                    neptune_name="tiling_contours_based_on_sample")
+                    neptune_name="tiling_contours_ground_truth")
 
-plot_label_contours(label=label_after_QC,
+plot_label_contours(label=simple_integer_mask,
                     image=tiling.raw_image[0, 0],
                     contour_thickness=2,
-                    neptune_name="tiling_contours_based_on_graph")
+                    neptune_name="tiling_contours_simple")
+
+plot_label_contours(label=graph_integer_mask,
+                    image=tiling.raw_image[0, 0],
+                    contour_thickness=2,
+                    neptune_name="tiling_contours_graph")
+
+# quantitative comparison
+simple_vs_gt = concordance_integer_masks(simple_integer_mask, gt_integer_mask)
+graph_vs_gt = concordance_integer_masks(graph_integer_mask, gt_integer_mask)
+simple_vs_graph = concordance_integer_masks(simple_integer_mask, graph_integer_mask)
+
+plot_concordance(concordance=simple_vs_gt, neptune_name="concordance_simple_vs_gt_")
+plot_concordance(concordance=graph_vs_gt, neptune_name="concordance_graph_vs_gt_")
+plot_concordance(concordance=simple_vs_graph, neptune_name="concordance_simple_vs_graph_")
+
+log_concordance(concordance=simple_vs_gt, prefix="concordance_simple_vs_gt_")
+log_concordance(concordance=graph_vs_gt, prefix="concordance_graph_vs_gt_")
+log_concordance(concordance=simple_vs_graph, prefix="concordance_simple_vs_graph_")
 
 exp.stop()

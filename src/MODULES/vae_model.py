@@ -134,7 +134,7 @@ class CompositionalVae(torch.nn.Module):
                                                                          dtype=torch.float), requires_grad=True)
         self.geco_balance_factor = torch.nn.Parameter(data=torch.tensor(self.geco_dict["factor_balance_range"][1],
                                                                         dtype=torch.float), requires_grad=True)
-        self.running_avarage_kl_logit = torch.nn.Parameter(data=torch.ones(1, dtype=torch.float), requires_grad=True)
+        self.running_avarage_kl_logit = torch.nn.Parameter(data=4*torch.ones(1, dtype=torch.float), requires_grad=True)
 
         # Put everything on the cude if cuda available
         if torch.cuda.is_available():
@@ -225,8 +225,6 @@ class CompositionalVae(torch.nn.Module):
         # 2) use map_quantitites or few_quantities
         num_pixel = torch.numel(mixing_fg)
         sparsity_mask = torch.sum(mixing_fg) / num_pixel
-        # sparsity_box = torch.sum(area_box_few * inference.sample_c) / num_pixel
-        # sparsity_prob = torch.sum(inference.sample_c_map) / (batch_size * n_boxes)
         sparsity_box = torch.sum(p_times_area_map) / num_pixel
         sparsity_prob = torch.sum(inference.prob_map) / (batch_size * n_boxes)
         sparsity_av = sparsity_mask + sparsity_box + sparsity_prob
@@ -240,18 +238,19 @@ class CompositionalVae(torch.nn.Module):
         kl_zwhere = torch.mean(inference.kl_zwhere)        # mean over: n_boxes, batch, latent_dim
         kl_logit = torch.mean(inference.kl_logit)          # mean over: batch
 
-        # kl_av = kl_zbg + kl_zinstance + kl_zwhere + \
-        #         torch.exp(-self.running_avarage_kl_logit) * kl_logit + self.running_avarage_kl_logit
+        kl_av = kl_zbg + kl_zinstance + kl_zwhere + \
+                torch.exp(-self.running_avarage_kl_logit) * kl_logit + \
+                self.running_avarage_kl_logit - self.running_avarage_kl_logit.detach()
 
-        # 5. compute the moving averages
-        with torch.no_grad():
-            input_dict = {"kl_logit": kl_logit.item()}
-            # Only if in training mode I accumulate the moving average
-            if self.training:
-                ma_dict = self.ma_calculator.accumulate(input_dict)
-            else:
-                ma_dict = input_dict
-        kl_av = kl_zbg + kl_zinstance + kl_zwhere + kl_logit / (1E-3 + ma_dict["kl_logit"])
+##         # 5. compute the moving averages
+##         with torch.no_grad():
+##             input_dict = {"kl_logit": kl_logit.item()}
+##             # Only if in training mode I accumulate the moving average
+##             if self.training:
+##                 ma_dict = self.ma_calculator.accumulate(input_dict)
+##             else:
+##                 ma_dict = input_dict
+##         kl_av = kl_zbg + kl_zinstance + kl_zwhere + kl_logit / (1E-3 + ma_dict["kl_logit"])
 
         # 6. Note that I clamp in_place
         with torch.no_grad():
@@ -317,7 +316,8 @@ class CompositionalVae(torch.nn.Module):
                                delta_2=delta_2.detach().item(),
 
                                similarity_l=inference.similarity_l.detach().cpu().numpy(),
-                               similarity_w=inference.similarity_w.detach().cpu().numpy())
+                               similarity_w=inference.similarity_w.detach().cpu().numpy(),
+                               lambda_logit=self.running_avarage_kl_logit.detach().cpu().numpy())
 
     @staticmethod
     def compute_sparse_similarity_matrix(mixing_k: torch.tensor,

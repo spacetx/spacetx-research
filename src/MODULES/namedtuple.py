@@ -1,6 +1,6 @@
 import torch
 import numpy
-from typing import NamedTuple, Optional, Union
+from typing import NamedTuple, Optional
 import skimage.color
 import matplotlib.pyplot as plt
 
@@ -76,12 +76,13 @@ class Suggestion(NamedTuple):
         ax_2.legend(loc='upper right', fontsize=fontsize)
 
 
-class ConcordancePartition(NamedTuple):
+class ConcordanceIntMask(NamedTuple):
+    intersection_mask: torch.tensor
     joint_distribution: torch.tensor
     mutual_information: float
     delta_n: int
     iou: float
-    n_reversible_mapping: int
+    n_reversible_instances: int
 
 
 class Partition(NamedTuple):
@@ -137,69 +138,6 @@ class Partition(NamedTuple):
         else:
             return Partition(sizes=self.sizes * my_filter,
                              membership=self.membership).compactify()
-
-    def concordance_with_partition(self, other_partition) -> ConcordancePartition:
-        """ Compute measure of concordance between two partitions:
-            joint_distribution
-            mutual_information
-            delta_n
-            iou
-
-            We use the peaks of the join distribution to extract the mapping between membership labels.
-        """
-
-        assert self.membership.shape == other_partition.membership.shape
-
-        # Use z = x + y * nx
-        # whose reciprocal is:
-        # x = z % nx
-        # y = z // nx
-
-        nx = self.sizes.shape[0]
-        ny = other_partition.sizes.shape[0]
-        z = self.membership + other_partition.membership * nx  # if z = x + y * nx
-        count_z = torch.bincount(z).float()
-        z_to_x = torch.arange(count_z.shape[0]) % nx  # then x = z % nx
-        z_to_y = torch.arange(count_z.shape[0]) // nx  # and y = z // nx
-
-        pxy = torch.zeros((nx, ny), dtype=torch.float, device=self.membership.device)
-        pxy[z_to_x, z_to_y] = count_z
-        pxy /= torch.sum(pxy)
-        px = torch.sum(pxy, dim=-1)
-        py = torch.sum(pxy, dim=-2)
-
-        # Compute the mutual information
-        term_xy = pxy * torch.log(pxy)
-        term_x = px * torch.log(px)
-        term_y = py * torch.log(py)
-        mutual_information = term_xy[pxy > 0].sum() - term_x[px > 0].sum() - term_y[py > 0].sum()
-
-        # Extract the most likely mappings
-        to_other = torch.max(pxy, dim=-1)[1]
-        from_other = torch.max(pxy, dim=-2)[1]
-
-        # Find one-to-one correspondence among instance IDs
-        original_instance_id = torch.arange(nx, device=self.membership.device, dtype=torch.long)
-        is_id_one_to_one = (from_other[to_other[original_instance_id]] == original_instance_id)
-        n_reversible_mapping = is_id_one_to_one.sum().item()
-
-        # Define a mapping that changes all bad (i.e. not unique or background) instance IDs to -1
-        original_to_good_id = original_instance_id
-        original_to_good_id[~is_id_one_to_one] = -1
-        original_to_good_id[0] = -1  # Exclude the background
-        filter_fg_pixels_with_reversible_id = (original_to_good_id[self.membership] > 0)
-
-        # Even if the ID is reversible the pixel might have the wrong one.
-        pixel_with_same_id = (to_other[self.membership] == other_partition.membership)
-        intersection = torch.sum(pixel_with_same_id[filter_fg_pixels_with_reversible_id])
-        union = torch.sum(self.sizes[1:]) + torch.sum(other_partition.sizes[1:]) - intersection  # exclude background
-        iou = intersection.float()/union
-
-        return ConcordancePartition(joint_distribution=pxy,
-                                    mutual_information=mutual_information.item(),
-                                    delta_n=ny - nx,
-                                    iou=iou.item(),
-                                    n_reversible_mapping=n_reversible_mapping)
 
 #  ----------------------------------------------------------------  #
 #  ------- Stuff Related to Processing (i.e. CompositionalVAE) ----  #
@@ -314,6 +252,7 @@ class MetricMiniBatch(NamedTuple):
 
     similarity_l: numpy.ndarray
     similarity_w: numpy.ndarray
+    lambda_logit: float
 
 
     def pretty_print(self, epoch: int=0) -> str:

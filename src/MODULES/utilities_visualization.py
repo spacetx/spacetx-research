@@ -617,3 +617,18 @@ def plot_segmentation(segmentation: Segmentation,
     if verbose:
         print("leaving plot_segmentation")
 
+
+def plot_concordance(concordance,
+                     figsize: tuple = (12, 12),
+                     experiment: Optional[neptune.experiments.Experiment] = None,
+                     neptune_name: Optional[str] = None):
+    fig, axes = plt.subplots(figsize=figsize)
+    axes.imshow(concordance.intersection_mask, cmap='gray')
+    axes.set_title("intersection mask, iou=" + str(concordance.iou))
+
+    fig.tight_layout()
+    if neptune_name is not None:
+        log_img_only(name=neptune_name, fig=fig, experiment=experiment)
+    plt.close(fig)
+    return fig
+
