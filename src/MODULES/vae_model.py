@@ -243,7 +243,8 @@ class CompositionalVae(torch.nn.Module):
         kl_logit = torch.mean(inference.kl_logit)          # mean over: batch
 
         kl_av = kl_zbg + kl_zinstance + kl_zwhere + \
-                torch.exp(-self.running_avarage_kl_logit) * kl_logit + self.running_avarage_kl_logit
+                torch.exp(-self.running_avarage_kl_logit) * kl_logit + \
+                self.running_avarage_kl_logit - self.running_avarage_kl_logit.detach()
 
 ##         # 5. compute the moving averages
 ##         with torch.no_grad():

@@ -1,15 +1,15 @@
+import neptune
 import torch
 import numpy
 import skimage.segmentation
 import skimage.color
 import leidenalg as la
 import igraph as ig
-from MODULES.namedtuple import Segmentation, Partition, SparseSimilarity, Suggestion, ConcordancePartition
 from typing import Optional, List
 from matplotlib import pyplot as plt
-import neptune
+from MODULES.namedtuple import Segmentation, Partition, SparseSimilarity, Suggestion, ConcordanceIntMask
 from MODULES.utilities_neptune import log_img_and_chart
-
+from MODULES.utilities import concordance_integer_masks
 
 # I HAVE LEARNED:
 # 1. If I use a lot of negihbours then all methods are roughly equivalent b/c graph becomes ALL-TO-ALL
@@ -65,35 +65,6 @@ with torch.no_grad():
                                                  min_fg_prob=min_fg_prob,
                                                  min_edge_weight=min_edge_weight,
                                                  normalize_graph_edges=normalize_graph_edges)
-
-            # Connected Component partition
-            self._partition_connected_components = None
-            self._partition_sample_segmask = None
-            
-            # TODO: Compute median density of connected components so that resolution parameter is about 1
-            # self.reference_density = AUCH
-
-        @property
-        def partition_connected_components(self):
-            if self._partition_connected_components is None:
-                mask = (self.index_matrix >= 0).cpu()
-                labels = skimage.measure.label(mask, connectivity=2, background=0, return_num=False)
-                membership_from_cc = torch.tensor(labels,
-                                                  dtype=torch.long,
-                                                  device=self.device)[self.i_coordinate_fg_pixel,
-                                                                      self.j_coordinate_fg_pixel]
-                self._partition_connected_components = Partition(membership=membership_from_cc,
-                                                                 sizes=torch.bincount(membership_from_cc))
-            return self._partition_connected_components
-
-        @property
-        def partition_sample_segmask(self):
-            if self._partition_sample_segmask is None:
-                membership_from_example_segmask = self.example_integer_mask[self.i_coordinate_fg_pixel,
-                                                                            self.j_coordinate_fg_pixel].long()
-                self._partition_sample_segmask = Partition(membership=membership_from_example_segmask,
-                                                           sizes=torch.bincount(membership_from_example_segmask))
-            return self._partition_sample_segmask
 
         def similarity_2_graph(self, similarity: SparseSimilarity,
                                fg_prob: torch.tensor,
@@ -176,7 +147,7 @@ with torch.no_grad():
                                          "total_nodes": self.n_fg_pixel},
                             directed=False)
 
-        def partition_2_label(self, partition: Partition):
+        def partition_2_integer_mask(self, partition: Partition):
             label = torch.zeros_like(self.index_matrix, 
                                      dtype=partition.membership.dtype,
                                      device=partition.membership.device)
@@ -250,24 +221,24 @@ with torch.no_grad():
 
                 window = (min_row, min_col, max_row, max_col)
             """
-
             # filter by window
             if window is None:
                 window = [0, 0, self.raw_image.shape[-2], self.raw_image.shape[-1]]
-                other_partition = self.partition_sample_segmask
+                other_integer_mask = self.example_integer_mask
             else:
                 window = (max(0, window[0]),
                           max(0, window[1]),
                           min(self.raw_image.shape[-2], window[2]),
                           min(self.raw_image.shape[-1], window[3]))
-                vertex_in_window = self.is_vertex_in_window(window)
-                # NEXT LINE IS A BIT SLOW
-                other_partition = self.partition_sample_segmask.filter_by_vertex(keep_vertex=vertex_in_window)
-            
+                other_integer_mask = self.example_integer_mask[window[0]:window[2], window[1]:window[3]]
+
             resolutions = numpy.arange(0.5, 10, 0.5) if sweep_range is None else sweep_range
             iou = numpy.zeros(resolutions.shape[0], dtype=float)
             mi = numpy.zeros_like(iou)
-            label = numpy.zeros((resolutions.shape[0], window[2]-window[0], window[3]-window[1]), dtype=numpy.int)
+            n_reversible_instances = numpy.zeros_like(iou)
+            total_intersection = numpy.zeros_like(iou)
+            integer_mask = numpy.zeros((resolutions.shape[0], window[2]-window[0], window[3]-window[1]),
+                                       dtype=numpy.int)
             delta_n_cells = numpy.zeros(resolutions.shape[0], dtype=numpy.int)
             n_cells = numpy.zeros_like(delta_n_cells)
             sizes_list = list()
@@ -282,17 +253,22 @@ with torch.no_grad():
                                                    max_size=max_size,
                                                    cpm_or_modularity=cpm_or_modularity,
                                                    each_cc_separately=each_cc_separately)
-
-                #TODO: the following lines are very slow for a large graph
-                n_cells[n] = len(p_tmp.sizes)-1
-                label[n] = self.partition_2_label(p_tmp)[window[0]:window[2], window[1]:window[3]].cpu().numpy()
+                int_mask = self.partition_2_integer_mask(p_tmp)[window[0]:window[2], window[1]:window[3]]
                 sizes_list.append(p_tmp.sizes.cpu().numpy())
 
-                # Conpute concordance
-                c_tmp: ConcordancePartition = p_tmp.concordance_with_partition(other_partition=other_partition)
+                n_cells[n] = len(p_tmp.sizes)-1
+                integer_mask[n] = int_mask.cpu().numpy()
+                c_tmp: ConcordanceIntMask = concordance_integer_masks(integer_mask[n], other_integer_mask)
                 delta_n_cells[n] = c_tmp.delta_n
                 iou[n] = c_tmp.iou
                 mi[n] = c_tmp.mutual_information
+                n_reversible_instances[n] = c_tmp.n_reversible_instances
+                total_intersection[n] = c_tmp.intersection_mask.sum().float()
+
+                mutual_information: float
+                delta_n: int
+                iou: float
+                n_reversible_instances: int
 
             i_max = numpy.argmax(iou)
             return Suggestion(best_resolution=resolutions[i_max],
@@ -301,7 +277,7 @@ with torch.no_grad():
                               sweep_mi=mi,
                               sweep_iou=iou,
                               sweep_delta_n=delta_n_cells,
-                              sweep_seg_mask=label,
+                              sweep_seg_mask=integer_mask,
                               sweep_sizes=sizes_list,
                               sweep_n_cells=n_cells)
 
@@ -387,18 +363,6 @@ with torch.no_grad():
             return Partition(sizes=torch.bincount(membership),
                              membership=membership).filter_by_size(min_size=min_size, max_size=max_size)
 
-        def QC_on_label(self, old_label, min_area):
-            """ This function filter the labels by some criteria. For example by min size"""
-            labels = skimage.measure.label(old_label.cpu(), background=0, return_num=False, connectivity=2)
-            mydict = skimage.measure.regionprops_table(labels, properties=['label', 'area'])
-            my_filter = mydict["area"] > min_area
-
-            bad_labels = mydict["label"][~my_filter]
-            old2new = numpy.arange(mydict["label"][-1]+1)
-            old2new[bad_labels] = 0
-            new_labels = old2new[labels].astype(numpy.int32)
-            return new_labels
-
         def plot_partition(self, partition: Optional[Partition] = None,
                            figsize: Optional[tuple] = (12, 12),
                            window: Optional[tuple] = None,
@@ -424,15 +388,15 @@ with torch.no_grad():
                 sizes_fg = sizes_fg[sizes_fg > 0]  # since I am filtering the vertex some sizes might become zero
                 w = window
 
-            label = self.partition_2_label(partition)[w[0]:w[2], w[1]:w[3]].cpu().long().numpy()  # shape: w, h
+            integer_mask = self.partition_2_integer_mask(partition)[w[0]:w[2], w[1]:w[3]].cpu().long().numpy()  # shape: w, h
             image = self.raw_image[:, w[0]:w[2], w[1]:w[3]].permute(1, 2, 0).cpu().float().numpy()  # shape: w, h, ch
             if len(image.shape) == 3 and (image.shape[-1] != 3):
                 image = image[..., 0]
 
             fig, axes = plt.subplots(ncols=2, nrows=2, figsize=figsize)
-            axes[0, 0].imshow(skimage.color.label2rgb(label=label,
+            axes[0, 0].imshow(skimage.color.label2rgb(label=integer_mask,
                                                       bg_label=0))
-            axes[0, 1].imshow(skimage.color.label2rgb(label=label,
+            axes[0, 1].imshow(skimage.color.label2rgb(label=integer_mask,
                                                       image=image,
                                                       alpha=0.25,
                                                       bg_label=0))

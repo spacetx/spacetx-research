@@ -2,8 +2,9 @@ import json
 import torch
 import numpy
 import dill
-from typing import Union, Optional, NamedTuple
-from MODULES.namedtuple import BB
+from typing import Union, Optional
+from MODULES.namedtuple import BB, ConcordanceIntMask
+import skimage.measure
 
 
 def convert_to_box_list(x: torch.Tensor) -> torch.Tensor:
@@ -84,6 +85,86 @@ def linear_interpolation(t: Union[numpy.array, float], values: tuple, times: tup
     v_min = min(v_in, v_fin)
     v_max = max(v_in, v_fin)
     return numpy.clip(v, v_min, v_max)
+
+
+def QC_on_integer_mask(integer_mask: Union[torch.Tensor, numpy.ndarray], min_area):
+    """ This function filter the labels by some criteria (for example by min size).
+        Add more QC in the future"""
+    if isinstance(integer_mask, torch.Tensor):
+        labels = skimage.measure.label(integer_mask.cpu(), background=0, return_num=False, connectivity=2)
+    else:
+        labels = skimage.measure.label(integer_mask, background=0, return_num=False, connectivity=2)
+
+    mydict = skimage.measure.regionprops_table(labels, properties=['label', 'area'])
+    my_filter = mydict["area"] > min_area
+
+    bad_labels = mydict["label"][~my_filter]
+    old2new = numpy.arange(mydict["label"][-1] + 1)
+    old2new[bad_labels] = 0
+    new_integer_mask = old2new[labels]
+
+    if isinstance(integer_mask, torch.Tensor):
+        return torch.from_numpy(new_integer_mask).to(dtype=integer_mask.dtype, device=integer_mask.device)
+    else:
+        return new_integer_mask.astype(integer_mask.dtype)
+
+
+def concordance_integer_masks(mask1: torch.Tensor, mask2: torch.Tensor) -> ConcordanceIntMask:
+    """ Compute measure of concordance between two partitions:
+        joint_distribution
+        mutual_information
+        delta_n
+        iou
+
+        We use the peaks of the join distribution to extract the mapping between membership labels.
+    """
+
+    assert mask1.shape == mask2.shape
+    assert mask1.device == mask2.device
+
+    nx = torch.max(mask1).item()  # 0,1,..,nx
+    ny = torch.max(mask2).item()  # 0,1,..,ny
+    z = mask2 + mask1 * (ny + 1)  # 0,1,...., nx*ny
+    count_z = torch.bincount(z.flatten(),
+                             minlength=(nx+1)*(ny+1)).float().view(nx+1, ny+1).to(dtype=torch.float,
+                                                                                  device=mask1.device)
+    # Now remove the background
+    pxy = count_z.clone()
+    pxy[0, :] = 0
+    pxy[:, 0] = 0
+
+    # computing the mutual information
+    pxy /= torch.sum(pxy)
+    px = torch.sum(pxy, dim=-1)
+    py = torch.sum(pxy, dim=-2)
+    term_xy = pxy * torch.log(pxy)
+    term_x = px * torch.log(px)
+    term_y = py * torch.log(py)
+    mutual_information = term_xy[pxy > 0].sum() - term_x[px > 0].sum() - term_y[py > 0].sum()
+
+    # Extract the most likely mappings
+    mask1_to_mask2 = torch.max(pxy, dim=-1)[1]
+    mask2_to_mask1 = torch.max(pxy, dim=-2)[1]
+    assert mask1_to_mask2.shape[0] == nx + 1
+    assert mask2_to_mask1.shape[0] == ny + 1
+
+    # Find one-to-one correspondence among IDs
+    id_mask1 = torch.arange(nx + 1, device=mask1.device, dtype=torch.long)  # [0,1,.., nx]
+    is_id_reversible = (mask2_to_mask1[mask1_to_mask2[id_mask1]] == id_mask1)
+    n_reversible_instances = is_id_reversible[1:].sum().item()  # exclude id=0 bc background
+
+    # Find one-to-one correspondence among pixels
+    intersection_mask = (mask1_to_mask2[mask1] == mask2) * (mask2_to_mask1[mask2] == mask1) * (mask1 > 0) * (mask2 > 0)
+    intersection = intersection_mask.sum()
+    union = torch.sum(mask1 > 0) + torch.sum(mask2 > 0) - intersection  # exclude background
+    iou = intersection.float() / union
+
+    return ConcordanceIntMask(intersection_mask=intersection_mask,
+                              joint_distribution=pxy,
+                              mutual_information=mutual_information.item(),
+                              delta_n=ny - nx,
+                              iou=iou.item(),
+                              n_reversible_instances=n_reversible_instances)
 
 
 def flatten_list(ll):

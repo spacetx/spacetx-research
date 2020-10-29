@@ -5,6 +5,7 @@ import matplotlib.figure
 from typing import Optional
 from MODULES.utilities import save_obj
 from neptunecontrib.api import log_chart
+from MODULES.namedtuple import ConcordanceIntMask
 
 
 def log_img_only(name: str,
@@ -80,6 +81,8 @@ def log_matplotlib_as_png(name: str,
         print("leaving log_matplotlib_as_png")
 
 
+
+
 def log_dict_metrics(metrics: dict,
                      prefix: str = "",
                      experiment: Optional[neptune.experiments.Experiment] = None,
@@ -98,6 +101,25 @@ def log_dict_metrics(metrics: dict,
 
     if verbose:
         print("leaving log_dict_metrics")
+
+
+def log_concordance(concordance: ConcordanceIntMask,
+                    prefix: str = "",
+                    experiment: Optional[neptune.experiments.Experiment] = None,
+                    verbose: bool = False):
+    if verbose:
+        print("inside log_concordance")
+
+    tmp_dict = {"iou": concordance.iou,
+                "mutual_information": concordance.mutual_information,
+                "intersection": concordance.intersection_mask.sum().item(),
+                "delta_n": concordance.delta_n,
+                "matching_instances": concordance.n_reversible_instances}
+
+    log_dict_metrics(metrics=tmp_dict, prefix=prefix, experiment=experiment)
+
+    if verbose:
+        print("leaving log_concordance")
 
 
 def log_last_ckpt(name: str,
