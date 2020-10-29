@@ -224,13 +224,13 @@ with torch.no_grad():
             # filter by window
             if window is None:
                 window = [0, 0, self.raw_image.shape[-2], self.raw_image.shape[-1]]
-                other_integer_mask = self.example_integer_mask
             else:
                 window = (max(0, window[0]),
                           max(0, window[1]),
                           min(self.raw_image.shape[-2], window[2]),
                           min(self.raw_image.shape[-1], window[3]))
-                other_integer_mask = self.example_integer_mask[window[0]:window[2], window[1]:window[3]]
+
+            other_integer_mask = self.example_integer_mask[window[0]:window[2], window[1]:window[3]]
 
             resolutions = numpy.arange(0.5, 10, 0.5) if sweep_range is None else sweep_range
             iou = numpy.zeros(resolutions.shape[0], dtype=float)
@@ -264,11 +264,6 @@ with torch.no_grad():
                 mi[n] = c_tmp.mutual_information
                 n_reversible_instances[n] = c_tmp.n_reversible_instances
                 total_intersection[n] = c_tmp.intersection_mask.sum().float()
-
-                mutual_information: float
-                delta_n: int
-                iou: float
-                n_reversible_instances: int
 
             i_max = numpy.argmax(iou)
             return Suggestion(best_resolution=resolutions[i_max],

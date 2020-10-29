@@ -225,11 +225,7 @@ class CompositionalVae(torch.nn.Module):
         # 2) use map_quantitites or few_quantities
         num_pixel = torch.numel(mixing_fg)
         sparsity_mask = torch.sum(mixing_fg) / num_pixel
-        # sparsity_box = torch.sum(area_box_few * inference.sample_c) / num_pixel
-        # sparsity_prob = torch.sum(inference.sample_c_map) / (batch_size * n_boxes)
-        # sparsity_box = torch.sum(p_times_area_map) / num_pixel
-        area_few = inference.sample_bb.bw * inference.sample_bb.bh
-        sparsity_box = torch.sum(inference.prob_few * area_few) / num_pixel
+        sparsity_box = torch.sum(p_times_area_map) / num_pixel
         sparsity_prob = torch.sum(inference.prob_map) / (batch_size * n_boxes)
         sparsity_av = sparsity_mask + sparsity_box + sparsity_prob
 

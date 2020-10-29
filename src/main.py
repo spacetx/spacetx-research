@@ -111,8 +111,8 @@ if params["simulation"]["type"] == "scratch":
 
 elif params["simulation"]["type"] == "resume":
     
-    # ckpt = file2ckpt(path="ckpt.pt", device=None)
-    ckpt = file2ckpt(path="ckpt.pt", device='cpu')
+    ckpt = file2ckpt(path="ckpt.pt", device=None)
+    # ckpt = file2ckpt(path="ckpt.pt", device='cpu')
 
     load_from_ckpt(ckpt=ckpt,
                    model=vae,
@@ -128,8 +128,8 @@ elif params["simulation"]["type"] == "resume":
 
 elif params["simulation"]["type"] == "pretrained":
 
-    # ckpt = file2ckpt(path="ckpt.pt", device=None)
-    ckpt = file2ckpt(path="ckpt.pt", device='cpu')
+    ckpt = file2ckpt(path="ckpt.pt", device=None)
+    # ckpt = file2ckpt(path="ckpt.pt", device='cpu')
 
     load_from_ckpt(ckpt=ckpt,
                    model=vae,
