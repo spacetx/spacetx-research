@@ -53,7 +53,7 @@ conditional_crop_train = ConditionalRandomCrop(desired_w=SIZE_CROPS, desired_h=S
 
 test_data = conditional_crop_test.crop(img=img_torch,
                                        roi_mask=roi_mask_torch)
-# print("GPU GB after defining test data ->",torch.cuda.memory_allocated()/1E9)
+print("GPU GB after defining test data ->", torch.cuda.memory_allocated()/1E9)
 
 
 test_loader = SpecialDataSet(img=test_data,
@@ -73,7 +73,7 @@ train_loader = SpecialDataSet(img=img_torch,
                               batch_size=BATCH_SIZE)
 train_batch_example_fig = train_loader.check_batch()
 log_img_only(name="train_batch_example", fig=train_batch_example_fig, experiment=exp)
-# print("GPU GB after train_loader ->",torch.cuda.memory_allocated()/1E9)
+print("GPU GB after train_loader ->", torch.cuda.memory_allocated()/1E9)
 
 # Make a batch of reference images by cropping the train_data at consecutive locations
 reference_imgs_list = []
@@ -96,11 +96,13 @@ _ = show_batch(reference_imgs,
                figsize=(12, 12),
                title="reference imgs",
                neptune_name="reference_imgs")
+print("GPU GB after reference_images ->", torch.cuda.memory_allocated()/1E9)
 
 # Instantiate model, optimizer and checks
 vae = CompositionalVae(params)
 log_model_summary(vae)
 optimizer = instantiate_optimizer(model=vae, dict_params_optimizer=params["optimizer"])
+print("GPU GB after vae ->", torch.cuda.memory_allocated()/1E9)
 
 imgs_out = vae.inference_and_generator.unet.show_grid(reference_imgs)
 unet_grid_fig = show_batch(imgs_out[:, 0], normalize_range=(0.0, 1.0), neptune_name="unet_grid")
