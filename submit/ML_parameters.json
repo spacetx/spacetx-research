@@ -19,10 +19,10 @@
    "dim_zwhere" : 4,
    "dim_zbg" : 4,
    "dim_logit" : 1,
-   "cropped_size" : 28,
-   "n_max_pool" : 4,
-   "level_zwhere_and_logit_output" : 2,
-   "level_background_output" : 4,
+   "cropped_size" : 56,
+   "n_max_pool" : 5,
+   "level_zwhere_and_logit_output" : 3,
+   "level_background_output" : 5,
    "n_ch_output_features" : 32,
    "n_ch_after_first_two_conv" : 32
  },
@@ -35,13 +35,11 @@
  "input_image" : {
    "__comment" : "parameters describing the input images",
    "n_objects_max" : 25,
-   "size_object_min" : 5,
-   "size_object_max" : 20,
-   "length_scale_GP" : 4.0,
-   "size_raw_image" : 80,
-   "ch_in" : 1,
-   "bg_is_zero" : true,
-   "background_resolution_before_upsampling" : [2,2]
+   "size_object_min" : 10,
+   "size_object_max" : 40,
+   "length_scale_similarity" : 20.0,
+   "size_raw_image" : 160,
+   "ch_in" : 1
  },
 
  "nms" : {

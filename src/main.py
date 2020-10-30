@@ -78,10 +78,15 @@ log_img_only(name="train_batch_example", fig=train_batch_example_fig, experiment
 # Make a batch of reference images by cropping the train_data at consecutive locations
 reference_imgs_list = []
 crop_size = params["input_image"]["size_raw_image"]
+factor_wrt_8 = 2
+ix_start, iy_start = 1080, 2140
+i1 = ix_start * factor_wrt_8
+j1 = iy_start * factor_wrt_8
+
 for ni in range(2):
-    i = 1080 + ni * crop_size
+    i = i1 + ni * crop_size
     for nj in range(4):
-        j = 2140 + nj * crop_size
+        j = j1 + nj * crop_size
         reference_imgs_list.append(img_torch[..., i:i+crop_size, j:j+crop_size])
 reference_imgs = torch.cat(reference_imgs_list, dim=-4)
 if torch.cuda.is_available():
@@ -234,9 +239,15 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                                                  verbose=True)
 
 # # Check segmentation WITH and WITHOUT tiling to the GROUND_TRUTH
-img_to_segment = train_loader.img[0, :, 940:1240, 2140:2440]
-roi_mask_to_segment = train_loader.roi_mask[0, :, 940:1240, 2140:2440]
-gt_numpy = skimage.io.imread("./ground_truth").astype(numpy.int32)[940:1240, 2140:2440]
+ix_start, iy_start, delta = 940, 2140, 300
+i1 = ix_start * factor_wrt_8
+i2 = i1 + factor_wrt_8 * delta
+j1 = iy_start * factor_wrt_8
+j2 = j1 + factor_wrt_8 * delta
+
+img_to_segment = train_loader.img[0, :, i1:i2, j1:j2]
+roi_mask_to_segment = train_loader.roi_mask[0, :, i1:i2, j1:j2]
+gt_numpy = skimage.io.imread("./ground_truth").astype(numpy.int32)[i1:i2, j1:j2]
 
 # tiling segmentation
 tiling: Segmentation = vae.segment_with_tiling(single_img=img_to_segment,
