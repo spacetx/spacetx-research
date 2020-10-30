@@ -264,7 +264,7 @@ class MetricMiniBatch(NamedTuple):
                                                                       self.reg_tot,
                                                                       self.kl_tot,
                                                                       self.sparsity_ncell,
-                                                                      self.sparsity_fgpixel,
+                                                                      self.sparsity_fgfraction,
                                                                       self.geco_fgfraction,
                                                                       self.geco_ncell,
                                                                       self.geco_mse)
