@@ -9,4 +9,6 @@ resul*
 /src/*.tiff
 /src/ground_truth
 /src/MODULES/__pycache__
-/.idea
+.idea/
+.ipynb_checkpoints/
+
