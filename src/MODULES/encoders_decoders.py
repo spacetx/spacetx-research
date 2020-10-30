@@ -99,7 +99,7 @@ class DecoderBackground(nn.Module):
         where ... are all the independent dimensions, i.e. box, batch_size, enumeration_dim etc.
 
         Observation ConvTranspose2D with:
-        1. k=4, p=2, s=2 -> double the spatial dimension
+        1. k=4, s=2, p=1 -> double the spatial dimension
     """
     def __init__(self, ch_out: int, dim_z: int):
         super().__init__()
@@ -107,13 +107,13 @@ class DecoderBackground(nn.Module):
         self.ch_out = ch_out
         self.upsample = nn.Linear(self.dim_z, CH_BG_MAP * LOW_RESOLUTION_BG[0] * LOW_RESOLUTION_BG[1])
         self.decoder = nn.Sequential(
-            torch.nn.ConvTranspose2d(in_channels=CH_BG_MAP, out_channels=32, kernel_size=4, stride=2, padding=2),  # B,32,10,10
+            torch.nn.ConvTranspose2d(in_channels=CH_BG_MAP, out_channels=32, kernel_size=4, stride=2, padding=1),  # 10,10
             torch.nn.ReLU(inplace=True),
-            torch.nn.ConvTranspose2d(in_channels=32, out_channels=32, kernel_size=4, stride=2, padding=2),  #B,32,20,20
+            torch.nn.ConvTranspose2d(in_channels=32, out_channels=32, kernel_size=4, stride=2, padding=1),  # 20,20
             torch.nn.ReLU(inplace=True),
-            torch.nn.ConvTranspose2d(in_channels=32, out_channels=16, kernel_size=4, stride=2, padding=2),  #B,32,40,40
+            torch.nn.ConvTranspose2d(in_channels=32, out_channels=16, kernel_size=4, stride=2, padding=1),  # 40,40
             torch.nn.ReLU(inplace=True),
-            torch.nn.ConvTranspose2d(in_channels=16, out_channels=self.ch_out, kernel_size=4, stride=2, padding=2),  #B,16,80,80
+            torch.nn.ConvTranspose2d(in_channels=16, out_channels=self.ch_out, kernel_size=4, stride=2, padding=1),  # 80,80
         )
 
     def forward(self, z: torch.Tensor, high_resolution: tuple) -> torch.Tensor:
@@ -129,23 +129,34 @@ class DecoderConv(nn.Module):
         OUTPUT: image of shape: ..., ch_out, width, height
         where ... are all the independent dimensions, i.e. box, batch_size, enumeration_dim etc.
 
-        O
+        Observation ConvTranspose2D with:
+        1. k=4, s=2, p=1 -> double spatial dimensions
+        2. k=3, s=1, p=1 -> keep spatial dimensions
     """
 
     def __init__(self, size: int, dim_z: int, ch_out: int):
         super().__init__()
+        self.dim_z = dim_z
+        self.ch_out = ch_out
         self.width = size
         assert (self.width == 28 or self.width == 56)
-        self.dim_z: int = dim_z
-        self.ch_out: int = ch_out
+
         self.upsample = nn.Linear(self.dim_z, 64 * 7 * 7)
-        self.decoder = nn.Sequential(
-            torch.nn.ConvTranspose2d(64, 32, 4, 2, 1),  # B,  64,  14,  14
-            torch.nn.ReLU(inplace=True),
-            torch.nn.ConvTranspose2d(32, 32, 4, 2, 1, 1),  # B,  32, 28, 28
-            torch.nn.ReLU(inplace=True),
-            torch.nn.ConvTranspose2d(32, self.ch_out, 4, 1, 2)  # B, ch, 28, 28
-        )
+
+        if self.width == 56:
+            self.decoder = nn.Sequential(
+                torch.nn.ConvTranspose2d(in_channels=64, out_channels=32, kernel_size=4, stride=2, padding=1),  # 14,14
+                torch.nn.ReLU(inplace=True),
+                torch.nn.ConvTranspose2d(in_channels=32, out_channels=32, kernel_size=4, stride=2, padding=1),  # 28,28
+                torch.nn.ReLU(inplace=True),
+                torch.nn.ConvTranspose2d(in_channels=32, out_channels=self.ch_out, kernel_size=4, stride=2, padding=1)  # 56,56
+            )
+        else:
+            self.decoder = nn.Sequential(
+                torch.nn.ConvTranspose2d(in_channels=64, out_channels=32, kernel_size=4, stride=2, padding=1),  # 14,14
+                torch.nn.ReLU(inplace=True),
+                torch.nn.ConvTranspose2d(in_channels=32, out_channels=self.ch_out, kernel_size=4, stride=2, padding=1)  # 28,28
+            )
 
     def forward(self, z: torch.Tensor) -> torch.Tensor:
         independent_dim = list(z.shape[:-1])
@@ -166,10 +177,10 @@ class EncoderConv(nn.Module):
 
     def __init__(self, size: int, ch_in: int, dim_z: int):
         super().__init__()
-        self.ch_in: int = ch_in
-        self.width: int = size
-        assert (self.width == 28 or self.width == 56)
         self.dim_z = dim_z
+        self.ch_in = ch_in
+        self.width = size
+        assert (self.width == 28 or self.width == 56)
 
         if self.width == 56:
             self.conv = nn.Sequential(
@@ -195,7 +206,6 @@ class EncoderConv(nn.Module):
         self.compute_std = nn.Linear(64 * 7 * 7, self.dim_z)
 
     def forward(self, x: torch.Tensor) -> ZZ:  # this is right
-
         independent_dim = list(x.shape[:-3])  # this might includes: enumeration, n_boxes, batch_size
         dependent_dim = list(x.shape[-3:])  # this includes: ch, width, height
         # assert dependent_dim == [self.ch_raw_image, self.width, self.width]
