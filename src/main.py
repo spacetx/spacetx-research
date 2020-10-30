@@ -89,6 +89,7 @@ for ni in range(2):
         j = j1 + nj * crop_size
         reference_imgs_list.append(img_torch[..., i:i+crop_size, j:j+crop_size])
 reference_imgs = torch.cat(reference_imgs_list, dim=-4)
+print("reference_imgs", reference_imgs.shape, reference_imgs.device, reference_imgs.dtype)
 if torch.cuda.is_available():
     reference_imgs = reference_imgs.cuda()
 _ = show_batch(reference_imgs,
