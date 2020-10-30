@@ -64,9 +64,7 @@ class Inference_and_Generation(torch.nn.Module):
                 overlap_threshold: float,
                 n_objects_max: int,
                 topk_only: bool,
-                noisy_sampling: bool,
-                bg_is_zero: bool,
-                bg_resolution: tuple) -> Inference:
+                noisy_sampling: bool) -> Inference:
 
         # 0. preparation
         batch_size, ch_raw_image, width_raw_image, height_raw_image = imgs_in.shape
@@ -82,11 +80,9 @@ class Inference_and_Generation(torch.nn.Module):
                                                   prior_std=torch.ones_like(unet_output.zbg.std),
                                                   noisy_sampling=noisy_sampling,
                                                   sample_from_prior=generate_synthetic_data)
-        if bg_is_zero:
-            big_bg = torch.zeros_like(imgs_in)
-        else:
-            big_bg = torch.sigmoid(self.decoder_zbg(z=zbg.sample,
-                                                    high_resolution=(imgs_in.shape[-2], imgs_in.shape[-1])))
+
+        big_bg = torch.sigmoid(self.decoder_zbg(z=zbg.sample,
+                                                high_resolution=(imgs_in.shape[-2], imgs_in.shape[-1])))
 
         with torch.no_grad():
             bounding_box_no_noise: BB = tmaps_to_bb(tmaps=torch.sigmoid(self.decoder_zwhere(unet_output.zwhere.mu)),
@@ -95,12 +91,12 @@ class Inference_and_Generation(torch.nn.Module):
                                                     min_box_size=self.size_min,
                                                     max_box_size=self.size_max)
 
-        similarity_kernel = self.similarity_kernel_dpp.forward(n_width=unet_output.logit.mu.shape[-2],
-                                                               n_height=unet_output.logit.mu.shape[-1])
+        similarity_kernel = self.similarity_kernel_dpp.forward(n_width=unet_output.logit.shape[-2],
+                                                               n_height=unet_output.logit.shape[-1])
 
         c_map: DIST
         q_map: torch.Tensor
-        c_map, q_map = sample_and_kl_prob(logit_map=unet_output.logit.mu,
+        c_map, q_map = sample_and_kl_prob(logit_map=unet_output.logit,
                                           similarity_kernel=similarity_kernel,
                                           images=imgs_in,
                                           background=big_bg,
@@ -189,8 +185,8 @@ class Inference_and_Generation(torch.nn.Module):
 
         area_all = bounding_box_all.bw * bounding_box_all.bh
         area_map = invert_convert_to_box_list(area_all.unsqueeze(-1),
-                                              original_width=unet_output.logit.mu.shape[-2],
-                                              original_height=unet_output.logit.mu.shape[-1])
+                                              original_width=unet_output.logit.shape[-2],
+                                              original_height=unet_output.logit.shape[-1])
 
         return Inference(area_map=area_map,  # remove
                          prob_map=q_map,     # remove

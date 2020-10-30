@@ -181,8 +181,8 @@ class Segmentation(NamedTuple):
 
 class UNEToutput(NamedTuple):
     zwhere: ZZ
-    logit: ZZ
     zbg: ZZ
+    logit: torch.Tensor
     features: torch.Tensor
 
 

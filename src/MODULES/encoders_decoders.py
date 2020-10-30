@@ -6,6 +6,8 @@ from typing import Optional
 from MODULES.namedtuple import ZZ
 
 EPS_STD = 1E-3  # standard_deviation = F.softplus(x) + EPS_STD >= EPS_STD
+LOW_RESOLUTION_BG = (5, 5)
+CH_BG_MAP = 32
 
 
 class MLP_1by1(nn.Module):
@@ -26,10 +28,9 @@ class MLP_1by1(nn.Module):
 
 
 class Encoder1by1(nn.Module):
-    def __init__(self, ch_in: int, dim_z: int, ch_hidden: Optional[int] = None):
+    def __init__(self, ch_in: int, dim_z: int, ch_hidden: int):
         super().__init__()
         self.dim_z = dim_z
-        ch_hidden = (ch_in + self.dim_z) // 2 if ch_hidden is None else ch_hidden
         self.predict = MLP_1by1(ch_in=ch_in, ch_out=2*self.dim_z, ch_hidden=ch_hidden)
 
     def forward(self, x: torch.Tensor) -> ZZ:
@@ -55,28 +56,38 @@ class Decoder1by1Linear(nn.Module):
 
 
 class EncoderBackground(nn.Module):
-    def __init__(self, ch_in: int, dim_z: int, low_resolution: Optional[tuple]):
+
+    def __init__(self, ch_in: int, dim_z: int):
         super().__init__()
         self.ch_in = ch_in
         self.dim_z = dim_z
-        self.low_resolution = [7, 7] if low_resolution is None else low_resolution
 
-        ch_bg_map = 32
-        self.bg_map = MLP_1by1(ch_in=ch_in, ch_out=ch_bg_map, ch_hidden=-1)
-        self.MLP = nn.Sequential(
-            nn.Linear(in_features=2*ch_bg_map*self.low_resolution[0]*self.low_resolution[1], out_features=128, bias=True),
+        ch_hidden = int((self.CH_BG_MAP + self.dim_z)//2)
+
+        self.bg_map_before = MLP_1by1(ch_in=ch_in, ch_out=CH_BG_MAP, ch_hidden=-1)
+        self.adaptive_avg_2D = nn.AdaptiveAvgPool2d(output_size=LOW_RESOLUTION_BG)
+        self.adaptive_max_2D = nn.AdaptiveAvgPool2d(output_size=LOW_RESOLUTION_BG)
+
+        self.convolutional = nn.Sequential(
+            MLP_1by1(ch_in=2 * CH_BG_MAP, ch_out=CH_BG_MAP, ch_hidden=-1),  # 5x5
             nn.ReLU(inplace=True),
-            nn.Linear(in_features=128, out_features=32, bias=True),
+            nn.Conv2d(in_channels=CH_BG_MAP, out_channels=CH_BG_MAP, kernel_size=3),  # 3x3
             nn.ReLU(inplace=True),
-            nn.Linear(in_features=32, out_features=2*self.dim_z, bias=True))
+            nn.Conv2d(in_channels=CH_BG_MAP, out_channels=CH_BG_MAP, kernel_size=3),  # 1x1
+            nn.ReLU(inplace=True))
+
+        self.linear = nn.Sequential(
+            nn.Linear(in_features=CH_BG_MAP, out_features=ch_hidden),
+            nn.ReLU(inplace=True),
+            nn.Linear(in_features=ch_hidden, out_features=2*self.dim_z))
 
     def forward(self, x: torch.Tensor) -> ZZ:
-        # See how fast.ai does UNET
-        y = self.bg_map(x)  # B, 32, small_w, small_h
-        y_av = F.adaptive_avg_pool2d(y, output_size=self.low_resolution)   # B, 32, s, s
-        y_max = F.adaptive_max_pool2d(y, output_size=self.low_resolution)  # B, 32, s, s
-        y2 = torch.cat((y_av, y_max), dim=-3).flatten(start_dim=1, end_dim=-1)  # B, 64 * s * s
-        mu, std = torch.split(self.MLP(y2), self.dim_z, dim=-1)  # B, dim_z
+        # TODO: see how fast.ai does UNET
+        y1 = self.bg_map_before(x)  # B, 32, small_w, small_h
+        y2 = torch.cat((self.adaptive_avg_2D(y1), self.adaptive_max_2D(y1)), dim=-3)  # 2*ch_bg_map , low_res, low_res
+        y3 = self.convolutional(y2)  # B, 32, 1, 1
+        print("y3.shape", y3.shape)
+        mu, std = torch.split(self.linear(y3.flatten(start_dim=1)), self.dim_z, dim=-1)  # B, dim_z
         return ZZ(mu=mu, std=F.softplus(std) + EPS_STD)
 
 
@@ -85,19 +96,21 @@ class DecoderBackground(nn.Module):
         super().__init__()
         self.dim_z = dim_z
         self.ch_out = ch_out
-        self.upsample = nn.Linear(self.dim_z, 64 * 7 * 7)
+        self.upsample = nn.Linear(self.dim_z, CH_BG_MAP * 5 * 5)
         self.decoder = nn.Sequential(
-            torch.nn.ConvTranspose2d(64, 32, 4, 2, 1),  # B,  64,  14,  14
+            torch.nn.ConvTranspose2d(in_channels=CH_BG_MAP, out_channels=32, kernel_size=4, stride=2, padding=2),  # B,32,10,10
             torch.nn.ReLU(inplace=True),
-            torch.nn.ConvTranspose2d(32, 32, 4, 2, 1, 1),  # B,  32, 28, 28
+            torch.nn.ConvTranspose2d(in_channels=32, out_channels=32, kernel_size=4, stride=2, padding=2),  #B,32,20,20
             torch.nn.ReLU(inplace=True),
-            torch.nn.ConvTranspose2d(32, self.ch_out, 4, 1, 2)  # B, ch, 28, 28
+            torch.nn.ConvTranspose2d(in_channels=32, out_channels=16, kernel_size=4, stride=2, padding=2),  #B,32,40,40
+            torch.nn.ReLU(inplace=True),
+            torch.nn.ConvTranspose2d(in_channels=16, out_channels=self.ch_out, kernel_size=4, stride=2, padding=2),  #B,16,80,80
         )
 
     def forward(self, z: torch.Tensor, high_resolution: tuple) -> torch.Tensor:
         # From (B, dim_z) to (B, ch_out, 28, 28) to (B, ch_out, w_raw, h_raw)
-        x0 = self.upsample(z).view(-1, 64, 7, 7)
-        x1 = self.decoder(x0)  # B, ch_out, 28, 28
+        x0 = self.upsample(z).view(-1, CH_BG_MAP, LOW_RESOLUTION_BG[0], LOW_RESOLUTION_BG[0])
+        x1 = self.decoder(x0)  # B, ch_out, 80, 80
         return F.interpolate(x1, size=self.high_resolution, mode='bilinear', align_corners=True)
 
 
@@ -148,11 +161,11 @@ class EncoderConv(nn.Module):
 
         #TODO FROM HERE DO 56x56 ENCODER
         self.conv = nn.Sequential(
-            torch.nn.Conv2d(self.ch_in, 32, 4, 1, 2),  # B, 32, 28, 28
+            torch.nn.Conv2d(in_channels=self.ch_in, out_channels=32, kernel_size=4, stride=1, padding=2),  # B, 32, 28, 28
             torch.nn.ReLU(inplace=True),
-            torch.nn.Conv2d(32, 32, 4, 2, 1),  # B, 32, 14, 14
+            torch.nn.Conv2d(in_channels=32, out_channels=32, kernel_size=4, stride=2, padding=1),  # B, 32, 14, 14
             torch.nn.ReLU(inplace=True),
-            torch.nn.Conv2d(32, 64, 4, 2, 1),  # B, 64,  7, 7
+            torch.nn.Conv2d(in_channels=32, out_channels=64, kernel_size=4, stride=2, padding=1),  # B, 64,  7, 7
         )
         self.compute_mu = nn.Linear(64 * 7 * 7, self.dim_z)
         self.compute_std = nn.Linear(64 * 7 * 7, self.dim_z)
@@ -168,101 +181,3 @@ class EncoderConv(nn.Module):
         std = F.softplus(self.compute_std(x2)).view(independent_dim + [self.dim_z])
         return ZZ(mu=mu, std=std + EPS_STD)
 
-
-class DecoderConvLeaky(nn.Module):
-    """ Decode z -> x
-        INPUT:  z of shape: ..., dim_z
-        OUTPUT: image of shape: ..., ch_out, width, height
-        where ... are all the independent dimensions, i.e. box, batch_size, enumeration_dim etc.
-    """
-    def __init__(self, size: int, dim_z: int, ch_out: int):
-        super().__init__()
-        self.width = size
-        self.dim_z: int = dim_z
-        self.ch_out: int = ch_out
-        assert self.width == 64
-
-        # Preparation
-        modules = []
-        hidden_dims = [32, 64, 128, 256, 512]
-
-        self.decoder_input = nn.Linear(dim_z, hidden_dims[-1] * 4)
-
-        hidden_dims.reverse()
-
-        for i in range(len(hidden_dims) - 1):
-            modules.append(
-                nn.Sequential(
-                    nn.ConvTranspose2d(hidden_dims[i],
-                                       hidden_dims[i + 1],
-                                       kernel_size=3,
-                                       stride=2,
-                                       padding=1,
-                                       output_padding=1),
-                    nn.BatchNorm2d(hidden_dims[i + 1]),
-                    nn.LeakyReLU(inplace=True))
-            )
-        self.decoder = nn.Sequential(*modules)
-        self.final_layer = nn.Sequential(
-                            nn.ConvTranspose2d(hidden_dims[-1],
-                                               hidden_dims[-1],
-                                               kernel_size=3,
-                                               stride=2,
-                                               padding=1,
-                                               output_padding=1),
-                            nn.BatchNorm2d(hidden_dims[-1]),
-                            nn.LeakyReLU(inplace=True),
-                            nn.Conv2d(hidden_dims[-1], out_channels=ch_out, kernel_size=3, padding=1))
-
-    def forward(self, z: torch.Tensor) -> torch.Tensor:
-        independent_dim = list(z.shape[:-1])
-        x1 = self.decoder_input(z.view(-1, self.dim_z)).view(-1, 512, 2, 2)
-        x2 = self.decoder(x1)
-        return self.final_layer(x2).view(independent_dim + [self.ch_out, self.width, self.width])
-
-
-class EncoderConvLeaky(nn.Module):
-    """ Encode x -> z_mu, z_std
-        INPUT  x of shape: ..., ch_raw_image, width, height
-        OUTPUT z_mu, z_std of shape: ..., latent_dim
-        where ... are all the independent dimensions, i.e. box, batch_size, enumeration_dim etc.
-    """
-
-    def __init__(self, size: int, ch_in: int, dim_z: int):
-        super().__init__()
-        self.ch_in: int = ch_in
-        self.width: int = size
-        self.dim_z = dim_z
-        assert self.width == 64
-
-        # Preparation
-        modules = []
-        hidden_dims = [32, 64, 128, 256, 512]
-        in_channels = self.ch_in
-
-        # Build Encoder
-        for h_dim in hidden_dims:
-            modules.append(
-                nn.Sequential(
-                    nn.Conv2d(in_channels, out_channels=h_dim, kernel_size=3, stride=2, padding=1),
-                    nn.BatchNorm2d(h_dim),
-                    nn.LeakyReLU(inplace=True))
-            )
-            in_channels = h_dim
-
-        self.conv = nn.Sequential(*modules)
-        x = torch.zeros(1, self.ch_in, self.width, self.width)
-        ch_flatten = self.conv(x).flatten(start_dim=1).shape[-1]
-        self.compute_mu = nn.Linear(ch_flatten, self.dim_z)
-        self.compute_std = nn.Linear(ch_flatten, self.dim_z)
-
-    def forward(self, x: torch.Tensor) -> ZZ:  # this is right
-
-        independent_dim = list(x.shape[:-3])  # this might includes: enumeration, n_boxes, batch_size
-        dependent_dim = list(x.shape[-3:])  # this includes: ch, width, height
-        # assert dependent_dim == [self.ch_raw_image, self.width, self.width]
-        x1 = x.view([-1] + dependent_dim)  # flatten the independent dimensions
-        x2 = self.conv(x1).flatten(start_dim=1)  # flatten the dependent dimension
-        mu = self.compute_mu(x2).view(independent_dim + [self.dim_z])
-        std = F.softplus(self.compute_std(x2)).view(independent_dim + [self.dim_z])
-        return ZZ(mu=mu, std=std + EPS_STD)
