@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional
-
 from MODULES.namedtuple import ZZ
 
 EPS_STD = 1E-3  # standard_deviation = F.softplus(x) + EPS_STD >= EPS_STD
@@ -56,13 +55,16 @@ class Decoder1by1Linear(nn.Module):
 
 
 class EncoderBackground(nn.Module):
+    """ Encode bg_map into -> bg_mu, bg_std
+        Use  adaptive_avg_2D adaptive_max_2D so that any input spatial resolution can work
+    """
 
     def __init__(self, ch_in: int, dim_z: int):
         super().__init__()
         self.ch_in = ch_in
         self.dim_z = dim_z
 
-        ch_hidden = int((self.CH_BG_MAP + self.dim_z)//2)
+        ch_hidden = (CH_BG_MAP + dim_z)//2
 
         self.bg_map_before = MLP_1by1(ch_in=ch_in, ch_out=CH_BG_MAP, ch_hidden=-1)
         self.adaptive_avg_2D = nn.AdaptiveAvgPool2d(output_size=LOW_RESOLUTION_BG)
@@ -86,17 +88,24 @@ class EncoderBackground(nn.Module):
         y1 = self.bg_map_before(x)  # B, 32, small_w, small_h
         y2 = torch.cat((self.adaptive_avg_2D(y1), self.adaptive_max_2D(y1)), dim=-3)  # 2*ch_bg_map , low_res, low_res
         y3 = self.convolutional(y2)  # B, 32, 1, 1
-        print("y3.shape", y3.shape)
-        mu, std = torch.split(self.linear(y3.flatten(start_dim=1)), self.dim_z, dim=-1)  # B, dim_z
+        mu, std = torch.split(self.linear(y3.flatten(start_dim=-3)), self.dim_z, dim=-1)  # B, dim_z
         return ZZ(mu=mu, std=F.softplus(std) + EPS_STD)
 
 
 class DecoderBackground(nn.Module):
+    """ Encode x -> z_mu, z_std
+        INPUT  x of shape: ..., ch_raw_image, width, height
+        OUTPUT z_mu, z_std of shape: ..., latent_dim
+        where ... are all the independent dimensions, i.e. box, batch_size, enumeration_dim etc.
+
+        Observation ConvTranspose2D with:
+        1. k=4, p=2, s=2 -> double the spatial dimension
+    """
     def __init__(self, ch_out: int, dim_z: int):
         super().__init__()
         self.dim_z = dim_z
         self.ch_out = ch_out
-        self.upsample = nn.Linear(self.dim_z, CH_BG_MAP * 5 * 5)
+        self.upsample = nn.Linear(self.dim_z, CH_BG_MAP * LOW_RESOLUTION_BG[0] * LOW_RESOLUTION_BG[1])
         self.decoder = nn.Sequential(
             torch.nn.ConvTranspose2d(in_channels=CH_BG_MAP, out_channels=32, kernel_size=4, stride=2, padding=2),  # B,32,10,10
             torch.nn.ReLU(inplace=True),
@@ -111,23 +120,22 @@ class DecoderBackground(nn.Module):
         # From (B, dim_z) to (B, ch_out, 28, 28) to (B, ch_out, w_raw, h_raw)
         x0 = self.upsample(z).view(-1, CH_BG_MAP, LOW_RESOLUTION_BG[0], LOW_RESOLUTION_BG[0])
         x1 = self.decoder(x0)  # B, ch_out, 80, 80
-        return F.interpolate(x1, size=self.high_resolution, mode='bilinear', align_corners=True)
+        return F.interpolate(x1, size=high_resolution, mode='bilinear', align_corners=True)
 
 
-# TODO PUT ON SAME FOOTING:
-# 1. 28x28 and 56x56.
-# 2. Relu and LeakyRelu
 class DecoderConv(nn.Module):
     """ Decode z -> x
         INPUT:  z of shape: ..., dim_z
         OUTPUT: image of shape: ..., ch_out, width, height
         where ... are all the independent dimensions, i.e. box, batch_size, enumeration_dim etc.
+
+        O
     """
 
     def __init__(self, size: int, dim_z: int, ch_out: int):
         super().__init__()
         self.width = size
-        assert self.width == 28
+        assert (self.width == 28 or self.width == 56)
         self.dim_z: int = dim_z
         self.ch_out: int = ch_out
         self.upsample = nn.Linear(self.dim_z, 64 * 7 * 7)
@@ -150,23 +158,39 @@ class EncoderConv(nn.Module):
         INPUT  x of shape: ..., ch_raw_image, width, height
         OUTPUT z_mu, z_std of shape: ..., latent_dim
         where ... are all the independent dimensions, i.e. box, batch_size, enumeration_dim etc.
+
+        Observation Conv2D with:
+        1. k=4, p=2, s=1 -> keep the same spatial dimension
+        2. k=4, p=1, s=2 -> reduce the spatial dimension in half
     """
 
     def __init__(self, size: int, ch_in: int, dim_z: int):
         super().__init__()
         self.ch_in: int = ch_in
         self.width: int = size
-        assert self.width == 28
+        assert (self.width == 28 or self.width == 56)
         self.dim_z = dim_z
 
-        #TODO FROM HERE DO 56x56 ENCODER
-        self.conv = nn.Sequential(
-            torch.nn.Conv2d(in_channels=self.ch_in, out_channels=32, kernel_size=4, stride=1, padding=2),  # B, 32, 28, 28
-            torch.nn.ReLU(inplace=True),
-            torch.nn.Conv2d(in_channels=32, out_channels=32, kernel_size=4, stride=2, padding=1),  # B, 32, 14, 14
-            torch.nn.ReLU(inplace=True),
-            torch.nn.Conv2d(in_channels=32, out_channels=64, kernel_size=4, stride=2, padding=1),  # B, 64,  7, 7
-        )
+        if self.width == 56:
+            self.conv = nn.Sequential(
+                torch.nn.Conv2d(in_channels=self.ch_in, out_channels=32, kernel_size=4, stride=1, padding=2),  # 56,56
+                torch.nn.ReLU(inplace=True),
+                torch.nn.Conv2d(in_channels=32, out_channels=32, kernel_size=4, stride=2, padding=1),  # 28,28
+                torch.nn.ReLU(inplace=True),
+                torch.nn.Conv2d(in_channels=32, out_channels=64, kernel_size=4, stride=2, padding=1),  # 14,14
+                torch.nn.ReLU(inplace=True),
+                torch.nn.Conv2d(in_channels=64, out_channels=64, kernel_size=4, stride=2, padding=1),  # 7,7
+            )
+
+        elif self.width == 28:
+            self.conv = nn.Sequential(
+                torch.nn.Conv2d(in_channels=self.ch_in, out_channels=32, kernel_size=4, stride=1, padding=2),  # 28,28
+                torch.nn.ReLU(inplace=True),
+                torch.nn.Conv2d(in_channels=32, out_channels=32, kernel_size=4, stride=2, padding=1),  # 14,14
+                torch.nn.ReLU(inplace=True),
+                torch.nn.Conv2d(in_channels=32, out_channels=64, kernel_size=4, stride=2, padding=1),  # 7,7
+            )
+
         self.compute_mu = nn.Linear(64 * 7 * 7, self.dim_z)
         self.compute_std = nn.Linear(64 * 7 * 7, self.dim_z)
 
