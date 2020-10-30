@@ -4,7 +4,7 @@
   "neptune_ml.data_test": "gs://ld-data-bucket/cell_segmenter/smFISH/dummy1.pt",
   "neptune_ml.ckpt": "gs://ld-data-bucket/cell_segmenter/smFISH/dummy2.pt",
   "neptune_ml.ground_truth": "gs://ld-data-bucket/cell_segmenter/smFISH/oleh_medium.tif",
-  "neptune_ml.git_branch_or_commit": "f27a8e37e6c4293aea5a88c3fc36f897d2cc2b4f",
-"neptune_ml.git_repo":  "https://github.com/spacetx/spacetx-research.git"
+  "neptune_ml.git_branch_or_commit": "fc0b4eff8bb6ee608bbf3133f80a0d0f6a46bca",
+  "neptune_ml.git_repo":  "https://github.com/spacetx/spacetx-research.git"
 }
 

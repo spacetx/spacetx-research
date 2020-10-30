@@ -143,6 +143,7 @@ class Partition(NamedTuple):
 #  ------- Stuff Related to Processing (i.e. CompositionalVAE) ----  #
 #  ----------------------------------------------------------------  #
 
+
 class DIST(NamedTuple):
     sample: torch.Tensor
     kl: torch.Tensor
@@ -232,41 +233,41 @@ class MetricMiniBatch(NamedTuple):
     mse_tot: float
     reg_tot: float
     kl_tot: float
-    sparsity_tot: float
+    sparsity_ncell: float
+    sparsity_fgpixel: float
 
     kl_zbg: float
     kl_instance: float
     kl_where: float
     kl_logit: float
-    sparsity_mask: float
-    sparsity_box: float
-    sparsity_prob: float
+
     reg_overlap: float
     reg_area_obj: float
 
-    fg_fraction: float
-    geco_sparsity: float
-    geco_balance: float
+    geco_fgfraction: float
+    geco_ncell: float
+    geco_mse: float
     delta_1: float
     delta_2: float
+    delta_3: float
 
     similarity_l: numpy.ndarray
     similarity_w: numpy.ndarray
     lambda_logit: float
 
-
-    def pretty_print(self, epoch: int=0) -> str:
-        s = "[epoch {0:4d}] loss={1:.3f}, mse={2:.3f}, \
-        reg={3:.3f}, kl_tot={4:.3f}, sparsity={5:.3f}, \
-        fg_fraction={6:.3f}, geco_sp={7:.3f}, geco_bal={8:.3f}".format(epoch,
-                                                                       self.loss,
-                                                                       self.mse_tot,
-                                                                       self.reg_tot,
-                                                                       self.kl_tot,
-                                                                       self.sparsity_tot,
-                                                                       self.fg_fraction,
-                                                                       self.geco_sparsity,
-                                                                       self.geco_balance)
+    def pretty_print(self, epoch: int = 0) -> str:
+        s = "[epoch {0:4d}] loss={1:.3f}, mse={2:.3f},  \
+        reg={3:.3f}, kl_tot={4:.3f}, sparsity_ncell={5:.3f}, sparsity_fgpixel={6:.3f}, \
+        geco_fg={7:.3f}, geco_ncell={8:.3f}, geco_mse={9:.3f}".format(epoch,
+                                                                      self.loss,
+                                                                      self.mse_tot,
+                                                                      self.reg_tot,
+                                                                      self.kl_tot,
+                                                                      self.sparsity_ncell,
+                                                                      self.sparsity_fgpixel,
+                                                                      self.geco_fgfraction,
+                                                                      self.geco_ncell,
+                                                                      self.geco_mse)
         return s
 
 

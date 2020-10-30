@@ -15,7 +15,7 @@
 
  "architecture" : {
    "__comment" : "architecture parameters, level_zwhere_output is between 0 and n_max_pool included",
-   "dim_zinstance" : 5,
+   "dim_zinstance" : 10,
    "dim_zwhere" : 4,
    "dim_zbg" : 4,
    "dim_logit" : 1,
@@ -51,10 +51,15 @@
  "GECO_loss" : {
    "__comment" : "if active=false use ELBO, else use GECO with Log-Likelihood threshold = n_pixels * n_channel * threshold",
    "is_active" : true,
-   "factor_balance_range" : [0.1, 0.8, 0.9],
-   "factor_sparsity_range" : [-1, 1.0, 100],
-   "target_fg_fraction" : [0.05, 0.20],
+
+   "factor_mse_range" : [0.1, 0.8, 0.9],
+   "factor_fgfraction_range" : [-100, 1.0, 100],
+   "factor_ncell_range" : [-100, 1.0, 100],
+
+   "target_fgfraction" : [0.05, 0.20],
    "target_mse" : [0.75, 1.0],
+   "target_ncell" : [3.00, 15.0],
+
    "bg_std" : 0.05,
    "fg_std" : 0.05
  },

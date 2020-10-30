@@ -130,10 +130,13 @@ class CompositionalVae(torch.nn.Module):
         self.geco_dict = params["GECO_loss"]
         self.input_img_dict = params["input_image"]
 
-        self.geco_sparsity_factor = torch.nn.Parameter(data=torch.tensor(self.geco_dict["factor_sparsity_range"][1],
-                                                                         dtype=torch.float), requires_grad=True)
-        self.geco_balance_factor = torch.nn.Parameter(data=torch.tensor(self.geco_dict["factor_balance_range"][1],
-                                                                        dtype=torch.float), requires_grad=True)
+        self.geco_fgfraction_factor = torch.nn.Parameter(data=torch.tensor(self.geco_dict["factor_fgfraction_range"][1],
+                                                                           dtype=torch.float), requires_grad=True)
+        self.geco_ncell_factor = torch.nn.Parameter(data=torch.tensor(self.geco_dict["factor_ncell_range"][1],
+                                                                      dtype=torch.float), requires_grad=True)
+        self.geco_mse_factor = torch.nn.Parameter(data=torch.tensor(self.geco_dict["factor_mse_range"][1],
+                                                                    dtype=torch.float), requires_grad=True)
+
         self.running_avarage_kl_logit = torch.nn.Parameter(data=4*torch.ones(1, dtype=torch.float), requires_grad=True)
 
         # Put everything on the cude if cuda available
@@ -141,7 +144,6 @@ class CompositionalVae(torch.nn.Module):
             self.cuda()
             self.sigma_fg = self.sigma_fg.cuda()
             self.sigma_bg = self.sigma_bg.cuda()
-
 
     def compute_regularizations(self,
                                 inference: Inference,
@@ -178,7 +180,7 @@ class CompositionalVae(torch.nn.Module):
                                                             var_value=volume_mask_absolute,
                                                             verbose=verbose,
                                                             chosen=chosen)
-        cost_volume_minibatch = (cost_volume_absolute * inference.sample_c.detach()).sum(dim=-2) # sum boxes
+        cost_volume_minibatch = (cost_volume_absolute * inference.sample_c.detach()).sum(dim=-2)  # sum boxes
         return RegMiniBatch(reg_overlap=cost_overlap.mean(),            # mean over batch_size
                             reg_area_obj=cost_volume_minibatch.mean())  # mean over batch_size
 
@@ -192,21 +194,14 @@ class CompositionalVae(torch.nn.Module):
                         regularizations: RegMiniBatch) -> MetricMiniBatch:
 
         # Preparation
-        n_boxes = inference.mixing.shape[-5]
         batch_size, ch, w, h = imgs_in.shape
-        area_box_few = inference.sample_bb.bw * inference.sample_bb.bh
-        p_times_area_map = inference.area_map * inference.prob_map
-        mixing_fg = torch.sum(inference.mixing, dim=-5)  # sum over boxes
-        mixing_bg = torch.ones_like(mixing_fg) - mixing_fg
-        fg_fraction = torch.mean(mixing_fg)  # mean over batch_size
-        assert area_box_few.shape == inference.sample_c.shape
-        assert len(mixing_fg.shape) == 4  # batch, ch=1, w, h
-
-        # 0. Get the regularization
 
         # 1. Observation model
         # if the observation_std is fixed then normalization 1.0/sqrt(2*pi*sigma^2) is irrelevant.
         # We are better off using MeanSquareError metric
+        mixing_fg = torch.sum(inference.mixing, dim=-5)  # sum over boxes
+        mixing_bg = torch.ones_like(mixing_fg) - mixing_fg
+        assert len(mixing_fg.shape) == 4  # batch, ch=1, w, h
         mse = CompositionalVae.NLL_MSE(output=inference.big_img,
                                        target=imgs_in,
                                        sigma=self.sigma_fg)  # boxes, batch_size, ch, w, h
@@ -216,18 +211,16 @@ class CompositionalVae(torch.nn.Module):
         mse_av = ((inference.mixing * mse).sum(dim=-5) + mixing_bg * mse_bg).mean()  # mean over batch_size, ch, w, h
 
         # 2. Sparsity should encourage:
-        # 1. small probabilities
+        # 1. few object
         # 2. tight bounding boxes
         # 3. tight masks
         # The three terms take care of all these requirement.
         # There is a lot of freedom here:
         # 1) use c=Bernoulli(p) or p
         # 2) use map_quantitites or few_quantities
-        num_pixel = torch.numel(mixing_fg)
-        sparsity_mask = torch.sum(mixing_fg) / num_pixel
-        sparsity_box = torch.sum(p_times_area_map) / num_pixel
-        sparsity_prob = torch.sum(inference.prob_map) / (batch_size * n_boxes)
-        sparsity_av = sparsity_mask + sparsity_box + sparsity_prob
+        c_times_area_map = inference.area_map * inference.sample_c_map
+        sparsity_ncell = torch.sum(inference.sample_c_map) / batch_size
+        sparsity_fgpixel = (torch.sum(mixing_fg) + torch.sum(c_times_area_map)) / torch.numel(mixing_fg)
 
         # 3. compute KL
         # Note that I compute the mean over batch, latent_dimensions and n_object.
@@ -242,40 +235,33 @@ class CompositionalVae(torch.nn.Module):
                 torch.exp(-self.running_avarage_kl_logit) * kl_logit + \
                 self.running_avarage_kl_logit - self.running_avarage_kl_logit.detach()
 
-##         # 5. compute the moving averages
-##         with torch.no_grad():
-##             input_dict = {"kl_logit": kl_logit.item()}
-##             # Only if in training mode I accumulate the moving average
-##             if self.training:
-##                 ma_dict = self.ma_calculator.accumulate(input_dict)
-##             else:
-##                 ma_dict = input_dict
-##         kl_av = kl_zbg + kl_zinstance + kl_zwhere + kl_logit / (1E-3 + ma_dict["kl_logit"])
-
         # 6. Note that I clamp in_place
         with torch.no_grad():
-            f_balance = self.geco_balance_factor.data.clamp_(min=min(self.geco_dict["factor_balance_range"]),
-                                                             max=max(self.geco_dict["factor_balance_range"]))
-            f_sparsity = self.geco_sparsity_factor.data.clamp_(min=min(self.geco_dict["factor_sparsity_range"]),
-                                                               max=max(self.geco_dict["factor_sparsity_range"]))
-            one_minus_f_balance = torch.ones_like(f_balance) - f_balance
+            f_mse = self.geco_mse_factor.data.clamp_(min=min(self.geco_dict["factor_mse_range"]),
+                                                     max=max(self.geco_dict["factor_mse_range"]))
+            f_ncell = self.geco_ncell_factor.data.clamp_(min=min(self.geco_dict["factor_ncell_range"]),
+                                                         max=max(self.geco_dict["factor_ncell_range"]))
+            f_fgfraction = self.geco_fgfraction_factor.data.clamp_(min=min(self.geco_dict["factor_fgfraction_range"]),
+                                                                   max=max(self.geco_dict["factor_fgfraction_range"]))
+            one_minus_f_mse = torch.ones_like(f_mse) - f_mse
 
         # 6. Loss_VAE
         # TODO:
         # 1. try: loss_vae = f_balance * (nll_av + reg_av) + (1.0-f_balance) * (kl_av + f_sparsity * sparsity_av)
         # 2. move reg_av to the other size, i.e. proportional to 1-f_balance
         reg_av = regularizations.total()
-        loss_vae = f_sparsity * sparsity_av + \
-                   f_balance * (mse_av + reg_av) + \
-                   one_minus_f_balance * kl_av
+        loss_vae = f_ncell * sparsity_ncell + \
+                   f_fgfraction * sparsity_fgpixel + \
+                   f_mse * (mse_av + reg_av) + \
+                   one_minus_f_mse * kl_av
 
         # GECO BUSINESS
         if self.geco_dict["is_active"]:
             with torch.no_grad():
-                # If fg_fraction_av > max(target) -> tmp1 > 0 -> delta_1 < 0 -> too much fg -> increase sparsity
-                # If fg_fraction_av < min(target) -> tmp2 > 0 -> delta_1 > 0 -> too little fg -> decrease sparsity
-                tmp1 = (fg_fraction - max(self.geco_dict["target_fg_fraction"])).clamp(min=0)
-                tmp2 = (min(self.geco_dict["target_fg_fraction"]) - fg_fraction).clamp(min=0)
+                # If sparsity_fgpixel > max(target) -> tmp1 > 0 -> delta_1 < 0 -> too much fg -> increase sparsity
+                # If sparsity_fgpixel < min(target) -> tmp2 > 0 -> delta_1 > 0 -> too little fg -> decrease sparsity
+                tmp1 = (sparsity_fgpixel - max(self.geco_dict["target_fgfraction"])).clamp(min=0)
+                tmp2 = (min(self.geco_dict["target_fgfraction"]) - sparsity_fgpixel).clamp(min=0)
                 delta_1 = (tmp2 - tmp1).requires_grad_(False).to(loss_vae.device)
 
                 # If nll_av > max(target) -> tmp3 > 0 -> delta_2 < 0 -> bad reconstruction -> increase f_balance
@@ -284,12 +270,20 @@ class CompositionalVae(torch.nn.Module):
                 tmp4 = (min(self.geco_dict["target_mse"]) - mse_av).clamp(min=0)
                 delta_2 = (tmp4 - tmp3).requires_grad_(False).to(loss_vae.device)
 
-            loss_1 = self.geco_sparsity_factor * delta_1
-            loss_2 = self.geco_balance_factor * delta_2
-            loss_av = loss_vae + loss_1 + loss_2 - (loss_1 + loss_2).detach()
+                # If ncell > max(target) -> tmp5 > 0 -> delta_5 < 0 -> too much ncell -> increase sparsity
+                # If ncell < min(target) -> tmp6 > 0 -> delta_6 > 0 -> too few ncell -> decrease sparsity
+                tmp5 = (sparsity_ncell - max(self.geco_dict["target_ncell"])).clamp(min=0)
+                tmp6 = (min(self.geco_dict["target_ncell"]) - sparsity_ncell).clamp(min=0)
+                delta_3 = (tmp6 - tmp5).requires_grad_(False).to(loss_vae.device)
+
+            loss_1 = self.geco_fgfraction_factor * delta_1
+            loss_2 = self.geco_mse_factor * delta_2
+            loss_3 = self.geco_ncell_factor * delta_3
+            loss_av = loss_vae + loss_1 + loss_2 + loss_3 - (loss_1 + loss_2 + loss_3).detach()
         else:
             delta_1 = torch.tensor(0.0, dtype=loss_vae.dtype, device=loss_vae.device)
             delta_2 = torch.tensor(0.0, dtype=loss_vae.dtype, device=loss_vae.device)
+            delta_3 = torch.tensor(0.0, dtype=loss_vae.dtype, device=loss_vae.device)
             loss_av = loss_vae
 
         # add everything you want as long as there is one loss
@@ -297,23 +291,24 @@ class CompositionalVae(torch.nn.Module):
                                mse_tot=mse_av.detach().item(),
                                reg_tot=reg_av.detach().item(),
                                kl_tot=kl_av.detach().item(),
-                               sparsity_tot=sparsity_av.detach().item(),
+                               sparsity_ncell=sparsity_ncell.detach().item(),
+                               sparsity_fgpixel=sparsity_fgpixel.detach().item(),
 
                                kl_zbg=kl_zbg.detach().item(),
                                kl_instance=kl_zinstance.detach().item(),
                                kl_where=kl_zwhere.detach().item(),
                                kl_logit=kl_logit.detach().item(),
-                               sparsity_mask=sparsity_mask.detach().item(),
-                               sparsity_box=sparsity_box.detach().item(),
-                               sparsity_prob=sparsity_prob.detach().item(),
+
                                reg_overlap=regularizations.reg_overlap.detach().item(),
                                reg_area_obj=regularizations.reg_area_obj.detach().item(),
 
-                               fg_fraction=fg_fraction.detach().item(),
-                               geco_sparsity=f_sparsity.detach().item(),
-                               geco_balance=f_balance.detach().item(),
+                               geco_fgfraction=f_fgfraction.detach().item(),
+                               geco_ncell=f_ncell.detach().item(),
+                               geco_mse=f_mse.detach().item(),
+
                                delta_1=delta_1.detach().item(),
                                delta_2=delta_2.detach().item(),
+                               delta_3=delta_3.detach().item(),
 
                                similarity_l=inference.similarity_l.detach().cpu().numpy(),
                                similarity_w=inference.similarity_w.detach().cpu().numpy(),
