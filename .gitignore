@@ -1,8 +1,14 @@
 resul*
 *.tif
+*.tiff
 *.pt
 /src/*.json
 /src/*.pt
-/src/*sh
+/src/*.sh
+/src/*.tif
+/src/*.tiff
+/src/ground_truth
 /src/MODULES/__pycache__
-/.idea 
+.idea/
+.ipynb_checkpoints/
+

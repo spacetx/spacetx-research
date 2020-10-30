@@ -623,7 +623,7 @@ def plot_concordance(concordance,
                      experiment: Optional[neptune.experiments.Experiment] = None,
                      neptune_name: Optional[str] = None):
     fig, axes = plt.subplots(figsize=figsize)
-    axes.imshow(concordance.intersection_mask, cmap='gray')
+    axes.imshow(concordance.intersection_mask.cpu(), cmap='gray')
     axes.set_title("intersection mask, iou=" + str(concordance.iou))
 
     fig.tight_layout()

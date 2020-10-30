@@ -388,9 +388,7 @@ class CompositionalVae(torch.nn.Module):
                                                                 overlap_threshold=overlap_threshold,
                                                                 n_objects_max=n_objects_max,
                                                                 topk_only=False,
-                                                                noisy_sampling=noisy_sampling,
-                                                                bg_is_zero=True,
-                                                                bg_resolution=(1, 1))
+                                                                noisy_sampling=noisy_sampling)
 
             # Now compute fg_prob, integer_segmentation_mask, similarity
             most_likely_mixing, index = torch.max(inference.mixing, dim=-5, keepdim=True)  # 1, batch_size, 1, w, h
@@ -607,9 +605,7 @@ class CompositionalVae(torch.nn.Module):
                            noisy_sampling: bool,
                            prob_corr_factor: float,
                            overlap_threshold: float,
-                           n_objects_max: int,
-                           bg_is_zero: bool,
-                           bg_resolution: tuple):
+                           n_objects_max: int) -> Output:
         """ It needs to return: metric (with a .loss member) and whatever else """
 
         # Checks
@@ -623,9 +619,7 @@ class CompositionalVae(torch.nn.Module):
                                                             overlap_threshold=overlap_threshold,
                                                             n_objects_max=n_objects_max,
                                                             topk_only=topk_only,
-                                                            noisy_sampling=noisy_sampling,
-                                                            bg_is_zero=bg_is_zero,
-                                                            bg_resolution=bg_resolution)
+                                                            noisy_sampling=noisy_sampling)
 
         regularizations: RegMiniBatch = self.compute_regularizations(inference=inference,
                                                                      verbose=verbose)
@@ -665,10 +659,7 @@ class CompositionalVae(torch.nn.Module):
                                        noisy_sampling=True,  # True if self.training else False,
                                        prob_corr_factor=getattr(self, "prob_corr_factor", 0.0),
                                        overlap_threshold=self.nms_dict.get("overlap_threshold", 0.3),
-                                       n_objects_max=self.input_img_dict["n_objects_max"],
-                                       bg_is_zero=self.input_img_dict.get("bg_is_zero", True),
-                                       bg_resolution=self.input_img_dict.get("background_resolution_before_upsampling",
-                                                                             (2, 2)))
+                                       n_objects_max=self.input_img_dict["n_objects_max"])
 
     def generate(self,
                  imgs_in: torch.tensor,
@@ -687,6 +678,4 @@ class CompositionalVae(torch.nn.Module):
                                            noisy_sampling=True,
                                            prob_corr_factor=0.0,
                                            overlap_threshold=self.nms_dict.get("overlap_threshold", 0.3),
-                                           n_objects_max=self.input_img_dict["n_objects_max"],
-                                           bg_is_zero=True,
-                                           bg_resolution=(2, 2))
+                                           n_objects_max=self.input_img_dict["n_objects_max"])
