@@ -220,7 +220,7 @@ class CompositionalVae(torch.nn.Module):
         # 2) use map_quantitites or few_quantities
         c_times_area_map = inference.area_map * inference.sample_c_map
         sparsity_ncell = torch.sum(inference.sample_c_map) / batch_size
-        sparsity_fgpixel = (torch.sum(mixing_fg) + torch.sum(c_times_area_map)) / torch.numel(mixing_fg)
+        sparsity_fgfraction = (torch.sum(mixing_fg) + torch.sum(c_times_area_map)) / torch.numel(mixing_fg)
 
         # 3. compute KL
         # Note that I compute the mean over batch, latent_dimensions and n_object.
@@ -251,17 +251,17 @@ class CompositionalVae(torch.nn.Module):
         # 2. move reg_av to the other size, i.e. proportional to 1-f_balance
         reg_av = regularizations.total()
         loss_vae = f_ncell * sparsity_ncell + \
-                   f_fgfraction * sparsity_fgpixel + \
+                   f_fgfraction * sparsity_fgfraction + \
                    f_mse * (mse_av + reg_av) + \
                    one_minus_f_mse * kl_av
 
         # GECO BUSINESS
         if self.geco_dict["is_active"]:
             with torch.no_grad():
-                # If sparsity_fgpixel > max(target) -> tmp1 > 0 -> delta_1 < 0 -> too much fg -> increase sparsity
-                # If sparsity_fgpixel < min(target) -> tmp2 > 0 -> delta_1 > 0 -> too little fg -> decrease sparsity
-                tmp1 = (sparsity_fgpixel - max(self.geco_dict["target_fgfraction"])).clamp(min=0)
-                tmp2 = (min(self.geco_dict["target_fgfraction"]) - sparsity_fgpixel).clamp(min=0)
+                # If sparsity_fgfraction > max(target) -> tmp1 > 0 -> delta_1 < 0 -> too much fg -> increase sparsity
+                # If sparsity_fgfraction < min(target) -> tmp2 > 0 -> delta_1 > 0 -> too little fg -> decrease sparsity
+                tmp1 = (sparsity_fgfraction - max(self.geco_dict["target_fgfraction"])).clamp(min=0)
+                tmp2 = (min(self.geco_dict["target_fgfraction"]) - sparsity_fgfraction).clamp(min=0)
                 delta_1 = (tmp2 - tmp1).requires_grad_(False).to(loss_vae.device)
 
                 # If nll_av > max(target) -> tmp3 > 0 -> delta_2 < 0 -> bad reconstruction -> increase f_balance
@@ -292,7 +292,7 @@ class CompositionalVae(torch.nn.Module):
                                reg_tot=reg_av.detach().item(),
                                kl_tot=kl_av.detach().item(),
                                sparsity_ncell=sparsity_ncell.detach().item(),
-                               sparsity_fgpixel=sparsity_fgpixel.detach().item(),
+                               sparsity_fgfraction=sparsity_fgfraction.detach().item(),
 
                                kl_zbg=kl_zbg.detach().item(),
                                kl_instance=kl_zinstance.detach().item(),

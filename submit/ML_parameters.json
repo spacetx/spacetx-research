@@ -8,21 +8,21 @@
    "MAX_EPOCHS" : 1500,
    "TEST_FREQUENCY" : 100,
    "CHECKPOINT_FREQUENCY" : 100,
-   "batch_size" : 32,
-   "N_test" : 64,
-   "N_train" : 512
+   "batch_size" : 8,
+   "N_test" : 8,
+   "N_train" : 8
  },
 
  "architecture" : {
    "__comment" : "architecture parameters, level_zwhere_output is between 0 and n_max_pool included",
-   "dim_zinstance" : 10,
+   "dim_zinstance" : 5,
    "dim_zwhere" : 4,
    "dim_zbg" : 4,
    "dim_logit" : 1,
-   "cropped_size" : 56,
-   "n_max_pool" : 5,
-   "level_zwhere_and_logit_output" : 3,
-   "level_background_output" : 5,
+   "cropped_size" : 28,
+   "n_max_pool" : 4,
+   "level_zwhere_and_logit_output" : 2,
+   "level_background_output" : 4,
    "n_ch_output_features" : 32,
    "n_ch_after_first_two_conv" : 32
  },
@@ -34,12 +34,12 @@
 
  "input_image" : {
    "__comment" : "parameters describing the input images",
-   "factor_wrt_8" : 2,
+   "factor_wrt_8" : 1,
    "n_objects_max" : 25,
-   "size_object_min" : 10,
-   "size_object_max" : 40,
-   "length_scale_similarity" : 20.0,
-   "size_raw_image" : 160,
+   "size_object_min" : 5,
+   "size_object_max" : 20,
+   "length_scale_similarity" : 10.0,
+   "size_raw_image" : 80,
    "ch_in" : 1
  },
 

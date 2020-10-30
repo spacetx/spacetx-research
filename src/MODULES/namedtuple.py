@@ -234,7 +234,7 @@ class MetricMiniBatch(NamedTuple):
     reg_tot: float
     kl_tot: float
     sparsity_ncell: float
-    sparsity_fgpixel: float
+    sparsity_fgfraction: float
 
     kl_zbg: float
     kl_instance: float
