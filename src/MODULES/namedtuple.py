@@ -233,8 +233,7 @@ class MetricMiniBatch(NamedTuple):
     mse_tot: float
     reg_tot: float
     kl_tot: float
-    sparsity_ncell: float
-    sparsity_fgfraction: float
+    sparsity_tot: float
 
     kl_zbg: float
     kl_instance: float
@@ -244,12 +243,16 @@ class MetricMiniBatch(NamedTuple):
     reg_overlap: float
     reg_area_obj: float
 
+    fg_fraction_av: float
+    n_cell_av: float
+
     geco_fgfraction: float
     geco_ncell: float
     geco_mse: float
-    delta_1: float
-    delta_2: float
-    delta_3: float
+
+    delta_fgfraction: float
+    delta_ncell: float
+    delta_mse: float
 
     similarity_l: numpy.ndarray
     similarity_w: numpy.ndarray

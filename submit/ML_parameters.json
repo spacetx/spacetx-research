@@ -54,12 +54,12 @@
    "is_active" : true,
 
    "factor_mse_range" : [0.1, 0.8, 0.9],
-   "factor_fgfraction_range" : [0.0, 0.1, 2],
-   "factor_ncell_range" : [0.0, 0.1, 2],
+   "factor_fgfraction_range" : [0.1, 1.0, 5.0],
+   "factor_ncell_range" : [0.1, 1.0, 5.0],
 
    "target_fgfraction" : [0.05, 0.20],
    "target_mse" : [0.75, 1.0],
-   "target_ncell" : [2.0, 8.0],
+   "target_ncell" : [2.0, 3.0],
 
    "bg_std" : 0.05,
    "fg_std" : 0.05

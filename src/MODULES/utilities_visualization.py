@@ -282,34 +282,6 @@ def plot_kl(history_dict: dict,
     return fig
 
 
-def plot_sparsity(history_dict: dict,
-                  train_or_test: str = "test",
-                  experiment: Optional[neptune.experiments.Experiment] = None,
-                  neptune_name: Optional[str] = None):
-
-    if train_or_test == "test":
-        sparsity_ncell = history_dict["test_sparsity_ncell"]
-        sparsity_fgfraction = history_dict["test_sparsity_fgfraction"]
-    elif train_or_test == "train":
-        sparsity_ncell = history_dict["train_sparsity_ncell"]
-        sparsity_fgfraction = history_dict["train_sparsity_fgfraction"]
-    else:
-        raise Exception
-
-    fig, ax = plt.subplots()
-    ax.plot(sparsity_ncell, '-', label="sparsity_ncell")
-    ax.plot(sparsity_fgfraction, '.-', label="sparsity_fgfraction")
-    ax.set_xlabel('epoch')
-    ax.set_ylabel('sparsity')
-    ax.grid()
-    ax.legend()
-    fig.tight_layout()
-    if neptune_name is not None:
-        log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
-    plt.close()
-    return fig
-
-
 def plot_loss_term(history_dict: dict,
                    train_or_test: str = "test",
                    experiment: Optional[neptune.experiments.Experiment] = None,
@@ -320,20 +292,14 @@ def plot_loss_term(history_dict: dict,
         mse = numpy.array(history_dict["test_mse_tot"])
         reg = numpy.array(history_dict["test_reg_tot"])
         kl = numpy.array(history_dict["test_kl_tot"])
-        sparsity_ncell = numpy.array(history_dict["test_sparsity_ncell"])
-        sparsity_fgfraction = numpy.array(history_dict["test_sparsity_fgfraction"])
-        geco_fgfraction = numpy.array(history_dict["test_geco_fgfraction"])
-        geco_ncell = numpy.array(history_dict["test_geco_ncell"])
+        sparsity = numpy.array(history_dict["test_sparsity_tot"])
         geco_mse = numpy.array(history_dict["test_geco_mse"])
     elif train_or_test == "train":
         loss = numpy.array(history_dict["train_loss"])
         mse = numpy.array(history_dict["train_mse_tot"])
         reg = numpy.array(history_dict["train_reg_tot"])
         kl = numpy.array(history_dict["train_kl_tot"])
-        sparsity_ncell = numpy.array(history_dict["train_sparsity_ncell"])
-        sparsity_fgfraction = numpy.array(history_dict["train_sparsity_fgfraction"])
-        geco_fgfraction = numpy.array(history_dict["train_geco_fgfraction"])
-        geco_ncell = numpy.array(history_dict["train_geco_ncell"])
+        sparsity = numpy.array(history_dict["train_sparsity_tot"])
         geco_mse = numpy.array(history_dict["train_geco_mse"])
     else:
         raise Exception
@@ -343,8 +309,7 @@ def plot_loss_term(history_dict: dict,
     ax.plot(geco_mse * mse, '.-', label="scaled mse")
     ax.plot(geco_mse * reg, '.--', label="scaled reg")
     ax.plot((1-geco_mse) * kl, '.--', label="scaled kl")
-    ax.plot(geco_fgfraction * sparsity_fgfraction, '.--', label="scaled sparsity fgfraction")
-    ax.plot(geco_ncell * sparsity_ncell, '.--', label="scaled sparsity ncell")
+    ax.plot(sparsity, '.--', label="scaled sparsity")
 
     ax.set_xlabel('epoch')
     ax.set_ylabel('loss term')
@@ -365,11 +330,11 @@ def plot_trajectory(history_dict: dict,
     if train_or_test == "test":
         mse = history_dict["test_mse_tot"]
         kl = history_dict["test_kl_tot"]
-        sparsity = numpy.array(history_dict["test_sparsity_ncell"]) + numpy.array(history_dict["test_sparsity_fgfraction"])
+        sparsity = history_dict["test_sparsity_tot"]
     elif train_or_test == "train":
         mse = history_dict["train_mse_tot"]
         kl = history_dict["train_kl_tot"]
-        sparsity = numpy.array(history_dict["train_sparsity_ncell"]) + numpy.array(history_dict["train_sparsity_fgfraction"])
+        sparsity = history_dict["train_sparsity_tot"]
     else:
         raise Exception
 
@@ -510,7 +475,6 @@ def plot_all_from_dictionary(history_dict: dict,
 
     plot_loss(history_dict, test_frequency=test_frequency, experiment=experiment, neptune_name="loss_history_"+train_or_test)
     plot_kl(history_dict, train_or_test=train_or_test, experiment=experiment, neptune_name="kl_history_"+train_or_test)
-    plot_sparsity(history_dict, train_or_test=train_or_test, experiment=experiment, neptune_name="sparsity_history_"+train_or_test)
     plot_loss_term(history_dict, train_or_test=train_or_test, experiment=experiment, neptune_name="loss_terms_"+train_or_test)
     plot_trajectory(history_dict, train_or_test=train_or_test, experiment=experiment, neptune_name="trajectory_"+train_or_test)
     plot_geco_parameters(history_dict, params, train_or_test=train_or_test, experiment=experiment, 
