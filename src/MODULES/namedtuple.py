@@ -260,17 +260,18 @@ class MetricMiniBatch(NamedTuple):
 
     def pretty_print(self, epoch: int = 0) -> str:
         s = "[epoch {0:4d}] loss={1:.3f}, mse={2:.3f},  \
-        reg={3:.3f}, kl_tot={4:.3f}, sparsity_ncell={5:.3f}, sparsity_fgpixel={6:.3f}, \
-        geco_fg={7:.3f}, geco_ncell={8:.3f}, geco_mse={9:.3f}".format(epoch,
-                                                                      self.loss,
-                                                                      self.mse_tot,
-                                                                      self.reg_tot,
-                                                                      self.kl_tot,
-                                                                      self.sparsity_ncell,
-                                                                      self.sparsity_fgfraction,
-                                                                      self.geco_fgfraction,
-                                                                      self.geco_ncell,
-                                                                      self.geco_mse)
+        reg={3:.3f}, kl={4:.3f}, sparsity={5:.3f}, fg_fraction_av={6:.3f}, n_cell_av={7:.3f}, \
+        geco_fg={8:.3f}, geco_ncell={9:.3f}, geco_mse={10:.3f}".format(epoch,
+                                                                       self.loss,
+                                                                       self.mse_tot,
+                                                                       self.reg_tot,
+                                                                       self.kl_tot,
+                                                                       self.sparsity_tot,
+                                                                       self.fg_fraction_av,
+                                                                       self.n_cell_av,
+                                                                       self.geco_fgfraction,
+                                                                       self.geco_ncell,
+                                                                       self.geco_mse)
         return s
 
 

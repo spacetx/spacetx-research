@@ -8,9 +8,9 @@
    "MAX_EPOCHS" : 1500,
    "TEST_FREQUENCY" : 100,
    "CHECKPOINT_FREQUENCY" : 100,
-   "batch_size" : 128,
-   "N_test" : 128,
-   "N_train" : 512
+   "batch_size" : 8,
+   "N_test" : 8,
+   "N_train" : 8
  },
 
  "architecture" : {
@@ -53,9 +53,9 @@
    "__comment" : "if active=false use ELBO, else use GECO with Log-Likelihood threshold = n_pixels * n_channel * threshold",
    "is_active" : true,
 
-   "factor_mse_range" : [0.1, 0.8, 0.9],
-   "factor_fgfraction_range" : [0.1, 1.0, 5.0],
-   "factor_ncell_range" : [0.1, 1.0, 5.0],
+   "geco_mse_range" : [0.1, 0.8, 0.9],
+   "geco_fgfraction_range" : [0.1, 1.0, 5.0],
+   "geco_ncell_range" : [0.1, 1.0, 5.0],
 
    "target_fgfraction" : [0.05, 0.20],
    "target_mse" : [0.75, 1.0],
@@ -72,7 +72,7 @@
    "betas" : [0.9, 0.999],
    "base_lr_similarity" : 0.01,
    "betas_similarity" : [0.9, 0.999],
-   "base_lr_geco" : 0.001,
+   "base_lr_geco" : 0.01,
    "betas_geco" : [0.9, 0.999],
    "weight_decay" : 0.0,
    "eps" : 1E-8,

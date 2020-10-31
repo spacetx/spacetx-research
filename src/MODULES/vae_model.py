@@ -130,12 +130,12 @@ class CompositionalVae(torch.nn.Module):
         self.geco_dict = params["GECO_loss"]
         self.input_img_dict = params["input_image"]
 
-        self.geco_fgfraction_factor = torch.nn.Parameter(data=torch.tensor(self.geco_dict["factor_fgfraction_range"][1],
-                                                                           dtype=torch.float), requires_grad=True)
-        self.geco_ncell_factor = torch.nn.Parameter(data=torch.tensor(self.geco_dict["factor_ncell_range"][1],
-                                                                      dtype=torch.float), requires_grad=True)
-        self.geco_mse_factor = torch.nn.Parameter(data=torch.tensor(self.geco_dict["factor_mse_range"][1],
+        self.geco_fgfraction = torch.nn.Parameter(data=torch.tensor(self.geco_dict["geco_fgfraction_range"][1],
                                                                     dtype=torch.float), requires_grad=True)
+        self.geco_ncell = torch.nn.Parameter(data=torch.tensor(self.geco_dict["geco_ncell_range"][1],
+                                                               dtype=torch.float), requires_grad=True)
+        self.geco_mse = torch.nn.Parameter(data=torch.tensor(self.geco_dict["geco_mse_range"][1],
+                                                             dtype=torch.float), requires_grad=True)
 
         self.running_avarage_kl_logit = torch.nn.Parameter(data=4*torch.ones(1, dtype=torch.float), requires_grad=True)
 
@@ -237,12 +237,12 @@ class CompositionalVae(torch.nn.Module):
 
         # 6. Note that I clamp in_place
         with torch.no_grad():
-            geco_mse = self.geco_mse_factor.data.clamp_(min=min(self.geco_dict["factor_mse_range"]),
-                                                        max=max(self.geco_dict["factor_mse_range"]))
-            geco_ncell = self.geco_ncell_factor.data.clamp_(min=min(self.geco_dict["factor_ncell_range"]),
-                                                            max=max(self.geco_dict["factor_ncell_range"]))
-            geco_fgfraction = self.geco_fgfraction_factor.data.clamp_(min=min(self.geco_dict["factor_fgfraction_range"]),
-                                                                      max=max(self.geco_dict["factor_fgfraction_range"]))
+            geco_mse = self.geco_mse.data.clamp_(min=min(self.geco_dict["geco_mse_range"]),
+                                                 max=max(self.geco_dict["geco_mse_range"]))
+            geco_ncell = self.geco_ncell.data.clamp_(min=min(self.geco_dict["geco_ncell_range"]),
+                                                     max=max(self.geco_dict["geco_ncell_range"]))
+            geco_fgfraction = self.geco_fgfraction.data.clamp_(min=min(self.geco_dict["geco_fgfraction_range"]),
+                                                               max=max(self.geco_dict["geco_fgfraction_range"]))
             one_minus_geco_mse = torch.ones_like(geco_mse) - geco_mse
 
         # 6. Loss_VAE
@@ -282,9 +282,9 @@ class CompositionalVae(torch.nn.Module):
                 delta_mse = torch.zeros_like(loss_vae).requires_grad_(False)
                 delta_ncell = torch.zeros_like(loss_vae).requires_grad_(False)
 
-        loss_1 = self.geco_fgfraction_factor * delta_fgfraction
-        loss_2 = self.geco_mse_factor * delta_mse
-        loss_3 = self.geco_ncell_factor * delta_ncell
+        loss_1 = self.geco_fgfraction * delta_fgfraction
+        loss_2 = self.geco_mse * delta_mse
+        loss_3 = self.geco_ncell * delta_ncell
         loss_av = loss_vae + loss_1 + loss_2 + loss_3 - (loss_1 + loss_2 + loss_3).detach()
 
         # add everything you want as long as there is one loss
@@ -302,9 +302,9 @@ class CompositionalVae(torch.nn.Module):
                                reg_overlap=regularizations.reg_overlap.detach().item(),
                                reg_area_obj=regularizations.reg_area_obj.detach().item(),
 
-                               geco_fgfraction=geco_fgfraction.detach().item(),
-                               geco_ncell=geco_ncell.detach().item(),
-                               geco_mse=geco_mse.detach().item(),
+                               geco_fgfraction=self.geco_fgfraction.data.detach().item(),
+                               geco_ncell=self.geco_ncell.data.detach().item(),
+                               geco_mse=self.geco_mse.data.detach().item(),
 
                                fg_fraction_av=fgfraction_av.detach().item(),
                                n_cell_av=ncell_av.detach().item(),
