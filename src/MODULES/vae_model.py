@@ -261,8 +261,9 @@ class CompositionalVae(torch.nn.Module):
             with torch.no_grad():
                 # If sparsity_fgfraction > max(target) -> tmp1 > 0 -> delta_1 < 0 -> too much fg -> increase sparsity
                 # If sparsity_fgfraction < min(target) -> tmp2 > 0 -> delta_1 > 0 -> too little fg -> decrease sparsity
-                tmp1 = (sparsity_fgfraction - max(self.geco_dict["target_fgfraction"])).clamp(min=0)
-                tmp2 = (min(self.geco_dict["target_fgfraction"]) - sparsity_fgfraction).clamp(min=0)
+                fgfraction = torch.mean(mixing_fg)
+                tmp1 = (fgfraction - max(self.geco_dict["target_fgfraction"])).clamp(min=0)
+                tmp2 = (min(self.geco_dict["target_fgfraction"]) - fgfraction).clamp(min=0)
                 delta_1 = (tmp2 - tmp1).requires_grad_(False).to(loss_vae.device)
 
                 # If nll_av > max(target) -> tmp3 > 0 -> delta_2 < 0 -> bad reconstruction -> increase f_balance
