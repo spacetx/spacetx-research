@@ -8,9 +8,9 @@
    "MAX_EPOCHS" : 1500,
    "TEST_FREQUENCY" : 100,
    "CHECKPOINT_FREQUENCY" : 100,
-   "batch_size" : 8,
-   "N_test" : 8,
-   "N_train" : 8
+   "batch_size" : 128,
+   "N_test" : 128,
+   "N_train" : 512
  },
 
  "architecture" : {
