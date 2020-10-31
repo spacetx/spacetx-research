@@ -218,8 +218,9 @@ class CompositionalVae(torch.nn.Module):
         # There is a lot of freedom here:
         # 1) use c=Bernoulli(p) or p
         # 2) use map_quantitites or few_quantities
+        n_boxes = inference.mixing.shape[-5]
         c_times_area_map = inference.area_map * inference.sample_c_map
-        sparsity_ncell = torch.sum(inference.sample_c_map) / batch_size
+        sparsity_ncell = torch.sum(inference.sample_c_map) / (batch_size * n_boxes)
         sparsity_fgfraction = (torch.sum(mixing_fg) + torch.sum(c_times_area_map)) / torch.numel(mixing_fg)
 
         # 3. compute KL
