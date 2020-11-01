@@ -215,15 +215,13 @@ class CompositionalVae(torch.nn.Module):
         # 2. tight bounding boxes
         # 3. tight masks
         # The three terms take care of all these requirement.
-        # There is a lot of freedom here:
-        # 1) use c=Bernoulli(p) or p
-        # 2) use map_quantitites or few_quantities
+        # Note:
+        # 1) All the terms contain c=Bernoulli(p). It is actually the same b/c during back prop c=p
+        # 2) fg_fraction is based on the selected quantities
+        # 3) sparsity n_cell is based on c_map so that the entire matrix becomes sparse.
         c_times_area_few = inference.sample_c * inference.sample_bb.bw * inference.sample_bb.bh
         sparsity_fgfraction = (torch.sum(mixing_fg) + torch.sum(c_times_area_few)) / torch.numel(mixing_fg)
-        sparsity_ncell = torch.mean(inference.sample_c)  # strictly less than one
-        # OBSERVATION:
-        # This sparsity does not lead to isolated points in p_map
-        # IDEA -> rewrite these two term using c_map however the geco is unchanged, i.e. written w.r.t. selected
+        sparsity_ncell = torch.sum(inference.sample_c_map) / torch.numel(c_times_area_few)  # divide by batch x box_fex
 
         # 3. compute KL
         # Note that I compute the mean over batch, latent_dimensions and n_object.
