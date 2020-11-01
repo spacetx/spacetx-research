@@ -15,7 +15,7 @@
 
  "architecture" : {
    "__comment" : "architecture parameters, level_zwhere_output is between 0 and n_max_pool included",
-   "dim_zinstance" : 5,
+   "dim_zinstance" : 10,
    "dim_zwhere" : 4,
    "dim_zbg" : 4,
    "dim_logit" : 1,
@@ -59,7 +59,7 @@
 
    "target_fgfraction" : [0.05, 0.20],
    "target_mse" : [0.75, 1.0],
-   "target_ncell" : [2.0, 3.0],
+   "target_ncell" : [5.0, 10.0],
 
    "bg_std" : 0.05,
    "fg_std" : 0.05

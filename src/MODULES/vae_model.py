@@ -221,6 +221,9 @@ class CompositionalVae(torch.nn.Module):
         c_times_area_few = inference.sample_c * inference.sample_bb.bw * inference.sample_bb.bh
         sparsity_fgfraction = (torch.sum(mixing_fg) + torch.sum(c_times_area_few)) / torch.numel(mixing_fg)
         sparsity_ncell = torch.mean(inference.sample_c)  # strictly less than one
+        # OBSERVATION:
+        # This sparsity does not lead to isolated points in p_map
+        # IDEA -> rewrite these two term using c_map however the geco is unchanged, i.e. written w.r.t. selected
 
         # 3. compute KL
         # Note that I compute the mean over batch, latent_dimensions and n_object.
