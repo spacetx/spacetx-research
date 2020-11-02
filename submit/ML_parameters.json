@@ -5,7 +5,7 @@
  "simulation" : {
    "__comment" : "there are 3 types of runs: scratch, resume, pretrained",
    "type" : "scratch",
-   "MAX_EPOCHS" : 1500,
+   "MAX_EPOCHS" : 3501,
    "TEST_FREQUENCY" : 100,
    "CHECKPOINT_FREQUENCY" : 100,
    "batch_size" : 128,
@@ -15,7 +15,7 @@
 
  "architecture" : {
    "__comment" : "architecture parameters, level_zwhere_output is between 0 and n_max_pool included",
-   "dim_zinstance" : 10,
+   "dim_zinstance" : 20,
    "dim_zwhere" : 4,
    "dim_zbg" : 4,
    "dim_logit" : 1,
@@ -54,11 +54,11 @@
    "is_active" : true,
 
    "geco_mse_range" : [0.1, 0.8, 0.9],
-   "geco_fgfraction_range" : [0.1, 1.0, 5.0],
-   "geco_ncell_range" : [0.1, 1.0, 5.0],
+   "geco_fgfraction_range" : [0.1, 1.0, 3.0],
+   "geco_ncell_range" : [0.1, 1.0, 3.0],
 
-   "target_fgfraction" : [0.05, 0.20],
-   "target_mse" : [0.75, 1.0],
+   "target_fgfraction" : [0.15, 0.15],
+   "target_mse" : [0.5, 0.5],
    "target_ncell" : [5.0, 10.0],
 
    "bg_std" : 0.05,
@@ -72,7 +72,7 @@
    "betas" : [0.9, 0.999],
    "base_lr_similarity" : 0.01,
    "betas_similarity" : [0.9, 0.999],
-   "base_lr_geco" : 0.01,
+   "base_lr_geco" : 0.001,
    "betas_geco" : [0.9, 0.999],
    "weight_decay" : 0.0,
    "eps" : 1E-8,

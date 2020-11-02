@@ -266,7 +266,7 @@ tiling: Segmentation = vae.segment_with_tiling(single_img=img_to_segment,
                                                overlap_threshold=None,
                                                radius_nn=10,
                                                batch_size=64)
-# log_object_as_artifact(name="tiling", obj=tiling, verbose=True)
+log_object_as_artifact(name="tiling", obj=tiling, verbose=True)
 tiling_fig = plot_tiling(tiling, neptune_name="tiling_before_graph")
 
 # perform graph analysis
