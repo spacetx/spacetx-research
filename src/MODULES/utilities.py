@@ -118,7 +118,8 @@ def concordance_integer_masks(mask1: torch.Tensor, mask2: torch.Tensor) -> Conco
 
         We use the peaks of the join distribution to extract the mapping between membership labels.
     """
-
+    print(mask1.dtype, mask2.dtype)
+    print(mask1.device, mask2.device)
     assert mask1.shape == mask2.shape
     assert mask1.device == mask2.device
 

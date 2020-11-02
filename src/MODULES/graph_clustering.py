@@ -5,7 +5,7 @@ import skimage.segmentation
 import skimage.color
 import leidenalg as la
 import igraph as ig
-from typing import Optional, List
+from typing import Optional, List, Iterable
 from matplotlib import pyplot as plt
 from MODULES.namedtuple import Segmentation, Partition, SparseSimilarity, Suggestion, ConcordanceIntMask
 from MODULES.utilities_neptune import log_img_and_chart
@@ -147,6 +147,21 @@ with torch.no_grad():
                                          "total_nodes": self.n_fg_pixel},
                             directed=False)
 
+        def get_cc_partition(self) -> Partition:
+            labels = skimage.measure.label(self.index_matrix > 0, connectivity=2, background=0, return_num=False)
+            membership = torch.tensor(labels,
+                                      dtype=torch.long,
+                                      device=self.device)[self.i_coordinate_fg_pixel,
+                                                          self.j_coordinate_fg_pixel]
+            return Partition(membership=membership, sizes=torch.bincount(membership))
+
+        def get_simple_partition(self) -> Partition:
+            membership = torch.tensor(self.example_integer_mask,
+                                      dtype=torch.long,
+                                      device=self.device)[self.i_coordinate_fg_pixel,
+                                                          self.j_coordinate_fg_pixel]
+            return Partition(membership=membership, sizes=torch.bincount(membership))
+
         def partition_2_integer_mask(self, partition: Partition):
             label = torch.zeros_like(self.index_matrix, 
                                      dtype=partition.membership.dtype,
@@ -205,7 +220,7 @@ with torch.no_grad():
                                          max_size: Optional[float] = None,
                                          cpm_or_modularity: str = "cpm",
                                          each_cc_separately: bool = False,
-                                         sweep_range: Optional[numpy.ndarray] = None) -> Suggestion:
+                                         sweep_range: Optional[Iterable] = None) -> Suggestion:
             """ This function select the resolution parameter which gives the hightest
                 Intersection Over Union with the target partition.
                 By default the target partition is self.partition_sample_segmask.
@@ -230,21 +245,22 @@ with torch.no_grad():
                           min(self.raw_image.shape[-2], window[2]),
                           min(self.raw_image.shape[-1], window[3]))
 
-            other_integer_mask = self.example_integer_mask[window[0]:window[2], window[1]:window[3]]
+            other_integer_mask = self.example_integer_mask[window[0]:window[2], window[1]:window[3]].long()
+            print("other_integer_mask.device", other_integer_mask.device)
 
-            resolutions = numpy.arange(0.5, 10, 0.5) if sweep_range is None else sweep_range
-            iou = numpy.zeros(resolutions.shape[0], dtype=float)
-            mi = numpy.zeros_like(iou)
-            n_reversible_instances = numpy.zeros_like(iou)
-            total_intersection = numpy.zeros_like(iou)
-            integer_mask = numpy.zeros((resolutions.shape[0], window[2]-window[0], window[3]-window[1]),
-                                       dtype=numpy.int)
-            delta_n_cells = numpy.zeros(resolutions.shape[0], dtype=numpy.int)
-            n_cells = numpy.zeros_like(delta_n_cells)
+            resolutions = torch.arange(0.5, 10, 0.5) if sweep_range is None else sweep_range
+            iou = torch.zeros(len(resolutions), dtype=torch.float)
+            mi = torch.zeros_like(iou)
+            n_reversible_instances = torch.zeros_like(iou)
+            total_intersection = torch.zeros_like(iou)
+            integer_mask = torch.zeros((resolutions.shape[0], window[2]-window[0],
+                                        window[3]-window[1]), dtype=torch.int)
+            delta_n_cells = torch.zeros(resolutions.shape[0], dtype=torch.int)
+            n_cells = torch.zeros_like(delta_n_cells)
             sizes_list = list()
             
             for n, res in enumerate(resolutions):
-                if (n % 10 == 0) or (n == resolutions.shape[0]-1) :
+                if (n % 10 == 0) or (n == resolutions.shape[0]-1):
                     print("resolution sweep, {0:3d} out of {1:3d}".format(n, resolutions.shape[0]-1))
                 
                 p_tmp = self.find_partition_leiden(resolution=res,
@@ -254,20 +270,25 @@ with torch.no_grad():
                                                    cpm_or_modularity=cpm_or_modularity,
                                                    each_cc_separately=each_cc_separately)
                 int_mask = self.partition_2_integer_mask(p_tmp)[window[0]:window[2], window[1]:window[3]]
-                sizes_list.append(p_tmp.sizes.cpu().numpy())
+                sizes_list.append(p_tmp.sizes.cpu())
 
                 n_cells[n] = len(p_tmp.sizes)-1
-                integer_mask[n] = int_mask.cpu().numpy()
-                c_tmp: ConcordanceIntMask = concordance_integer_masks(integer_mask[n], other_integer_mask)
+                integer_mask[n] = int_mask.cpu()
+                c_tmp: ConcordanceIntMask = concordance_integer_masks(integer_mask[n].long(), other_integer_mask)
                 delta_n_cells[n] = c_tmp.delta_n
                 iou[n] = c_tmp.iou
                 mi[n] = c_tmp.mutual_information
                 n_reversible_instances[n] = c_tmp.n_reversible_instances
                 total_intersection[n] = c_tmp.intersection_mask.sum().float()
 
-            i_max = numpy.argmax(iou)
-            return Suggestion(best_resolution=resolutions[i_max],
-                              best_index=i_max.item(),
+            i_max = torch.argmax(iou).item()
+            try:
+                best_resolution = resolutions[i_max].item()
+            except:
+                best_resolution = resolutions[i_max]
+
+            return Suggestion(best_resolution=best_resolution,
+                              best_index=i_max,
                               sweep_resolution=resolutions,
                               sweep_mi=mi,
                               sweep_iou=iou,
@@ -327,8 +348,8 @@ with torch.no_grad():
             # Subset graph by connected components and windows if necessary
             max_label = 0
             membership = torch.zeros(self.n_fg_pixel, dtype=torch.long, device=self.device)
-            partition_for_subgraphs = self.partition_connected_components if each_cc_separately else None
-            
+            partition_for_subgraphs = self.get_cc_partition() if each_cc_separately else None
+
             for n, g in enumerate(self.subgraphs_by_partition_and_window(window=window,
                                                                          partition=partition_for_subgraphs)):
                 
@@ -358,7 +379,7 @@ with torch.no_grad():
             return Partition(sizes=torch.bincount(membership),
                              membership=membership).filter_by_size(min_size=min_size, max_size=max_size)
 
-        def plot_partition(self, partition: Optional[Partition] = None,
+        def plot_partition(self, partition: Partition,
                            figsize: Optional[tuple] = (12, 12),
                            window: Optional[tuple] = None,
                            experiment: Optional[neptune.experiments.Experiment] = None,
@@ -372,6 +393,7 @@ with torch.no_grad():
             """
 
             if partition is None:
+                FIX
                 partition = self.partition_connected_components
 
             if window is None:

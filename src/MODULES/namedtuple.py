@@ -32,17 +32,17 @@ class PreProcess(NamedTuple):
 class Suggestion(NamedTuple):
     best_resolution: float
     best_index: int
-    sweep_resolution: numpy.ndarray
-    sweep_mi: numpy.ndarray
-    sweep_iou: numpy.ndarray
-    sweep_delta_n: numpy.ndarray
-    sweep_seg_mask: numpy.ndarray
-    sweep_n_cells: numpy.ndarray
+    sweep_resolution: torch.Tensor
+    sweep_mi: torch.Tensor
+    sweep_iou: torch.Tensor
+    sweep_delta_n: torch.Tensor
+    sweep_seg_mask: torch.Tensor
+    sweep_n_cells: torch.Tensor
     sweep_sizes: list
         
-    def show_index(self, index: int, figsize: tuple = (20, 20), fontsize: int = 20):
+    def show_index(self, index: int, figsize: tuple = (12, 12), fontsize: int = 20):
         figure, ax = plt.subplots(figsize=figsize)
-        ax.imshow(skimage.color.label2rgb(label=self.sweep_seg_mask[index], bg_label=0))
+        ax.imshow(skimage.color.label2rgb(label=self.sweep_seg_mask[index].cpu().numpy(), bg_label=0))
         ax.set_title('resolution = {0:.3f}, \
                       iou = {1:.3f}, \
                       delta_n = {2:3d}, \
@@ -52,10 +52,10 @@ class Suggestion(NamedTuple):
                                                self.sweep_n_cells[index]),
                      fontsize=fontsize)
         
-    def show_best(self, figsize: tuple = (20, 20), fontsize: int = 20):
+    def show_best(self, figsize: tuple = (12, 12), fontsize: int = 20):
         return self.show_index(self.best_index, figsize, fontsize)
         
-    def show_graph(self, figsize: tuple = (20, 20), fontsize: int = 20):
+    def show_graph(self, figsize: tuple = (12, 12), fontsize: int = 20):
         figure, ax = plt.subplots(figsize=figsize)
         ax.set_title('Resolution sweep', fontsize=fontsize)
         ax.set_xlabel("resolution", fontsize=fontsize)

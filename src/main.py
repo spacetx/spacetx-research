@@ -10,7 +10,7 @@ from MODULES.utilities_visualization import plot_reconstruction_and_inference, p
 from MODULES.utilities_visualization import plot_concordance
 from MODULES.utilities_ml import ConditionalRandomCrop, SpecialDataSet, process_one_epoch
 from MODULES.graph_clustering import GraphSegmentation
-from MODULES.utilities import QC_on_integer_mask, concordance_integer_masks
+from MODULES.utilities import QC_on_integer_mask, concordance_integer_masks, load_json_as_dict
 import skimage.io
 
 # Check versions
