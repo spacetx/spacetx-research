@@ -105,15 +105,9 @@ def plot_label_contours(label: Union[torch.Tensor, numpy.ndarray],
                         experiment: Optional[neptune.experiments.Experiment] = None,
                         neptune_name: Optional[str] = None):
     
-    if window is None:
-        window = [0, 0, label.shape[-2], label.shape[-1]]
-    else:
-        window = (max(0, window[0]),
-                  max(0, window[1]),
-                  min(label.shape[-2], window[2]),
-                  min(label.shape[-1], window[3]))
-        
-
+    assert len(label.shape) == 2
+    assert len(image.shape) == 2 or len(image.shape)==3
+    
     assert len(label.shape) == 2
     if torch.is_tensor(label):
         label = label.cpu().numpy()
@@ -127,12 +121,24 @@ def plot_label_contours(label: Union[torch.Tensor, numpy.ndarray],
         image = image[..., 0]
 
     assert image.shape[:2] == label.shape[:2]
+    
+    if window is None:
+        window = [0, 0, label.shape[-2], label.shape[-1]]
+    else:
+        window = (max(0, window[0]),
+                  max(0, window[1]),
+                  min(label.shape[-2], window[2]),
+                  min(label.shape[-1], window[3]))
+        
 
     contours = contours_from_labels(label[window[0]:window[2], window[1]:window[3]], contour_thickness)
     fig, ax = plt.subplots(ncols=3, figsize=figsize)
     ax[0].imshow(image[window[0]:window[2],window[1]:window[3]])
     ax[1].imshow(add_red_contours(image[window[0]:window[2],window[1]:window[3]], contours))
-    ax[2].imshow(label[window[0]:window[2],window[1]:window[3]], cmap='gray')
+    ax[2].imshow(skimage.color.label2rgb(label=label[window[0]:window[2],window[1]:window[3]],
+                                         image=image[window[0]:window[2],window[1]:window[3]],
+                                         alpha=0.25, 
+                                         bg_label=0))
 
     fig.tight_layout()
     if neptune_name is not None:
@@ -282,21 +288,22 @@ def plot_tiling(tiling,
                   min(tiling.integer_mask.shape[-1], window[3]))
 
     fig, axes = plt.subplots(ncols=2, nrows=2, figsize=figsize)
-    axes[0, 0].imshow(skimage.color.label2rgb(tiling.integer_mask[0, 0, window[0]:window[2], 
-                                                                  window[1]:window[3]].cpu().numpy(),
-                                              numpy.zeros_like(tiling.integer_mask[0, 0, window[0]:window[2], 
-                                                                                   window[1]:window[3]].cpu().numpy()),
+    axes[0, 0].imshow(skimage.color.label2rgb(label=tiling.integer_mask[0, 0, window[0]:window[2], 
+                                                                        window[1]:window[3]].cpu().numpy(),
+                                              image=numpy.zeros_like(tiling.integer_mask[0, 0, window[0]:window[2], 
+                                                                                         window[1]:window[3]].cpu().numpy()),
                                               alpha=1.0,
                                               bg_label=0))
-    axes[0, 1].imshow(skimage.color.label2rgb(tiling.integer_mask[0, 0, window[0]:window[2], 
-                                                                  window[1]:window[3]].cpu().numpy(),
-                                              tiling.raw_image[0, 0, window[0]:window[2], 
-                                                               window[1]:window[3]].cpu().numpy(),
+    
+    axes[0, 1].imshow(skimage.color.label2rgb(label=tiling.integer_mask[0, 0, window[0]:window[2], 
+                                                                        window[1]:window[3]].cpu().numpy(),
+                                              image=tiling.raw_image[0, 0, window[0]:window[2], 
+                                                                     window[1]:window[3]].cpu().numpy(),
                                               alpha=0.25,
                                               bg_label=0))
     axes[1, 0].imshow(tiling.fg_prob[0, 0, window[0]:window[2], 
                                      window[1]:window[3]].cpu().numpy(), cmap='gray')
-    axes[1, 1].imshow(tiling.raw_image[0, window[0]:window[2], 
+    axes[1, 1].imshow(tiling.raw_image[0, :, window[0]:window[2], 
                                        window[1]:window[3]].cpu().permute(1, 2, 0).squeeze(-1).numpy(), cmap='gray')
 
     axes[0, 0].set_title("sample integer mask")

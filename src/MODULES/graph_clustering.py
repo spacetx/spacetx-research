@@ -9,7 +9,7 @@ from typing import Optional, List, Iterable
 from matplotlib import pyplot as plt
 from MODULES.namedtuple import Segmentation, Partition, SparseSimilarity, Suggestion, ConcordanceIntMask
 from MODULES.utilities_neptune import log_img_and_chart
-from MODULES.utilities import concordance_integer_masks
+from MODULES.utilities import concordance_integer_masks, remove_label_gaps
 
 # I HAVE LEARNED:
 # 1. If I use a lot of negihbours then all methods are roughly equivalent b/c graph becomes ALL-TO-ALL
@@ -245,9 +245,7 @@ with torch.no_grad():
                           min(self.raw_image.shape[-2], window[2]),
                           min(self.raw_image.shape[-1], window[3]))
 
-            other_integer_mask = self.example_integer_mask[window[0]:window[2], window[1]:window[3]].long()
-            print(other_integer_mask.device)
-            
+            other_integer_mask = remove_label_gaps(self.example_integer_mask[window[0]:window[2], window[1]:window[3]]).long()            
 
             resolutions = torch.arange(0.5, 10, 0.5) if sweep_range is None else sweep_range
             iou = torch.zeros(len(resolutions), dtype=torch.float)
