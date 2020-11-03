@@ -10,7 +10,7 @@ from MODULES.utilities_visualization import plot_reconstruction_and_inference, p
 from MODULES.utilities_visualization import plot_concordance
 from MODULES.utilities_ml import ConditionalRandomCrop, SpecialDataSet, process_one_epoch
 from MODULES.graph_clustering import GraphSegmentation
-from MODULES.utilities import QC_on_integer_mask, concordance_integer_masks
+from MODULES.utilities import QC_on_integer_mask, concordance_integer_masks, load_json_as_dict
 import skimage.io
 
 # Check versions
@@ -53,7 +53,8 @@ conditional_crop_train = ConditionalRandomCrop(desired_w=SIZE_CROPS, desired_h=S
 
 test_data = conditional_crop_test.crop(img=img_torch,
                                        roi_mask=roi_mask_torch)
-# print("GPU GB after defining test data ->",torch.cuda.memory_allocated()/1E9)
+if torch.cuda.is_available():
+    print("GPU GB after defining test data ->", torch.cuda.memory_allocated()/1E9)
 
 
 test_loader = SpecialDataSet(img=test_data,
@@ -73,17 +74,24 @@ train_loader = SpecialDataSet(img=img_torch,
                               batch_size=BATCH_SIZE)
 train_batch_example_fig = train_loader.check_batch()
 log_img_only(name="train_batch_example", fig=train_batch_example_fig, experiment=exp)
-# print("GPU GB after train_loader ->",torch.cuda.memory_allocated()/1E9)
+if torch.cuda.is_available():
+    print("GPU GB after train_loader ->", torch.cuda.memory_allocated()/1E9)
 
 # Make a batch of reference images by cropping the train_data at consecutive locations
 reference_imgs_list = []
 crop_size = params["input_image"]["size_raw_image"]
+factor_wrt_8 = params["input_image"]["factor_wrt_8"]
+ix_start, iy_start = 1080, 2140
+i1 = ix_start * factor_wrt_8
+j1 = iy_start * factor_wrt_8
+
 for ni in range(2):
-    i = 1080 + ni * crop_size
+    i = i1 + ni * crop_size
     for nj in range(4):
-        j = 2140 + nj * crop_size
+        j = j1 + nj * crop_size
         reference_imgs_list.append(img_torch[..., i:i+crop_size, j:j+crop_size])
 reference_imgs = torch.cat(reference_imgs_list, dim=-4)
+print("reference_imgs", reference_imgs.shape, reference_imgs.device, reference_imgs.dtype)
 if torch.cuda.is_available():
     reference_imgs = reference_imgs.cuda()
 _ = show_batch(reference_imgs,
@@ -91,11 +99,15 @@ _ = show_batch(reference_imgs,
                figsize=(12, 12),
                title="reference imgs",
                neptune_name="reference_imgs")
+if torch.cuda.is_available():
+    print("GPU GB after reference_images ->", torch.cuda.memory_allocated()/1E9)
 
 # Instantiate model, optimizer and checks
 vae = CompositionalVae(params)
 log_model_summary(vae)
 optimizer = instantiate_optimizer(model=vae, dict_params_optimizer=params["optimizer"])
+if torch.cuda.is_available():
+    print("GPU GB after vae ->", torch.cuda.memory_allocated()/1E9)
 
 imgs_out = vae.inference_and_generator.unet.show_grid(reference_imgs)
 unet_grid_fig = show_batch(imgs_out[:, 0], normalize_range=(0.0, 1.0), neptune_name="unet_grid")
@@ -234,9 +246,15 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                                                  verbose=True)
 
 # # Check segmentation WITH and WITHOUT tiling to the GROUND_TRUTH
-img_to_segment = train_loader.img[0, :, 940:1240, 2140:2440]
-roi_mask_to_segment = train_loader.roi_mask[0, :, 940:1240, 2140:2440]
-gt_numpy = skimage.io.imread("./ground_truth").astype(numpy.int32)[940:1240, 2140:2440]
+ix_start, iy_start, delta = 940, 2140, 300
+i1 = ix_start * factor_wrt_8
+i2 = i1 + factor_wrt_8 * delta
+j1 = iy_start * factor_wrt_8
+j2 = j1 + factor_wrt_8 * delta
+
+img_to_segment = train_loader.img[0, :, i1:i2, j1:j2]
+roi_mask_to_segment = train_loader.roi_mask[0, :, i1:i2, j1:j2]
+gt_numpy = skimage.io.imread("./ground_truth").astype(numpy.int32)[i1:i2, j1:j2]
 
 # tiling segmentation
 tiling: Segmentation = vae.segment_with_tiling(single_img=img_to_segment,
@@ -248,7 +266,7 @@ tiling: Segmentation = vae.segment_with_tiling(single_img=img_to_segment,
                                                overlap_threshold=None,
                                                radius_nn=10,
                                                batch_size=64)
-# log_object_as_artifact(name="tiling", obj=tiling, verbose=True)
+log_object_as_artifact(name="tiling", obj=tiling, verbose=True)
 tiling_fig = plot_tiling(tiling, neptune_name="tiling_before_graph")
 
 # perform graph analysis

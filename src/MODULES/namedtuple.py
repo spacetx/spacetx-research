@@ -32,17 +32,17 @@ class PreProcess(NamedTuple):
 class Suggestion(NamedTuple):
     best_resolution: float
     best_index: int
-    sweep_resolution: numpy.ndarray
-    sweep_mi: numpy.ndarray
-    sweep_iou: numpy.ndarray
-    sweep_delta_n: numpy.ndarray
-    sweep_seg_mask: numpy.ndarray
-    sweep_n_cells: numpy.ndarray
+    sweep_resolution: torch.Tensor
+    sweep_mi: torch.Tensor
+    sweep_iou: torch.Tensor
+    sweep_delta_n: torch.Tensor
+    sweep_seg_mask: torch.Tensor
+    sweep_n_cells: torch.Tensor
     sweep_sizes: list
         
-    def show_index(self, index: int, figsize: tuple = (20, 20), fontsize: int = 20):
+    def show_index(self, index: int, figsize: tuple = (12, 12), fontsize: int = 20):
         figure, ax = plt.subplots(figsize=figsize)
-        ax.imshow(skimage.color.label2rgb(label=self.sweep_seg_mask[index], bg_label=0))
+        ax.imshow(skimage.color.label2rgb(label=self.sweep_seg_mask[index].cpu().numpy(), bg_label=0))
         ax.set_title('resolution = {0:.3f}, \
                       iou = {1:.3f}, \
                       delta_n = {2:3d}, \
@@ -52,10 +52,10 @@ class Suggestion(NamedTuple):
                                                self.sweep_n_cells[index]),
                      fontsize=fontsize)
         
-    def show_best(self, figsize: tuple = (20, 20), fontsize: int = 20):
+    def show_best(self, figsize: tuple = (12, 12), fontsize: int = 20):
         return self.show_index(self.best_index, figsize, fontsize)
         
-    def show_graph(self, figsize: tuple = (20, 20), fontsize: int = 20):
+    def show_graph(self, figsize: tuple = (12, 12), fontsize: int = 20):
         figure, ax = plt.subplots(figsize=figsize)
         ax.set_title('Resolution sweep', fontsize=fontsize)
         ax.set_xlabel("resolution", fontsize=fontsize)
@@ -142,6 +142,7 @@ class Partition(NamedTuple):
 #  ----------------------------------------------------------------  #
 #  ------- Stuff Related to Processing (i.e. CompositionalVAE) ----  #
 #  ----------------------------------------------------------------  #
+
 
 class DIST(NamedTuple):
     sample: torch.Tensor
@@ -238,35 +239,39 @@ class MetricMiniBatch(NamedTuple):
     kl_instance: float
     kl_where: float
     kl_logit: float
-    sparsity_mask: float
-    sparsity_box: float
-    sparsity_prob: float
+
     reg_overlap: float
     reg_area_obj: float
 
-    fg_fraction: float
-    geco_sparsity: float
-    geco_balance: float
-    delta_1: float
-    delta_2: float
+    fg_fraction_av: float
+    n_cell_av: float
+
+    geco_fgfraction: float
+    geco_ncell: float
+    geco_mse: float
+
+    delta_fgfraction: float
+    delta_ncell: float
+    delta_mse: float
 
     similarity_l: numpy.ndarray
     similarity_w: numpy.ndarray
     lambda_logit: float
 
-
-    def pretty_print(self, epoch: int=0) -> str:
-        s = "[epoch {0:4d}] loss={1:.3f}, mse={2:.3f}, \
-        reg={3:.3f}, kl_tot={4:.3f}, sparsity={5:.3f}, \
-        fg_fraction={6:.3f}, geco_sp={7:.3f}, geco_bal={8:.3f}".format(epoch,
+    def pretty_print(self, epoch: int = 0) -> str:
+        s = "[epoch {0:4d}] loss={1:.3f}, mse={2:.3f},  \
+        reg={3:.3f}, kl={4:.3f}, sparsity={5:.3f}, fg_fraction_av={6:.3f}, n_cell_av={7:.3f}, \
+        geco_fg={8:.3f}, geco_ncell={9:.3f}, geco_mse={10:.3f}".format(epoch,
                                                                        self.loss,
                                                                        self.mse_tot,
                                                                        self.reg_tot,
                                                                        self.kl_tot,
                                                                        self.sparsity_tot,
-                                                                       self.fg_fraction,
-                                                                       self.geco_sparsity,
-                                                                       self.geco_balance)
+                                                                       self.fg_fraction_av,
+                                                                       self.n_cell_av,
+                                                                       self.geco_fgfraction,
+                                                                       self.geco_ncell,
+                                                                       self.geco_mse)
         return s
 
 

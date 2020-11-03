@@ -4,18 +4,18 @@
 
  "simulation" : {
    "__comment" : "there are 3 types of runs: scratch, resume, pretrained",
-   "type" : "scratch",
-   "MAX_EPOCHS" : 1500,
+   "type" : "pretrained",
+   "MAX_EPOCHS" : 2501,
    "TEST_FREQUENCY" : 100,
    "CHECKPOINT_FREQUENCY" : 100,
    "batch_size" : 128,
-   "N_test" : 64,
+   "N_test" : 128,
    "N_train" : 512
  },
 
  "architecture" : {
    "__comment" : "architecture parameters, level_zwhere_output is between 0 and n_max_pool included",
-   "dim_zinstance" : 5,
+   "dim_zinstance" : 20,
    "dim_zwhere" : 4,
    "dim_zbg" : 4,
    "dim_logit" : 1,
@@ -34,14 +34,13 @@
 
  "input_image" : {
    "__comment" : "parameters describing the input images",
+   "factor_wrt_8" : 1,
    "n_objects_max" : 25,
    "size_object_min" : 5,
    "size_object_max" : 20,
-   "length_scale_GP" : 4.0,
+   "length_scale_similarity" : 10.0,
    "size_raw_image" : 80,
-   "ch_in" : 1,
-   "bg_is_zero" : true,
-   "background_resolution_before_upsampling" : [2,2]
+   "ch_in" : 1
  },
 
  "nms" : {
@@ -53,10 +52,15 @@
  "GECO_loss" : {
    "__comment" : "if active=false use ELBO, else use GECO with Log-Likelihood threshold = n_pixels * n_channel * threshold",
    "is_active" : true,
-   "factor_balance_range" : [0.1, 0.8, 0.9],
-   "factor_sparsity_range" : [-1, 1.0, 100],
-   "target_fg_fraction" : [0.05, 0.20],
-   "target_mse" : [0.75, 1.0],
+
+   "geco_mse_range" : [0.1, 0.8, 0.9],
+   "geco_fgfraction_range" : [0.1, 1.0, 3.0],
+   "geco_ncell_range" : [0.1, 1.0, 3.0],
+
+   "target_fgfraction" : [0.10, 0.15],
+   "target_mse" : [0.75, 0.75],
+   "target_ncell" : [5.0, 10.0],
+
    "bg_std" : 0.05,
    "fg_std" : 0.05
  },
@@ -80,7 +84,7 @@
 
  "shortcut_prob_corr_factor" : {
   "__comment" : "parameters for the shortcut for porb_corr_factor",
-  "values" : [0.5, 0.0],
+  "values" : [0.0, 0.0],
   "times" : [200, 500]
  },
 

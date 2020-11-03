@@ -9,12 +9,15 @@ import skimage.color
 import skimage.morphology
 import neptune
 
-from MODULES.namedtuple import BB, Output, Segmentation
+from MODULES.namedtuple import BB, Output, Segmentation, Suggestion
 from MODULES.utilities_neptune import log_img_and_chart, log_img_only
+from IPython.display import HTML
+from matplotlib import animation
 
 
 def contours_from_labels(labels: numpy.ndarray,
                          contour_thickness: int = 1) -> numpy.ndarray:
+    assert isinstance(labels, numpy.ndarray)
     assert len(labels.shape) == 2
     assert contour_thickness >= 1
     contours = (skimage.morphology.dilation(labels) != labels)
@@ -25,6 +28,8 @@ def contours_from_labels(labels: numpy.ndarray,
 
 
 def add_red_contours(image: numpy.ndarray, contours: numpy.ndarray) -> numpy.ndarray:
+    assert isinstance(image, numpy.ndarray)
+    assert isinstance(contours, numpy.ndarray)
     assert contours.dtype == bool
     if (len(image.shape) == 3) and (image.shape[-1] == 3):
         image_with_contours = image
@@ -35,6 +40,53 @@ def add_red_contours(image: numpy.ndarray, contours: numpy.ndarray) -> numpy.nda
     image_with_contours[contours, 0] = 1
     image_with_contours[contours, 1:] = 0
     return image_with_contours
+
+
+def movie_from_resolution_sweep(suggestion: Suggestion,
+                                image: torch.Tensor,
+                                contour_thickness: int = 2,
+                                figsize: tuple = (8, 4)):
+    image = image.cpu().numpy()
+    label = suggestion.sweep_seg_mask[0].cpu().numpy()
+    contours = contours_from_labels(label, contour_thickness=1)
+    img_c = add_red_contours(image, contours)
+
+    fig, ax = plt.subplots(ncols=3, figsize=figsize)
+    ax_raw_image = ax[0]
+    ax_contours = ax[1]
+    ax_int_map = ax[2]
+
+    ax_raw_image.imshow(image, cmap='gray')
+    ax_raw_image.axis('off')
+    ax_raw_image.set_title("raw image")
+
+    ax_contours.imshow(img_c)
+    ax_contours.axis('off')
+    ax_contours.set_title("xxxxxx")
+
+    ax_int_map.imshow(skimage.color.label2rgb(label, image, bg_label=0, alpha=0.25))
+    ax_int_map.axis('off')
+    ax_int_map.set_title("xxxxx")
+    plt.tight_layout()
+    plt.close()
+
+    def animate(i):
+        label = suggestion.sweep_seg_mask[i].cpu().numpy()
+        contours = contours_from_labels(label, contour_thickness)
+        img_c = add_red_contours(image, contours)
+
+        title1 = 'frame={0:3d} res={1:.3f}'.format(i, suggestion.sweep_resolution[i])
+        title2 = 'ncell={0:2d} iou={1:.3f}'.format(suggestion.sweep_n_cells[i], suggestion.sweep_iou[i])
+
+        ax_contours.imshow(img_c)
+        ax_contours.set_title(title1)
+
+        ax_int_map.imshow(skimage.color.label2rgb(label, image, bg_label=0, alpha=0.25))
+        ax_int_map.set_title(title2)
+
+    anim = animation.FuncAnimation(fig, animate, frames=suggestion.sweep_seg_mask.shape[0], interval=1000)
+
+    return HTML(anim.to_html5_video())
 
 
 def plot_label_contours(label: Union[torch.Tensor, numpy.ndarray],
@@ -282,37 +334,6 @@ def plot_kl(history_dict: dict,
     return fig
 
 
-def plot_sparsity(history_dict: dict,
-                  train_or_test: str = "test",
-                  experiment: Optional[neptune.experiments.Experiment] = None,
-                  neptune_name: Optional[str] = None):
-
-    if train_or_test == "test":
-        sparsity_mask = history_dict["test_sparsity_mask"]
-        sparsity_box = history_dict["test_sparsity_box"]
-        sparsity_prob = history_dict["test_sparsity_prob"]
-    elif train_or_test == "train":
-        sparsity_mask = history_dict["train_sparsity_mask"]
-        sparsity_box = history_dict["train_sparsity_box"]
-        sparsity_prob = history_dict["train_sparsity_prob"]
-    else:
-        raise Exception
-
-    fig, ax = plt.subplots()
-    ax.plot(sparsity_mask, '-', label="sparsity_mask")
-    ax.plot(sparsity_box, '.-', label="sparsity_box")
-    ax.plot(sparsity_prob, '.--', label="sparsity_prob")
-    ax.set_xlabel('epoch')
-    ax.set_ylabel('sparsity')
-    ax.grid()
-    ax.legend()
-    fig.tight_layout()
-    if neptune_name is not None:
-        log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
-    plt.close()
-    return fig
-
-
 def plot_loss_term(history_dict: dict,
                    train_or_test: str = "test",
                    experiment: Optional[neptune.experiments.Experiment] = None,
@@ -324,25 +345,23 @@ def plot_loss_term(history_dict: dict,
         reg = numpy.array(history_dict["test_reg_tot"])
         kl = numpy.array(history_dict["test_kl_tot"])
         sparsity = numpy.array(history_dict["test_sparsity_tot"])
-        geco_sparsity = numpy.array(history_dict["test_geco_sparsity"])
-        geco_balance = numpy.array(history_dict["test_geco_balance"])
+        geco_mse = numpy.array(history_dict["test_geco_mse"])
     elif train_or_test == "train":
         loss = numpy.array(history_dict["train_loss"])
         mse = numpy.array(history_dict["train_mse_tot"])
         reg = numpy.array(history_dict["train_reg_tot"])
         kl = numpy.array(history_dict["train_kl_tot"])
         sparsity = numpy.array(history_dict["train_sparsity_tot"])
-        geco_sparsity = numpy.array(history_dict["train_geco_sparsity"])
-        geco_balance = numpy.array(history_dict["train_geco_balance"])
+        geco_mse = numpy.array(history_dict["train_geco_mse"])
     else:
         raise Exception
 
     fig, ax = plt.subplots()
     ax.plot(loss, '-', label="loss")
-    ax.plot(geco_balance * mse, '.-', label="scaled mse")
-    ax.plot(geco_balance * reg, '.--', label="scaled reg")
-    ax.plot((1-geco_balance) * kl, '.--', label="scaled kl")
-    ax.plot(geco_sparsity * sparsity, '.--', label="scaled sparsity")
+    ax.plot(geco_mse * mse, '.-', label="scaled mse")
+    ax.plot(geco_mse * reg, '.--', label="scaled reg")
+    ax.plot((1-geco_mse) * kl, '.--', label="scaled kl")
+    ax.plot(sparsity, '.--', label="scaled sparsity")
 
     ax.set_xlabel('epoch')
     ax.set_ylabel('loss term')
@@ -420,75 +439,81 @@ def plot_geco_parameters(history_dict: dict,
                          train_or_test: str = "test",
                          experiment: Optional[neptune.experiments.Experiment] = None,
                          neptune_name: Optional[str] = None):
-
-    if train_or_test == "train":
-        fg_fraction = history_dict["train_fg_fraction"]
-        geco_sparsity = history_dict["train_geco_sparsity"]
-        mse_av = history_dict["train_mse_tot"]
-        geco_balance = history_dict["train_geco_balance"]
-    elif train_or_test == "test":
-        fg_fraction = history_dict["test_fg_fraction"]
-        geco_sparsity = history_dict["test_geco_sparsity"]
-        mse_av = history_dict["test_mse_tot"]
-        geco_balance = history_dict["test_geco_balance"]
-    else:
-        raise Exception
-
-    fontsize = 20
-    labelsize = 20
-    fig = plt.figure(figsize=(20, 20))
-    ax1 = fig.add_subplot(211)
-    ax2 = fig.add_subplot(212)
-
-    color = 'tab:red'
-    ax1.set_xlabel('epochs', fontsize=fontsize)
-    ax1.set_ylabel('fg_fraction', fontsize=fontsize, color=color)
-    ax1.tick_params(axis='both', which='major', labelsize=labelsize)
-    ax1.plot(fg_fraction, '.--', color=color, label="n_object")
-    ymin = min(params["GECO_loss"]['target_fg_fraction'])
-    ymax = max(params["GECO_loss"]['target_fg_fraction'])
-    ax1.plot(ymin * numpy.ones(len(fg_fraction)), '-', color='black', label="y_min")
-    ax1.plot(ymax * numpy.ones(len(fg_fraction)), '-', color='black', label="y_max")
-    ax1.tick_params(axis='y', labelcolor=color)
-    ax1.grid()
-
-    ax1b = ax1.twinx()  # instantiate a second axes that shares the same x-axis
-    color = 'tab:green'
-    ax1b.set_xlabel('epochs', fontsize=fontsize)
-    ax1b.set_ylabel('geco_sparsity', color=color, fontsize=fontsize)
-    ax1b.tick_params(axis='both', which='major', labelsize=labelsize)
-    plt.plot(geco_sparsity, '-', label="geco_sparsity", color=color)
-    ax1b.tick_params(axis='y', labelcolor=color)
-    ax1b.grid()
-
-    # ----------------
-    color = 'tab:red'
-    ax2.set_xlabel('epochs', fontsize=fontsize)
-    ax2.set_ylabel('mse av', fontsize=fontsize, color=color)
-    ax2.tick_params(axis='both', which='major', labelsize=labelsize)
-    ax2.plot(mse_av, '.--', color=color, label="mse av")
-
-    ymin = min(params["GECO_loss"]["target_mse"])
-    ymax = max(params["GECO_loss"]["target_mse"])
-    ax2.plot(ymin * numpy.ones(len(mse_av)), '-', color='black', label="y_min")
-    ax2.plot(ymax * numpy.ones(len(mse_av)), '-', color='black', label="y_max")
-    ax2.tick_params(axis='y', labelcolor=color)
-
-    ax2.grid()
-    ax2b = ax2.twinx()  # instantiate a second axes that shares the same x-axis
-    color = 'tab:green'
-    ax2b.set_xlabel('epochs', fontsize=fontsize)
-    ax2b.set_ylabel('geco_balance', fontsize=fontsize, color=color)
-    plt.plot(geco_balance, '-', label="geco_balance", color=color)
-    ax2b.tick_params(axis='both', which='major', labelsize=labelsize)
-    ax2b.tick_params(axis='y', labelcolor=color)
-    ax2b.grid()
-
-    fig.tight_layout()  # otherwise the right y-label is slightly clipped
-    if neptune_name is not None:
-        log_img_only(name=neptune_name, fig=fig, experiment=experiment)
-    plt.close()
-    return fig
+####
+####
+####    if train_or_test == "train":
+####        ncell = history_dict["train_sparsity_ncell"]
+####        geco_ncell = history_dict["train_geco_ncell"]
+####        fgfraction = history_dict["train_sparsity_fgfraction"]
+####        geco_fgfraction = history_dict["train_geco_fgfraction"]
+####        mse = history_dict["train_mse_tot"]
+####        geco_mse = history_dict["train_geco_mse"]
+####    elif train_or_test == "test":
+####        ncell = history_dict["test_sparsity_ncell"]
+####        geco_ncell = history_dict["test_geco_ncell"]
+####        fgfraction = history_dict["test_sparsity_fgfraction"]
+####        geco_fgfraction = history_dict["test_geco_fgfraction"]
+####        mse = history_dict["test_mse_tot"]
+####        geco_mse = history_dict["test_geco_mse"]
+####    else:
+####        raise Exception
+####
+####    fontsize = 20
+####    labelsize = 20
+####    fig = plt.figure(figsize=(20, 20))
+####    ax1 = fig.add_subplot(211)
+####    ax2 = fig.add_subplot(212)
+####
+####    color = 'tab:red'
+####    ax1.set_xlabel('epochs', fontsize=fontsize)
+####    ax1.set_ylabel('fg_fraction', fontsize=fontsize, color=color)
+####    ax1.tick_params(axis='both', which='major', labelsize=labelsize)
+####    ax1.plot(fg_fraction, '.--', color=color, label="n_object")
+####    ymin = min(params["GECO_loss"]['target_fg_fraction'])
+####    ymax = max(params["GECO_loss"]['target_fg_fraction'])
+####    ax1.plot(ymin * numpy.ones(len(fg_fraction)), '-', color='black', label="y_min")
+####    ax1.plot(ymax * numpy.ones(len(fg_fraction)), '-', color='black', label="y_max")
+####    ax1.tick_params(axis='y', labelcolor=color)
+####    ax1.grid()
+####
+####    ax1b = ax1.twinx()  # instantiate a second axes that shares the same x-axis
+####    color = 'tab:green'
+####    ax1b.set_xlabel('epochs', fontsize=fontsize)
+####    ax1b.set_ylabel('geco_sparsity', color=color, fontsize=fontsize)
+####    ax1b.tick_params(axis='both', which='major', labelsize=labelsize)
+####    plt.plot(geco_sparsity, '-', label="geco_sparsity", color=color)
+####    ax1b.tick_params(axis='y', labelcolor=color)
+####    ax1b.grid()
+####
+####    # ----------------
+####    color = 'tab:red'
+####    ax2.set_xlabel('epochs', fontsize=fontsize)
+####    ax2.set_ylabel('mse av', fontsize=fontsize, color=color)
+####    ax2.tick_params(axis='both', which='major', labelsize=labelsize)
+####    ax2.plot(mse_av, '.--', color=color, label="mse av")
+####
+####    ymin = min(params["GECO_loss"]["target_mse"])
+####    ymax = max(params["GECO_loss"]["target_mse"])
+####    ax2.plot(ymin * numpy.ones(len(mse_av)), '-', color='black', label="y_min")
+####    ax2.plot(ymax * numpy.ones(len(mse_av)), '-', color='black', label="y_max")
+####    ax2.tick_params(axis='y', labelcolor=color)
+####
+####    ax2.grid()
+####    ax2b = ax2.twinx()  # instantiate a second axes that shares the same x-axis
+####    color = 'tab:green'
+####    ax2b.set_xlabel('epochs', fontsize=fontsize)
+####    ax2b.set_ylabel('geco_balance', fontsize=fontsize, color=color)
+####    plt.plot(geco_balance, '-', label="geco_balance", color=color)
+####    ax2b.tick_params(axis='both', which='major', labelsize=labelsize)
+####    ax2b.tick_params(axis='y', labelcolor=color)
+####    ax2b.grid()
+####
+####    fig.tight_layout()  # otherwise the right y-label is slightly clipped
+####    if neptune_name is not None:
+####        log_img_only(name=neptune_name, fig=fig, experiment=experiment)
+####    plt.close()
+####    return fig
+    return None
 
 
 def plot_all_from_dictionary(history_dict: dict,
@@ -502,7 +527,6 @@ def plot_all_from_dictionary(history_dict: dict,
 
     plot_loss(history_dict, test_frequency=test_frequency, experiment=experiment, neptune_name="loss_history_"+train_or_test)
     plot_kl(history_dict, train_or_test=train_or_test, experiment=experiment, neptune_name="kl_history_"+train_or_test)
-    plot_sparsity(history_dict, train_or_test=train_or_test, experiment=experiment, neptune_name="sparsity_history_"+train_or_test)
     plot_loss_term(history_dict, train_or_test=train_or_test, experiment=experiment, neptune_name="loss_terms_"+train_or_test)
     plot_trajectory(history_dict, train_or_test=train_or_test, experiment=experiment, neptune_name="trajectory_"+train_or_test)
     plot_geco_parameters(history_dict, params, train_or_test=train_or_test, experiment=experiment, 
