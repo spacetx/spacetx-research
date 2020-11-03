@@ -259,7 +259,7 @@ with torch.no_grad():
             sizes_list = list()
             
             for n, res in enumerate(resolutions):
-                if (n % 10 == 0) or (n == resolutions.shape[0]-1):
+                if (n % 10 == 0) or (n == len(resolutions)-1):
                     print("resolution sweep, {0:3d} out of {1:3d}".format(n, resolutions.shape[0]-1))
                 
                 p_tmp = self.find_partition_leiden(resolution=res,
@@ -332,8 +332,8 @@ with torch.no_grad():
             if cpm_or_modularity == "cpm":
                 partition_type = la.CPMVertexPartition
                 
-                # TODO: Rescale the resolution by some (robust) properties of the full graph so that the right resolution parameter is about 1
-                # raise NotImplementedError
+                # Rescale the resolution by some (robust) properties of the full graph
+                # so that the right resolution parameter is about 1
                 n = self.graph["total_nodes"]
                 overall_graph_density = self.graph["total_edge_weight"] * 2.0 / (n * (n - 1))
                 resolution = overall_graph_density * resolution
@@ -390,10 +390,6 @@ with torch.no_grad():
                 kargs can include:
                 density=True, bins=50, range=(10,100), ...
             """
-
-            if partition is None:
-                FIX
-                partition = self.partition_connected_components
 
             if window is None:
                 w = [0, 0, self.raw_image.shape[-2], self.raw_image.shape[-1]]
