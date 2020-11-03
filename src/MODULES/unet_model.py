@@ -19,6 +19,7 @@ class UNet(torch.nn.Module):
         self.dim_zwhere = params["architecture"]["dim_zwhere"]
         self.dim_logit = params["architecture"]["dim_logit"]
         self.ch_raw_image = params["input_image"]["ch_in"]
+        self.concatenate_raw_image_to_fmap = params["architecture"]["concatenate_raw_image_to_fmap"]
 
         # Initializations
         ch = self.ch_after_first_two_conv
@@ -45,8 +46,10 @@ class UNet(torch.nn.Module):
             self.up_path.append(UpBlock(self.ch_list[-2], self.ch_list[-1]))
 
         # Prediction maps
+        ch_out_fmap = self.n_ch_output_features - \
+                      self.ch_raw_image if self.concatenate_raw_image_to_fmap else self.n_ch_output_features
         self.pred_features = MLP_1by1(ch_in=self.ch_list[-1],
-                                      ch_out=self.n_ch_output_features-self.ch_raw_image,
+                                      ch_out=ch_out_fmap,
                                       ch_hidden=-1)  # this means there is NO hidden layer
 
         self.ch_in_zwhere = self.ch_list[-self.level_zwhere_and_logit_output - 1]
@@ -96,7 +99,10 @@ class UNet(torch.nn.Module):
                 print("up     ", i, " shape ", x.shape)
 
         # always add a pred_map to the rightmost layer (which had distance 0 from the end of the net)
-        features = torch.cat((self.pred_features(x), raw_image), dim=-3)  # Here I am concatenating the raw image
+        if self.concatenate_raw_image_to_fmap:
+            features = torch.cat((self.pred_features(x), raw_image), dim=-3)  # Here I am concatenating the raw image
+        else:
+            features = self.pred_features(x)
 
         return UNEToutput(zwhere=zwhere,
                           logit=logit,

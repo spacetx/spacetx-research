@@ -8,7 +8,7 @@
    "MAX_EPOCHS" : 3501,
    "TEST_FREQUENCY" : 100,
    "CHECKPOINT_FREQUENCY" : 100,
-   "batch_size" : 4,
+   "batch_size" : 128,
    "N_test" : 128,
    "N_train" : 512
  },
@@ -40,7 +40,8 @@
    "size_object_max" : 20,
    "length_scale_similarity" : 10.0,
    "size_raw_image" : 80,
-   "ch_in" : 1
+   "ch_in" : 1,
+   "concatenate_raw_image_to_fmap" : false
  },
 
  "nms" : {
@@ -58,7 +59,7 @@
    "geco_ncell_range" : [0.1, 1.0, 3.0],
 
    "target_fgfraction" : [0.10, 0.15],
-   "target_mse" : [0.75, 0.75],
+   "target_mse" : [0.15, 0.15],
    "target_ncell" : [5.0, 10.0],
 
    "bg_std" : 0.05,
