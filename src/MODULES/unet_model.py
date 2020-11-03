@@ -46,7 +46,7 @@ class UNet(torch.nn.Module):
 
         # Prediction maps
         self.pred_features = MLP_1by1(ch_in=self.ch_list[-1],
-                                      ch_out=self.n_ch_output_features - 1,
+                                      ch_out=self.n_ch_output_features-self.ch_raw_image,
                                       ch_hidden=-1)  # this means there is NO hidden layer
 
         self.ch_in_zwhere = self.ch_list[-self.level_zwhere_and_logit_output - 1]
@@ -69,6 +69,7 @@ class UNet(torch.nn.Module):
             print("INPUT ---> shape ", x.shape)
 
         # Down path and save the tensor which will need to be concatenated
+        raw_image = x
         to_be_concatenated = deque()
         for i, down in enumerate(self.down_path):
             x = down(x, verbose)
@@ -95,7 +96,7 @@ class UNet(torch.nn.Module):
                 print("up     ", i, " shape ", x.shape)
 
         # always add a pred_map to the rightmost layer (which had distance 0 from the end of the net)
-        features = torch.cat((self.pred_features(x), x), dim=-3)  # Here I am concatenating the raw image
+        features = torch.cat((self.pred_features(x), raw_image), dim=-3)  # Here I am concatenating the raw image
 
         return UNEToutput(zwhere=zwhere,
                           logit=logit,
