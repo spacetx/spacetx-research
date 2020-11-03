@@ -4,11 +4,11 @@
 
  "simulation" : {
    "__comment" : "there are 3 types of runs: scratch, resume, pretrained",
-   "type" : "pretrained",
-   "MAX_EPOCHS" : 2501,
+   "type" : "scratch",
+   "MAX_EPOCHS" : 3501,
    "TEST_FREQUENCY" : 100,
    "CHECKPOINT_FREQUENCY" : 100,
-   "batch_size" : 128,
+   "batch_size" : 4,
    "N_test" : 128,
    "N_train" : 512
  },
@@ -84,7 +84,7 @@
 
  "shortcut_prob_corr_factor" : {
   "__comment" : "parameters for the shortcut for porb_corr_factor",
-  "values" : [0.0, 0.0],
+  "values" : [0.5, 0.0],
   "times" : [200, 500]
  },
 
