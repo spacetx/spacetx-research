@@ -46,8 +46,16 @@ def movie_from_resolution_sweep(suggestion: Suggestion,
                                 image: torch.Tensor,
                                 contour_thickness: int = 2,
                                 figsize: tuple = (8, 4)):
-    image = image.cpu().numpy()
+    assert torch.is_tensor(image)
+    if len(image.shape) == 2:
+        image = image.cpu().numpy()
+    elif len(image.shape) == 3:
+        image = image.permute(1,2,0).cpu().numpy()  # w,h, channel
+    else:
+        raise Exception("shape of image is not recognized")
+    
     label = suggestion.sweep_seg_mask[0].cpu().numpy()
+    assert label.shape[:2] == image.shape[:2]
     contours = contours_from_labels(label, contour_thickness=1)
     img_c = add_red_contours(image, contours)
 
@@ -91,10 +99,20 @@ def movie_from_resolution_sweep(suggestion: Suggestion,
 
 def plot_label_contours(label: Union[torch.Tensor, numpy.ndarray],
                         image: Union[torch.Tensor, numpy.ndarray],
+                        window: Optional[tuple] = None,
                         contour_thickness: int = 2,
                         figsize: tuple = (24, 24),
                         experiment: Optional[neptune.experiments.Experiment] = None,
                         neptune_name: Optional[str] = None):
+    
+    if window is None:
+        window = [0, 0, label.shape[-2], label.shape[-1]]
+    else:
+        window = (max(0, window[0]),
+                  max(0, window[1]),
+                  min(label.shape[-2], window[2]),
+                  min(label.shape[-1], window[3]))
+        
 
     assert len(label.shape) == 2
     if torch.is_tensor(label):
@@ -110,11 +128,11 @@ def plot_label_contours(label: Union[torch.Tensor, numpy.ndarray],
 
     assert image.shape[:2] == label.shape[:2]
 
-    contours = contours_from_labels(label, contour_thickness)
+    contours = contours_from_labels(label[window[0]:window[2], window[1]:window[3]], contour_thickness)
     fig, ax = plt.subplots(ncols=3, figsize=figsize)
-    ax[0].imshow(image)
-    ax[1].imshow(add_red_contours(image, contours))
-    ax[2].imshow(label, cmap='gray')
+    ax[0].imshow(image[window[0]:window[2],window[1]:window[3]])
+    ax[1].imshow(add_red_contours(image[window[0]:window[2],window[1]:window[3]], contours))
+    ax[2].imshow(label[window[0]:window[2],window[1]:window[3]], cmap='gray')
 
     fig.tight_layout()
     if neptune_name is not None:
@@ -251,20 +269,35 @@ def show_batch(images: torch.Tensor,
 
 def plot_tiling(tiling,
                 figsize: tuple = (12, 12),
+                window: Optional[tuple] = None,
                 experiment: Optional[neptune.experiments.Experiment] = None,
                 neptune_name: Optional[str] = None):
+    
+    if window is None:
+        window = [0, 0, tiling.integer_mask.shape[-2], tiling.integer_mask.shape[-1]]
+    else:
+        window = (max(0, window[0]),
+                  max(0, window[1]),
+                  min(tiling.integer_mask.shape[-2], window[2]),
+                  min(tiling.integer_mask.shape[-1], window[3]))
 
     fig, axes = plt.subplots(ncols=2, nrows=2, figsize=figsize)
-    axes[0, 0].imshow(skimage.color.label2rgb(tiling.integer_mask[0, 0].cpu().numpy(),
-                                              numpy.zeros_like(tiling.integer_mask[0, 0].cpu().numpy()),
+    axes[0, 0].imshow(skimage.color.label2rgb(tiling.integer_mask[0, 0, window[0]:window[2], 
+                                                                  window[1]:window[3]].cpu().numpy(),
+                                              numpy.zeros_like(tiling.integer_mask[0, 0, window[0]:window[2], 
+                                                                                   window[1]:window[3]].cpu().numpy()),
                                               alpha=1.0,
                                               bg_label=0))
-    axes[0, 1].imshow(skimage.color.label2rgb(tiling.integer_mask[0, 0].cpu().numpy(),
-                                              tiling.raw_image[0, 0].cpu().numpy(),
+    axes[0, 1].imshow(skimage.color.label2rgb(tiling.integer_mask[0, 0, window[0]:window[2], 
+                                                                  window[1]:window[3]].cpu().numpy(),
+                                              tiling.raw_image[0, 0, window[0]:window[2], 
+                                                               window[1]:window[3]].cpu().numpy(),
                                               alpha=0.25,
                                               bg_label=0))
-    axes[1, 0].imshow(tiling.fg_prob[0, 0].cpu().numpy(), cmap='gray')
-    axes[1, 1].imshow(tiling.raw_image[0].cpu().permute(1, 2, 0).squeeze(-1).numpy(), cmap='gray')
+    axes[1, 0].imshow(tiling.fg_prob[0, 0, window[0]:window[2], 
+                                     window[1]:window[3]].cpu().numpy(), cmap='gray')
+    axes[1, 1].imshow(tiling.raw_image[0, window[0]:window[2], 
+                                       window[1]:window[3]].cpu().permute(1, 2, 0).squeeze(-1).numpy(), cmap='gray')
 
     axes[0, 0].set_title("sample integer mask")
     axes[0, 1].set_title("sample integer mask")

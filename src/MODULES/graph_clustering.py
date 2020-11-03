@@ -246,6 +246,8 @@ with torch.no_grad():
                           min(self.raw_image.shape[-1], window[3]))
 
             other_integer_mask = self.example_integer_mask[window[0]:window[2], window[1]:window[3]].long()
+            print(other_integer_mask.device)
+            
 
             resolutions = torch.arange(0.5, 10, 0.5) if sweep_range is None else sweep_range
             iou = torch.zeros(len(resolutions), dtype=torch.float)
@@ -273,7 +275,8 @@ with torch.no_grad():
 
                 n_cells[n] = len(p_tmp.sizes)-1
                 integer_mask[n] = int_mask.cpu()
-                c_tmp: ConcordanceIntMask = concordance_integer_masks(integer_mask[n].long(), other_integer_mask)
+                c_tmp: ConcordanceIntMask = concordance_integer_masks(integer_mask[n].to(other_integer_mask.device, 
+                                                                                         other_integer_mask.dtype), other_integer_mask)
                 delta_n_cells[n] = c_tmp.delta_n
                 iou[n] = c_tmp.iou
                 mi[n] = c_tmp.mutual_information
