@@ -9,12 +9,15 @@ import skimage.color
 import skimage.morphology
 import neptune
 
-from MODULES.namedtuple import BB, Output, Segmentation
+from MODULES.namedtuple import BB, Output, Segmentation, Suggestion
 from MODULES.utilities_neptune import log_img_and_chart, log_img_only
+from IPython.display import HTML
+from matplotlib import animation
 
 
 def contours_from_labels(labels: numpy.ndarray,
                          contour_thickness: int = 1) -> numpy.ndarray:
+    assert isinstance(labels, numpy.ndarray)
     assert len(labels.shape) == 2
     assert contour_thickness >= 1
     contours = (skimage.morphology.dilation(labels) != labels)
@@ -25,6 +28,8 @@ def contours_from_labels(labels: numpy.ndarray,
 
 
 def add_red_contours(image: numpy.ndarray, contours: numpy.ndarray) -> numpy.ndarray:
+    assert isinstance(image, numpy.ndarray)
+    assert isinstance(contours, numpy.ndarray)
     assert contours.dtype == bool
     if (len(image.shape) == 3) and (image.shape[-1] == 3):
         image_with_contours = image
@@ -35,6 +40,53 @@ def add_red_contours(image: numpy.ndarray, contours: numpy.ndarray) -> numpy.nda
     image_with_contours[contours, 0] = 1
     image_with_contours[contours, 1:] = 0
     return image_with_contours
+
+
+def movie_from_resolution_sweep(suggestion: Suggestion,
+                                image: torch.Tensor,
+                                contour_thickness: int = 2,
+                                figsize: tuple = (8, 4)):
+    image = image.cpu().numpy()
+    label = suggestion.sweep_seg_mask[0].cpu().numpy()
+    contours = contours_from_labels(label, contour_thickness=1)
+    img_c = add_red_contours(image, contours)
+
+    fig, ax = plt.subplots(ncols=3, figsize=figsize)
+    ax_raw_image = ax[0]
+    ax_contours = ax[1]
+    ax_int_map = ax[2]
+
+    ax_raw_image.imshow(image, cmap='gray')
+    ax_raw_image.axis('off')
+    ax_raw_image.set_title("raw image")
+
+    ax_contours.imshow(img_c)
+    ax_contours.axis('off')
+    ax_contours.set_title("xxxxxx")
+
+    ax_int_map.imshow(skimage.color.label2rgb(label, image, bg_label=0, alpha=0.25))
+    ax_int_map.axis('off')
+    ax_int_map.set_title("xxxxx")
+    plt.tight_layout()
+    plt.close()
+
+    def animate(i):
+        label = suggestion.sweep_seg_mask[i].cpu().numpy()
+        contours = contours_from_labels(label, contour_thickness)
+        img_c = add_red_contours(image, contours)
+
+        title1 = 'frame={0:3d} res={1:.3f}'.format(i, suggestion.sweep_resolution[i])
+        title2 = 'ncell={0:2d} iou={1:.3f}'.format(suggestion.sweep_n_cells[i], suggestion.sweep_iou[i])
+
+        ax_contours.imshow(img_c)
+        ax_contours.set_title(title1)
+
+        ax_int_map.imshow(skimage.color.label2rgb(label, image, bg_label=0, alpha=0.25))
+        ax_int_map.set_title(title2)
+
+    anim = animation.FuncAnimation(fig, animate, frames=suggestion.sweep_seg_mask.shape[0], interval=1000)
+
+    return HTML(anim.to_html5_video())
 
 
 def plot_label_contours(label: Union[torch.Tensor, numpy.ndarray],

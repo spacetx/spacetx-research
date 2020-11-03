@@ -246,7 +246,6 @@ with torch.no_grad():
                           min(self.raw_image.shape[-1], window[3]))
 
             other_integer_mask = self.example_integer_mask[window[0]:window[2], window[1]:window[3]].long()
-            print("other_integer_mask.device", other_integer_mask.device)
 
             resolutions = torch.arange(0.5, 10, 0.5) if sweep_range is None else sweep_range
             iou = torch.zeros(len(resolutions), dtype=torch.float)
@@ -333,8 +332,8 @@ with torch.no_grad():
             if cpm_or_modularity == "cpm":
                 partition_type = la.CPMVertexPartition
                 
-                #TODO: Rescale the resolution by some (robust) properties of the full graph so that the right resolution parameter is about 1
-                raise NotImplementedError
+                # TODO: Rescale the resolution by some (robust) properties of the full graph so that the right resolution parameter is about 1
+                # raise NotImplementedError
                 n = self.graph["total_nodes"]
                 overall_graph_density = self.graph["total_edge_weight"] * 2.0 / (n * (n - 1))
                 resolution = overall_graph_density * resolution
