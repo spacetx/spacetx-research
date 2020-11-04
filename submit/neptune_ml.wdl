@@ -13,6 +13,7 @@ task train {
         File credentials_json
         String git_repo
         String git_branch_or_commit
+        String main_file_name 
     }
 
 
@@ -46,7 +47,7 @@ task train {
         if [ ! -z $token ]; then
            export NEPTUNE_API_TOKEN=$token
            cd ./src 
-           python main.py 
+           python ~{main_file_name}
         fi
     >>>
     
@@ -81,6 +82,7 @@ workflow neptune_ml {
         File credentials_json 
         String git_repo
         String git_branch_or_commit 
+        String main_file_name 
     }
 
     call train { 
@@ -92,6 +94,7 @@ workflow neptune_ml {
             ckpt = ckpt,
             ground_truth = ground_truth, 
             git_repo = git_repo,
-            git_branch_or_commit = git_branch_or_commit
+            git_branch_or_commit = git_branch_or_commit,
+            main_file_name = main_file_name 
     }
 }

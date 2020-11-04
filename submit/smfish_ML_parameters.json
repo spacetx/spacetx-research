@@ -1,30 +1,23 @@
 {
- "wdl.alias" : "",
- "wdl.memo" : "merfish data",
 
- "wdl.file_train" : "gs://ld-data-bucket/Allen_smFISH/smFISH_stitched_OLEH.tif",
- "wdl.file_test" : "gs://ld-results-bucket/ckpt/dummy_1.pkl",
- "wdl.file_ckpt" : "gs://ld-results-bucket/ckpt/to_segment_ckp.pkl",
- "wdl.bucket_output" : "gs://ld-results-bucket",
- "wdl.dir_output" : "merfish_segment_june27_v2",
-
- "wdl.notebook_name": "MAIN.ipynb",
- "wdl.git_repo": "https://github.com/spacetx/spacetx-research.git",
- "wdl.commit_or_branch": "master",
+ "neptune_project" : "dalessioluca/smFISH",
 
  "simulation" : {
    "__comment" : "there are 3 types of runs: scratch, resume, pretrained",
-   "type" : "resume",
-   "MAX_EPOCHS" : 5000,
+   "type" : "scratch",
+   "MAX_EPOCHS" : 3501,
    "TEST_FREQUENCY" : 100,
    "CHECKPOINT_FREQUENCY" : 100,
-   "batch_size" : 128
+   "batch_size" : 128,
+   "N_test" : 128,
+   "N_train" : 512
  },
 
  "architecture" : {
    "__comment" : "architecture parameters, level_zwhere_output is between 0 and n_max_pool included",
    "dim_zinstance" : 20,
    "dim_zwhere" : 4,
+   "dim_zbg" : 4,
    "dim_logit" : 1,
    "cropped_size" : 28,
    "n_max_pool" : 4,
@@ -34,16 +27,21 @@
    "n_ch_after_first_two_conv" : 32
  },
 
+  "DPP" : {
+    "__comment" : "parameters for the DPP prior",
+    "n_kernels" : 1
+  },
+
  "input_image" : {
    "__comment" : "parameters describing the input images",
+   "factor_wrt_8" : 1,
    "n_objects_max" : 25,
    "size_object_min" : 5,
    "size_object_max" : 20,
-   "length_scale_GP" : 8.0,
+   "length_scale_similarity" : 10.0,
    "size_raw_image" : 80,
    "ch_in" : 1,
-   "bg_is_zero" : true,
-   "background_resolution_before_upsampling" : 1
+   "concatenate_raw_image_to_fmap" : false
  },
 
  "nms" : {
@@ -51,19 +49,21 @@
    "overlap_threshold" : 0.3
  },
 
- "loss" : {
-   "__comment" : "parameter of the observation model",
-   "bg_std" : 0.05,
-   "fg_std" : 0.05
- },
 
- "GECO" : {
+ "GECO_loss" : {
    "__comment" : "if active=false use ELBO, else use GECO with Log-Likelihood threshold = n_pixels * n_channel * threshold",
    "is_active" : true,
-   "factor_balance_range" : [0.1, 0.8, 0.9],
-   "factor_sparsity_range" : [-1, 1.0, 100],
-   "target_fg_fraction" : [0.05, 0.20],
-   "target_nll" : [0.75, 1.0]
+
+   "geco_mse_range" : [0.1, 0.8, 0.9],
+   "geco_fgfraction_range" : [0.1, 1.0, 3.0],
+   "geco_ncell_range" : [0.1, 1.0, 3.0],
+
+   "target_fgfraction" : [0.10, 0.15],
+   "target_mse" : [0.15, 0.15],
+   "target_ncell" : [5.0, 10.0],
+
+   "bg_std" : 0.05,
+   "fg_std" : 0.05
  },
 
  "optimizer" : {
@@ -71,6 +71,8 @@
    "type" : "adam",
    "base_lr" : 0.001,
    "betas" : [0.9, 0.999],
+   "base_lr_similarity" : 0.01,
+   "betas_similarity" : [0.9, 0.999],
    "base_lr_geco" : 0.001,
    "betas_geco" : [0.9, 0.999],
    "weight_decay" : 0.0,
