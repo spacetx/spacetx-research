@@ -37,7 +37,7 @@ def add_red_contours(image: numpy.ndarray, contours: numpy.ndarray) -> numpy.nda
         image_with_contours = skimage.color.gray2rgb(image)
     else:
         raise Exception
-    image_with_contours[contours, 0] = 1
+    image_with_contours[contours, 0] = numpy.max(image_with_contours)
     image_with_contours[contours, 1:] = 0
     return image_with_contours
 
