@@ -59,9 +59,9 @@
    "geco_fgfraction_range" : [0.1, 1.0, 3.0],
    "geco_ncell_range" : [0.1, 1.0, 3.0],
 
-   "target_fgfraction" : [0.05, 0.25],
+   "target_fgfraction" : [0.15, 0.25],
    "target_mse" : [0.75, 0.75],
-   "target_ncell" : [5.0, 10.0],
+   "target_ncell" : [7.0, 15.0],
 
    "bg_std" : 0.05,
    "fg_std" : 0.05

@@ -246,7 +246,7 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                                                  verbose=True)
 
 # # Check segmentation WITH and WITHOUT tiling to the GROUND_TRUTH
-ix_start, iy_start, delta = 940, 2140, 300
+ix_start, iy_start, delta = 1200, 400, 300
 i1 = ix_start * factor_wrt_8
 i2 = i1 + factor_wrt_8 * delta
 j1 = iy_start * factor_wrt_8
