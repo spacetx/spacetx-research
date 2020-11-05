@@ -81,7 +81,7 @@ if torch.cuda.is_available():
 reference_imgs_list = []
 crop_size = params["input_image"]["size_raw_image"]
 factor_wrt_8 = params["input_image"]["factor_wrt_8"]
-ix_start, iy_start = 1080, 2140
+ix_start, iy_start = 1200, 400
 i1 = ix_start * factor_wrt_8
 j1 = iy_start * factor_wrt_8
 
