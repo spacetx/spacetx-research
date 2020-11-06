@@ -1,5 +1,4 @@
 from MODULES.utilities import *
-from MODULES.utilities_ml import Moving_Average_Calculator
 from MODULES.utilities_visualization import draw_bounding_boxes, draw_img
 from MODULES.vae_parts import *
 from MODULES.namedtuple import *
@@ -119,7 +118,6 @@ class CompositionalVae(torch.nn.Module):
 
         # Instantiate all the modules
         self.inference_and_generator = Inference_and_Generation(params)
-        self.ma_calculator = Moving_Average_Calculator(beta=0.999)  # i.e. average over the last 100 mini-batches
 
         # Raw image parameters
         self.dict_soft_constraints = params["soft_constraint"]
@@ -289,6 +287,7 @@ class CompositionalVae(torch.nn.Module):
         loss_av = loss_vae + loss_1 + loss_2 + loss_3 - (loss_1 + loss_2 + loss_3).detach()
 
         # add everything you want as long as there is one loss
+
         return MetricMiniBatch(loss=loss_av,
                                mse_tot=mse_av.detach().item(),
                                reg_tot=reg_av.detach().item(),
@@ -310,15 +309,15 @@ class CompositionalVae(torch.nn.Module):
                                fg_fraction_av=fgfraction_av.detach().item(),
                                n_cell_av=ncell_av.detach().item(),
 
-                               count=torch.sum(inference.sample_c, dim=0).cpu().numpy(),
+                               count_accuracy=torch.sum(inference.sample_c, dim=0).detach().cpu().numpy(),
 
                                delta_fgfraction=delta_fgfraction.detach().item(),
                                delta_ncell=delta_ncell.detach().item(),
                                delta_mse=delta_mse.detach().item(),
 
-                               similarity_l=inference.similarity_l.detach().cpu().numpy(),
-                               similarity_w=inference.similarity_w.detach().cpu().numpy(),
-                               lambda_logit=self.running_avarage_kl_logit.detach().cpu().numpy())
+                               similarity_l=inference.similarity_l.detach().item(),
+                               similarity_w=inference.similarity_w.detach().item(),
+                               lambda_logit=self.running_avarage_kl_logit.detach().item())
 
     @staticmethod
     def compute_sparse_similarity_matrix(mixing_k: torch.tensor,

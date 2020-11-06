@@ -251,13 +251,17 @@ def plot_img_and_seg(img: torch.Tensor,
     if n_row <= 1:
         fig, axes = plt.subplots(ncols=2, figsize=figsize)
         axes[0].imshow(img[0, 0], cmap='gray')
-        axes[1].imshow(seg[0, 0], cmap='tab20b')
+        axes[1].imshow(seg[0, 0], cmap='seismic', vmin=-0.5, vmax=10.5)
+        axes[0].set_axis_off()
+        axes[1].set_axis_off()
 
     else:
         fig, axes = plt.subplots(ncols=2, nrows=n_row, figsize=figsize)
         for n in range(n_row):
             axes[n, 0].imshow(img[n, 0], cmap='gray')
-            axes[n, 1].imshow(seg[n, 0], cmap='tab20b')
+            axes[n, 1].imshow(seg[n, 0], cmap='seismic', vmin=-0.5, vmax=10.5)
+            axes[n, 0].set_axis_off()
+            axes[n, 1].set_axis_off()
 
     fig.tight_layout()
     if neptune_name is not None:

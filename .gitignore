@@ -11,4 +11,5 @@ resul*
 /src/MODULES/__pycache__
 .idea/
 .ipynb_checkpoints/
+/dataset_multiMNIST/MNIST/raw
 

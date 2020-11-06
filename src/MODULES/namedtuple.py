@@ -246,7 +246,7 @@ class MetricMiniBatch(NamedTuple):
     fg_fraction_av: float
     n_cell_av: float
 
-    count: numpy.ndarray
+    count_accuracy: numpy.ndarray
 
     geco_fgfraction: float
     geco_ncell: float
@@ -256,8 +256,8 @@ class MetricMiniBatch(NamedTuple):
     delta_ncell: float
     delta_mse: float
 
-    similarity_l: numpy.ndarray
-    similarity_w: numpy.ndarray
+    similarity_l: float
+    similarity_w: float
     lambda_logit: float
 
     def pretty_print(self, epoch: int = 0) -> str:

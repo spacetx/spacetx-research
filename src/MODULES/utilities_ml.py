@@ -3,7 +3,7 @@ import neptune
 import numpy
 import torch.nn.functional as F
 from torch.distributions.utils import broadcast_all
-from typing import Union, Callable, Optional, Tuple
+from typing import Union, Callable, Optional, List
 from collections import OrderedDict
 from torch.distributions.distribution import Distribution
 from torch.distributions import constraints
@@ -370,7 +370,11 @@ class Accumulator(object):
         else:
             print(type(value))
             raise Exception
-        self._dict_accumulate[key] = x + self._dict_accumulate.get(key, 0)
+        try:
+            self._dict_accumulate[key] = x + self._dict_accumulate.get(key, 0)
+        except ValueError:
+            # oftent he case if accumulating two numpy array of different sizes
+            pass
 
     def accumulate(self, source: Union[tuple, dict], counter_increment: int = 1):
         self._counter += counter_increment
@@ -492,7 +496,7 @@ class SpecialDataSet(object):
                  store_in_cuda: bool = False,
                  drop_last=False,
                  batch_size=4,
-                 shuffle=False):
+                 shuffle=True):
         """ :param device: 'cpu' or 'cuda:0'
             Dataset returns random crops of a given size inside the Region Of Interest.
             The function getitem returns imgs, labels and indeces
@@ -572,7 +576,8 @@ class SpecialDataSet(object):
     def load(self, batch_size=None, index=None):
         if (batch_size is None and index is None) or (batch_size is not None and index is not None):
             raise Exception("Only one between batch_size and index must be specified")
-        index = torch.randperm(self.__len__()).long()[:batch_size] if index is None else index
+        random_index = torch.randperm(self.__len__(), dtype=torch.long, device=self.img.device)[:batch_size]
+        index = random_index if index is None else index
         return self.__getitem__(index)
 
     def check_batch(self, batch_size: int = 8):
@@ -580,9 +585,8 @@ class SpecialDataSet(object):
         print("img.shape", self.img.shape)
         print("img.dtype", self.img.dtype)
         print("img.device", self.img.device)
-        index = torch.randperm(self.__len__(), dtype=torch.long, device=self.img.device, requires_grad=False)
-        # grab one minibatch
-        img, seg, labels, index = self.__getitem__(index[:batch_size])
+        random_index = torch.randperm(self.__len__(), dtype=torch.long, device=self.img.device)[:batch_size]
+        img, seg, labels, index = self.__getitem__(random_index)
         print("MINIBATCH: img.shapes seg.shape labels.shape, index.shape ->", img.shape, seg.shape, labels.shape, index.shape)
         print("MINIBATCH: min and max of minibatch", torch.min(img), torch.max(img))
         return plot_img_and_seg(img=img, seg=seg, figsize=(6, 12))
@@ -600,9 +604,8 @@ def process_one_epoch(model: torch.nn.Module,
     exact_examples = []
     wrong_examples = []
 
-
     for i, (imgs, seg_mask, labels, index) in enumerate(dataloader):
-        
+
         # Put data in GPU if available
         if torch.cuda.is_available() and (imgs.device == torch.device('cpu')): 
             imgs = imgs.cuda()
@@ -614,10 +617,12 @@ def process_one_epoch(model: torch.nn.Module,
         # Accumulate metrics over an epoch
         with torch.no_grad():
             metric_accumulator.accumulate(source=metrics, counter_increment=len(index))
-            mask_exact = (metrics.count == labels.cpu().numpy())
-            exact_examples += index[mask_exact]
-            wrong_examples += index[~mask_exact]
 
+            # special treatment for count_accuracy (which should not be accumulated but appended)
+            metric_accumulator._dict_accumulate["count_accuracy"] = 0
+            mask_exact = (metrics.count_accuracy == labels.cpu().numpy())
+            exact_examples += list(index[mask_exact].cpu().numpy())
+            wrong_examples += list(index[~mask_exact].cpu().numpy())
 
         # Only if training I apply backward
         if model.training:
@@ -639,8 +644,8 @@ def process_one_epoch(model: torch.nn.Module,
     # At the end of the loop compute the average of the metrics
     with torch.no_grad():
         metric_one_epoch = metric_accumulator.get_average()
-        metric_one_epoch["accuracy"] = float(len(exact_examples))/(len(exact_examples)+len(wrong_examples))
-        metric_one_epoch["wrong_examples"] = wrong_examples
+        accuracy = float(len(exact_examples)) / (len(exact_examples) + len(wrong_examples))
+        metric_one_epoch["count_accuracy"] = numpy.array([accuracy])
         if neptune_experiment is not None:
             log_dict_metrics(metrics=metric_one_epoch,
                              prefix=neptune_prefix,
