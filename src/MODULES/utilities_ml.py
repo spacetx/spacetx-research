@@ -10,7 +10,7 @@ from torch.distributions import constraints
 
 from MODULES.utilities import pass_bernoulli, compute_ranking, compute_average_in_box
 from MODULES.utilities import invert_convert_to_box_list, convert_to_box_list
-from MODULES.utilities_visualization import show_batch
+from MODULES.utilities_visualization import plot_img_and_seg #show_batch
 from MODULES.namedtuple import DIST, MetricMiniBatch, BB
 from MODULES.utilities_neptune import log_dict_metrics
 
@@ -318,38 +318,38 @@ class FiniteDPP(Distribution):
         return logdet_Ls - logdet_L_plus_I
 
 
-class Moving_Average_Calculator(object):
-    """ Compute the moving average of a dictionary.
-        Return the dictionary with the moving average up to that point
-
-        beta is the factor multiplying the moving average.
-        Approximately we average the last 1/(1-beta) points.
-        For example:
-        beta = 0.9 -> 10 points
-        beta = 0.99 -> 100 points
-        The larger beta the longer the time average.
-    """
-
-    def __init__(self, beta):
-        super().__init__()
-        self._bias = None
-        self._steps = 0
-        self._beta = beta
-        self._dict_accumulate = {}
-        self._dict_MA = {}
-
-    def accumulate(self, input_dict):
-        self._steps += 1
-        self._bias = 1 - self._beta ** self._steps
-
-        for key, value in input_dict.items():
-            try:
-                tmp = self._beta * self._dict_accumulate[key] + (1 - self._beta) * value
-                self._dict_accumulate[key] = tmp
-            except KeyError:
-                self._dict_accumulate[key] = (1 - self._beta) * value
-            self._dict_MA[key] = self._dict_accumulate[key] / self._bias
-        return self._dict_MA
+####class Moving_Average_Calculator(object):
+####    """ Compute the moving average of a dictionary.
+####        Return the dictionary with the moving average up to that point
+####
+####        beta is the factor multiplying the moving average.
+####        Approximately we average the last 1/(1-beta) points.
+####        For example:
+####        beta = 0.9 -> 10 points
+####        beta = 0.99 -> 100 points
+####        The larger beta the longer the time average.
+####    """
+####
+####    def __init__(self, beta):
+####        super().__init__()
+####        self._bias = None
+####        self._steps = 0
+####        self._beta = beta
+####        self._dict_accumulate = {}
+####        self._dict_MA = {}
+####
+####    def accumulate(self, input_dict):
+####        self._steps += 1
+####        self._bias = 1 - self._beta ** self._steps
+####
+####        for key, value in input_dict.items():
+####            try:
+####                tmp = self._beta * self._dict_accumulate[key] + (1 - self._beta) * value
+####                self._dict_accumulate[key] = tmp
+####            except KeyError:
+####                self._dict_accumulate[key] = (1 - self._beta) * value
+####            self._dict_MA[key] = self._dict_accumulate[key] / self._bias
+####        return self._dict_MA
 
 
 class Accumulator(object):
@@ -486,6 +486,7 @@ class SpecialDataSet(object):
     def __init__(self,
                  img: torch.Tensor,
                  roi_mask: Optional[torch.Tensor] = None,
+                 seg_mask: Optional[torch.Tensor] = None,
                  labels: Optional[torch.Tensor] = None,
                  data_augmentation: Optional[ConditionalRandomCrop] = None,
                  store_in_cuda: bool = False,
@@ -514,10 +515,7 @@ class SpecialDataSet(object):
             new_batch_size = img.shape[0] * data_augmentation.n_crops_per_image
             self.data_augmentaion = data_augmentation
 
-        if store_in_cuda:
-            self.img = img.cuda().detach().expand(new_batch_size, -1, -1, -1)
-        else:
-            self.img = img.cpu().detach().expand(new_batch_size, -1, -1, -1)
+        self.img = img.to(storing_device).detach().expand(new_batch_size, -1, -1, -1)
 
         if labels is None:
             self.labels = -1*torch.ones(self.img.shape[0], device=storing_device).detach()
@@ -533,6 +531,11 @@ class SpecialDataSet(object):
             self.cum_roi_mask = roi_mask.to(storing_device).detach().cumsum(dim=-1).cumsum(
                 dim=-2).expand(new_batch_size, -1, -1, -1)
 
+        if seg_mask is None:
+            self.seg_mask = None
+        else:
+            self.seg_mask = seg_mask.to(storing_device).detach().expand(new_batch_size, -1, -1, -1)
+
     def __len__(self):
         return self.img.shape[0]
 
@@ -540,14 +543,19 @@ class SpecialDataSet(object):
         assert isinstance(index, torch.Tensor)
 
         if self.data_augmentaion is None:
-            return self.img[index], self.labels[index], index
+            img = self.img[index]
+            seg_mask = -1*torch.ones_like(img) if self.seg_mask is None else self.seg_mask[index]
+            return img, seg_mask, self.labels[index], index
         else:
             bij_list = []
             for i in index:
                 bij_list += self.data_augmentaion.get_index(img=self.img[i],
                                                             cum_sum_roi_mask=self.cum_roi_mask[i],
                                                             n_crops_per_image=1)
-            return self.data_augmentaion.collate_crops_from_list(self.img, bij_list), self.labels[index], index
+            img = self.data_augmentaion.collate_crops_from_list(self.img, bij_list)
+            seg_mask = -1*torch.ones_like(img) if self.seg_mask is None \
+                else self.data_augmentaion.collate_crops_from_list(self.seg_mask, bij_list)
+            return img, seg_mask, self.labels[index], index
 
     def __iter__(self, batch_size=None, drop_last=None, shuffle=None):
         # If not specified use defaults
@@ -564,7 +572,7 @@ class SpecialDataSet(object):
     def load(self, batch_size=None, index=None):
         if (batch_size is None and index is None) or (batch_size is not None and index is not None):
             raise Exception("Only one between batch_size and index must be specified")
-        index = torch.randint(low=0, high=self.__len__(), size=(batch_size,)).long() if index is None else index
+        index = torch.randperm(self.__len__()).long()[:batch_size] if index is None else index
         return self.__getitem__(index)
 
     def check_batch(self, batch_size: int = 8):
@@ -574,10 +582,10 @@ class SpecialDataSet(object):
         print("img.device", self.img.device)
         index = torch.randperm(self.__len__(), dtype=torch.long, device=self.img.device, requires_grad=False)
         # grab one minibatch
-        img, labels, index = self.__getitem__(index[:batch_size])
-        print("MINIBATCH: img.shapes labels.shape, index.shape ->", img.shape, labels.shape, index.shape)
+        img, seg, labels, index = self.__getitem__(index[:batch_size])
+        print("MINIBATCH: img.shapes seg.shape labels.shape, index.shape ->", img.shape, seg.shape, labels.shape, index.shape)
         print("MINIBATCH: min and max of minibatch", torch.min(img), torch.max(img))
-        return show_batch(img, n_col=4, n_padding=4, normalize_range=(0.0, 1.0), pad_value=1, figsize=(24, 24))
+        return plot_img_and_seg(img=img, seg=seg, figsize=(6, 12))
 
 
 def process_one_epoch(model: torch.nn.Module,
@@ -589,8 +597,11 @@ def process_one_epoch(model: torch.nn.Module,
                       neptune_prefix: Optional[str] = None) -> MetricMiniBatch:
     """ return a tuple with all the metrics averaged over a epoch """
     metric_accumulator = Accumulator()
+    exact_examples = []
+    wrong_examples = []
 
-    for i, (imgs, labels, index) in enumerate(dataloader):
+
+    for i, (imgs, seg_mask, labels, index) in enumerate(dataloader):
         
         # Put data in GPU if available
         if torch.cuda.is_available() and (imgs.device == torch.device('cpu')): 
@@ -603,6 +614,10 @@ def process_one_epoch(model: torch.nn.Module,
         # Accumulate metrics over an epoch
         with torch.no_grad():
             metric_accumulator.accumulate(source=metrics, counter_increment=len(index))
+            mask_exact = (metrics.count == labels.cpu().numpy())
+            exact_examples += index[mask_exact]
+            wrong_examples += index[~mask_exact]
+
 
         # Only if training I apply backward
         if model.training:
@@ -624,6 +639,8 @@ def process_one_epoch(model: torch.nn.Module,
     # At the end of the loop compute the average of the metrics
     with torch.no_grad():
         metric_one_epoch = metric_accumulator.get_average()
+        metric_one_epoch["accuracy"] = float(len(exact_examples))/(len(exact_examples)+len(wrong_examples))
+        metric_one_epoch["wrong_examples"] = wrong_examples
         if neptune_experiment is not None:
             log_dict_metrics(metrics=metric_one_epoch,
                              prefix=neptune_prefix,

@@ -240,6 +240,34 @@ def plot_grid(img,
     return fig
 
 
+def plot_img_and_seg(img: torch.Tensor,
+                     seg: torch.Tensor,
+                     figsize: Optional[Tuple[float, float]] = None,
+                     experiment: Optional[neptune.experiments.Experiment] = None,
+                     neptune_name: Optional[str] = None):
+
+    assert len(img.shape) == len(seg.shape) == 4
+    n_row = img.shape[-4]
+    if n_row <= 1:
+        fig, axes = plt.subplots(ncols=2, figsize=figsize)
+        axes[0].imshow(img[0, 0], cmap='gray')
+        axes[1].imshow(seg[0, 0], cmap='tab20b')
+
+    else:
+        fig, axes = plt.subplots(ncols=2, nrows=n_row, figsize=figsize)
+        for n in range(n_row):
+            axes[n, 0].imshow(img[n, 0], cmap='gray')
+            axes[n, 1].imshow(seg[n, 0], cmap='tab20b')
+
+    fig.tight_layout()
+    if neptune_name is not None:
+        #log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
+        log_img_only(name=neptune_name, fig=fig, experiment=experiment)
+    plt.close(fig)
+    return fig
+
+
+
 def show_batch(images: torch.Tensor,
                n_col: int = 4,
                n_padding: int = 10,

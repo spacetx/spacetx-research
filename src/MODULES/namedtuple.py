@@ -246,6 +246,8 @@ class MetricMiniBatch(NamedTuple):
     fg_fraction_av: float
     n_cell_av: float
 
+    count: numpy.ndarray
+
     geco_fgfraction: float
     geco_ncell: float
     geco_mse: float

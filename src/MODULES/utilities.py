@@ -108,6 +108,7 @@ def QC_on_integer_mask(integer_mask: Union[torch.Tensor, numpy.ndarray], min_are
     else:
         return new_integer_mask.astype(integer_mask.dtype)
 
+
 def remove_label_gaps(label: torch.Tensor):
     assert torch.is_tensor(label)
     assert len(label.shape) == 2
