@@ -5,9 +5,9 @@
  "simulation" : {
    "__comment" : "there are 3 types of runs: scratch, resume, pretrained",
    "type" : "scratch",
-   "MAX_EPOCHS" : 1501,
-   "TEST_FREQUENCY" : 100,
-   "CHECKPOINT_FREQUENCY" : 100,
+   "MAX_EPOCHS" : 501,
+   "TEST_FREQUENCY" : 5,
+   "CHECKPOINT_FREQUENCY" : 5,
    "batch_size" : 128,
    "N_test" : 128,
    "N_train" : 512
@@ -57,12 +57,12 @@
    "geco_fgfraction_range" : [0.1, 1.0, 3.0],
    "geco_ncell_range" : [0.1, 1.0, 3.0],
 
-   "target_fgfraction" : [0.15, 0.25],
+   "target_fgfraction" : [0.05, 0.25],
    "target_mse" : [0.75, 0.75],
    "target_ncell" : [1.2, 7.0],
 
-   "bg_std" : 0.05,
-   "fg_std" : 0.05
+   "bg_std" : 0.1,
+   "fg_std" : 0.1
  },
 
  "optimizer" : {
@@ -85,7 +85,7 @@
  "shortcut_prob_corr_factor" : {
   "__comment" : "parameters for the shortcut for porb_corr_factor",
   "values" : [0.5, 0.0],
-  "times" : [200, 500]
+  "times" : [25, 50]
  },
 
  "soft_constraint" : {
