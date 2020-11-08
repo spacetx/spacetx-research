@@ -29,7 +29,7 @@ params = load_json_as_dict("./ML_parameters.json")
 neptune.set_project(params["neptune_project"])
 exp: neptune.experiments.Experiment = \
     neptune.create_experiment(params=flatten_dict(params),
-                              upload_source_files=["./main.py", "./ML_parameters.json", "./MODULES/vae_parts.py",
+                              upload_source_files=["./main_merfish.py", "./ML_parameters.json", "./MODULES/vae_parts.py",
                                                    "./MODULES/vae_model.py", "./MODULES/encoders_decoders.py"],
                               upload_stdout=True,
                               upload_stderr=True)

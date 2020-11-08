@@ -29,7 +29,7 @@ params = load_json_as_dict("./ML_parameters.json")
 neptune.set_project(params["neptune_project"])
 exp: neptune.experiments.Experiment = \
     neptune.create_experiment(params=flatten_dict(params),
-                              upload_source_files=["./main.py", "./ML_parameters.json", "./MODULES/vae_parts.py",
+                              upload_source_files=["./main_mnist.py", "./ML_parameters.json", "./MODULES/vae_parts.py",
                                                    "./MODULES/vae_model.py", "./MODULES/encoders_decoders.py"],
                               upload_stdout=True,
                               upload_stderr=True)
@@ -74,7 +74,12 @@ if torch.cuda.is_available():
     print("GPU GB after vae ->", torch.cuda.memory_allocated()/1E9)
 
 # Make reference images
-reference_imgs, reference_seg, reference_count = test_loader.load(index=torch.arange(8))[:3]
+tmp_imgs, tmp_seg, tmp_count = test_loader.load(index=torch.arange(64))[:3]
+mask_5_or_6 = (tmp_count == 5) + (tmp_count == 6)
+reference_imgs = tmp_imgs[mask_5_or_6][:16]
+reference_seg = tmp_seg[mask_5_or_6][:16]
+reference_count = tmp_count[mask_5_or_6][:16]
+show_batch(reference_imgs, normalize_range=(0.0, 1.0), neptune_name="reference_imgs")
 plot_img_and_seg(img=reference_imgs,
                  seg=reference_seg,
                  figsize=(6, 6*reference_imgs.shape[0]),
