@@ -188,7 +188,7 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
 
                     if len(test_metrics.wrong_examples) > 0:
                         error_index = torch.tensor(test_metrics.wrong_examples[:4], dtype=torch.long)
-                        error_img = test_loader.load(index=error_index)[0]
+                        error_img = test_loader.load(index=error_index)[0].to(reference_imgs.device)
                         error_output: Output = vae.forward(error_img, draw_image=True, draw_boxes=True, verbose=False)
                         in_out = torch.cat((error_output.imgs, error_img.expand_as(error_output.imgs)), dim=0)
                         _ = show_batch(in_out, n_col=4, title="error epoch="+str(epoch),
