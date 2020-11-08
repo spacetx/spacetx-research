@@ -656,5 +656,6 @@ def process_one_epoch(model: torch.nn.Module,
             log_dict_metrics(metrics=metric_one_epoch,
                              prefix=neptune_prefix,
                              experiment=neptune_experiment,
+                             keys_exclude=["wrong_examples"],
                              verbose=False)
         return MetricMiniBatch._make(metric_one_epoch.values())

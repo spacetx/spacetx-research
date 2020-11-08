@@ -2,7 +2,7 @@ import neptune
 import torch.nn
 import numpy
 import matplotlib.figure
-from typing import Optional
+from typing import Optional, List
 from MODULES.utilities import save_obj
 from neptunecontrib.api import log_chart
 from MODULES.namedtuple import ConcordanceIntMask
@@ -83,6 +83,7 @@ def log_matplotlib_as_png(name: str,
 
 def log_dict_metrics(metrics: dict,
                      prefix: str = "",
+                     keys_exclude: List[str] = [""],
                      experiment: Optional[neptune.experiments.Experiment] = None,
                      verbose: bool = False):
     if verbose:
@@ -91,6 +92,9 @@ def log_dict_metrics(metrics: dict,
     _exp = experiment if experiment else neptune
 
     for key, value in metrics.items():
+        if key in keys_exclude:
+            continue
+
         if isinstance(value, float):
             _exp.log_metric(prefix + key, value)
         elif isinstance(value, numpy.ndarray):
