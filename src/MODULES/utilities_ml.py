@@ -647,6 +647,12 @@ def process_one_epoch(model: torch.nn.Module,
         accuracy = float(len(exact_examples)) / (len(exact_examples) + len(wrong_examples))
         metric_one_epoch["count_accuracy"] = numpy.array([accuracy])
         if neptune_experiment is not None:
+            dict_wrong_examples = {"wrong_examples": wrong_examples}
+            log_dict_metrics(metrics=dict_wrong_examples,
+                             prefix=neptune_prefix,
+                             experiment=neptune_experiment,
+                             verbose=False)
+
             log_dict_metrics(metrics=metric_one_epoch,
                              prefix=neptune_prefix,
                              experiment=neptune_experiment,

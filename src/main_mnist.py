@@ -79,7 +79,8 @@ mask_5_or_6 = (tmp_count == 5) + (tmp_count == 6)
 reference_imgs = tmp_imgs[mask_5_or_6][:16]
 reference_seg = tmp_seg[mask_5_or_6][:16]
 reference_count = tmp_count[mask_5_or_6][:16]
-show_batch(reference_imgs, normalize_range=(0.0, 1.0), neptune_name="reference_imgs")
+reference_imgs_fig = show_batch(reference_imgs, normalize_range=(0.0, 1.0), neptune_name="reference_imgs", experiment=exp)
+log_img_only(name="reference_imgs_v2", fig=reference_imgs_fig, experiment=exp)
 plot_img_and_seg(img=reference_imgs,
                  seg=reference_seg,
                  figsize=(6, 6*reference_imgs.shape[0]),
@@ -88,7 +89,7 @@ plot_img_and_seg(img=reference_imgs,
 if torch.cuda.is_available():
     reference_imgs = reference_imgs.cuda()
 imgs_out = vae.inference_and_generator.unet.show_grid(reference_imgs)
-unet_grid_fig = show_batch(imgs_out[:, 0], normalize_range=(0.0, 1.0), neptune_name="unet_grid")
+unet_grid_fig = show_batch(imgs_out[:, 0], normalize_range=(0.0, 1.0), neptune_name="unet_grid", experiment=exp)
 
 # Check the constraint dictionary
 print("simulation type = "+str(params["simulation"]["type"]))
