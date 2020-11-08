@@ -74,7 +74,8 @@ if torch.cuda.is_available():
     print("GPU GB after vae ->", torch.cuda.memory_allocated()/1E9)
 
 # Make reference images
-tmp_imgs, tmp_seg, tmp_count = test_loader.load(index=torch.arange(98))[:3]
+index_tmp = torch.arange(test_loader.img.shape[0])[:128]
+tmp_imgs, tmp_seg, tmp_count = test_loader.load(index=index_tmp)[:3]
 mask6 = (tmp_count == 6)
 reference_imgs = tmp_imgs[mask6][:16]
 reference_seg = tmp_seg[mask6][:16]
@@ -178,17 +179,28 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                                                      weight_clipper=None,
                                                      neptune_experiment=exp,
                                                      neptune_prefix="test_")
+
                     print("Test  "+test_metrics.pretty_print(epoch))
                     history_dict = append_to_dict(source=test_metrics,
                                                   destination=history_dict,
                                                   prefix_exclude="wrong_examples",
                                                   prefix_to_add="test_")
-                    
+
+                    if len(test_metrics.wrong_examples) > 0:
+                        error_index = torch.tensor(test_metrics.wrong_examples[:4], dtype=torch.long)
+                        error_img = test_loader.load(index=error_index)[0]
+                        error_output: Output = vae.forward(error_img, draw_image=True, draw_boxes=True, verbose=False)
+                        in_out = torch.cat((error_output.imgs, error_img.expand_as(error_output.imgs)), dim=0)
+                        _ = show_batch(in_out, n_col=4, title="error epoch="+str(epoch),
+                                       experiment=exp, neptune_name="test_errors")
+
                     output: Output = vae.forward(reference_imgs, draw_image=True, draw_boxes=True, verbose=False)
                     plot_reconstruction_and_inference(output, epoch=epoch, prefix="rec_")
-                    reference_n_cells = output.inference.sample_c.sum().item()
-                    tmp_dict = {"reference_n_cells": reference_n_cells,
-                                "delta_n_cells": (reference_n_cells - reference_count).sum()}
+                    reference_n_cells_inferred = output.inference.sample_c.sum().item()
+                    reference_n_cells_truth = reference_count.sum().item()
+                    delta_n_cells = reference_n_cells_inferred - reference_n_cells_truth
+                    tmp_dict = {"reference_n_cells_inferred": reference_n_cells_inferred,
+                                "delta_n_cells": delta_n_cells}
                     log_dict_metrics(tmp_dict, prefix="test_", experiment=exp)
                     history_dict = append_to_dict(source=tmp_dict,
                                                   destination=history_dict)

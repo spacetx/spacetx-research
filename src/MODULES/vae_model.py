@@ -309,7 +309,9 @@ class CompositionalVae(torch.nn.Module):
                                fg_fraction_av=fgfraction_av.detach().item(),
                                n_cell_av=ncell_av.detach().item(),
 
-                               count_accuracy=torch.sum(inference.sample_c, dim=0).detach().cpu().numpy(),
+                               count_prediction=torch.sum(inference.sample_c, dim=0).detach().cpu().numpy(),
+                               wrong_examples=-1*numpy.ones(1),
+                               accuracy=-1.0,
 
                                delta_fgfraction=delta_fgfraction.detach().item(),
                                delta_ncell=delta_ncell.detach().item(),

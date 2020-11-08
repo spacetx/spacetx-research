@@ -370,6 +370,7 @@ class Accumulator(object):
         else:
             print(type(value))
             raise Exception
+
         try:
             self._dict_accumulate[key] = x + self._dict_accumulate.get(key, 0)
         except ValueError:
@@ -601,7 +602,7 @@ def process_one_epoch(model: torch.nn.Module,
                       neptune_prefix: Optional[str] = None) -> MetricMiniBatch:
     """ return a tuple with all the metrics averaged over a epoch """
     metric_accumulator = Accumulator()
-    exact_examples = []
+    n_exact_examples = 0
     wrong_examples = []
 
     for i, (imgs, seg_mask, labels, index) in enumerate(dataloader):
@@ -618,10 +619,12 @@ def process_one_epoch(model: torch.nn.Module,
         with torch.no_grad():
             metric_accumulator.accumulate(source=metrics, counter_increment=len(index))
 
-            # special treatment for count_accuracy (which should not be accumulated but appended)
-            metric_accumulator._dict_accumulate["count_accuracy"] = 0
-            mask_exact = (metrics.count_accuracy == labels.cpu().numpy())
-            exact_examples += list(index[mask_exact].cpu().numpy())
+            # special treatment for count_prediction, wrong_example, accuracy
+            metric_accumulator._dict_accumulate["count_prediction"] = -1*numpy.ones(1)
+            metric_accumulator._dict_accumulate["wrong_examples"] = -1*numpy.ones(1)
+            metric_accumulator._dict_accumulate["accuracy"] = -1
+            mask_exact = (metrics.count_prediction == labels.cpu().numpy())
+            n_exact_examples += numpy.sum(mask_exact)
             wrong_examples += list(index[~mask_exact].cpu().numpy())
 
         # Only if training I apply backward
@@ -644,15 +647,12 @@ def process_one_epoch(model: torch.nn.Module,
     # At the end of the loop compute the average of the metrics
     with torch.no_grad():
         metric_one_epoch = metric_accumulator.get_average()
-        accuracy = float(len(exact_examples)) / (len(exact_examples) + len(wrong_examples))
-        metric_one_epoch["count_accuracy"] = numpy.array([accuracy])
-        if neptune_experiment is not None:
-            dict_wrong_examples = {"wrong_examples": wrong_examples}
-            log_dict_metrics(metrics=dict_wrong_examples,
-                             prefix=neptune_prefix,
-                             experiment=neptune_experiment,
-                             verbose=False)
+        accuracy = float(n_exact_examples) / (n_exact_examples + len(wrong_examples))
+        metric_one_epoch["accuracy"] = accuracy
+        metric_one_epoch["wrong_examples"] = numpy.array(wrong_examples)
+        metric_one_epoch["count_prediction"] = -1*numpy.ones(1)
 
+        if neptune_experiment is not None:
             log_dict_metrics(metrics=metric_one_epoch,
                              prefix=neptune_prefix,
                              experiment=neptune_experiment,

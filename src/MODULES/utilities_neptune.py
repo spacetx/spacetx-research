@@ -81,8 +81,6 @@ def log_matplotlib_as_png(name: str,
         print("leaving log_matplotlib_as_png")
 
 
-
-
 def log_dict_metrics(metrics: dict,
                      prefix: str = "",
                      experiment: Optional[neptune.experiments.Experiment] = None,
@@ -98,6 +96,13 @@ def log_dict_metrics(metrics: dict,
         elif isinstance(value, numpy.ndarray):
             for i, x in enumerate(value):
                 _exp.log_metric(prefix + key + "_" + str(i), x)
+        elif isinstance(value, torch.Tensor):
+            for i, x in enumerate(value):
+                _exp.log_metric(prefix + key + "_" + str(i), x.item())
+        else:
+            print(key)
+            print(type(value), value)
+            raise Exception
 
     if verbose:
         print("leaving log_dict_metrics")
