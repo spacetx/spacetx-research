@@ -9,9 +9,9 @@ from MODULES.utilities_visualization import show_batch, plot_tiling, plot_all_fr
 from MODULES.utilities_visualization import plot_reconstruction_and_inference, plot_generation, plot_segmentation
 from MODULES.utilities_visualization import plot_img_and_seg, plot_concordance
 from MODULES.utilities_ml import ConditionalRandomCrop, SpecialDataSet, process_one_epoch
-from MODULES.graph_clustering import GraphSegmentation
+# from MODULES.graph_clustering import GraphSegmentation
 from MODULES.utilities import QC_on_integer_mask, concordance_integer_masks, load_json_as_dict
-import skimage.io
+# import skimage.io
 
 # Check versions
 import torch
@@ -90,6 +90,8 @@ if torch.cuda.is_available():
     reference_imgs = reference_imgs.cuda()
 imgs_out = vae.inference_and_generator.unet.show_grid(reference_imgs)
 unet_grid_fig = show_batch(imgs_out[:, 0], normalize_range=(0.0, 1.0), neptune_name="unet_grid", experiment=exp)
+
+assert 1==2
 
 # Check the constraint dictionary
 print("simulation type = "+str(params["simulation"]["type"]))
@@ -194,12 +196,12 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                     reference_n_cells = output.inference.sample_c.sum().item()
                     tmp_dict = {"reference_n_cells": reference_n_cells,
                                 "delta_n_cells": (reference_n_cells - reference_count).sum()}
-                    log_dict_metrics(tmp_dict)
+                    log_dict_metrics(tmp_dict, prefix="test_", experiment=exp)
                     history_dict = append_to_dict(source=tmp_dict,
                                                   destination=history_dict)
 
                     segmentation: Segmentation = vae.segment(batch_imgs=reference_imgs)
-                    plot_segmentation(segmentation, epoch=epoch, prefix="seg_")
+                    plot_segmentation(segmentation, epoch=epoch, prefix="seg_", experiment=exp)
 
                     # Here I could add a measure of agreement with the ground truth
                     #a = segmentation.integer_mask[0, 0].long()
@@ -210,7 +212,7 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                     #log_concordance(concordance=concordance_vs_gt, prefix="concordance_vs_gt_")
 
                     generated: Output = vae.generate(imgs_in=reference_imgs, draw_boxes=True)
-                    plot_generation(generated, epoch=epoch, prefix="gen_")
+                    plot_generation(generated, epoch=epoch, prefix="gen_", experiment=exp)
 
                     test_loss = test_metrics.loss
                     min_test_loss = min(min_test_loss, test_loss)
