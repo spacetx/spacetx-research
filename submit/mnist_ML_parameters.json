@@ -84,7 +84,7 @@
 
  "shortcut_prob_corr_factor" : {
   "__comment" : "parameters for the shortcut for porb_corr_factor",
-  "values" : [0.85, 0.0],
+  "values" : [0.5, 0.0],
   "times" : [200, 500]
  },
 
@@ -94,7 +94,7 @@
 
   "overlap": {
     "__comment": "cost which discourages masks from overlapping",
-    "strength": 1E-2,
+    "strength": 0,
     "exponent": 1
   },
 
