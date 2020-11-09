@@ -57,7 +57,7 @@ def sample_c_map(p_map: torch.Tensor,
         if noisy_sampling:
             c_map = (torch.rand_like(p_map) < p_map).float() + p_map - p_map.detach()
         else:
-            c_map = (p_map > 0.5).float() + p_map - p_map.detach()
+            c_map = (0.5 < p_map).float() + p_map - p_map.detach()
     return c_map
 
 

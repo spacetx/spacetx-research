@@ -39,7 +39,6 @@ img_train, seg_mask_train, count_train = load_obj("./data_train.pt")
 img_test, seg_mask_test, count_test = load_obj("./data_test.pt")
 BATCH_SIZE = params["simulation"]["batch_size"]
 
-
 train_loader = SpecialDataSet(img=img_train,
                               roi_mask=None,
                               seg_mask=seg_mask_train,
@@ -76,10 +75,10 @@ if torch.cuda.is_available():
 # Make reference images
 index_tmp = torch.arange(test_loader.img.shape[0])[:128]
 tmp_imgs, tmp_seg, tmp_count = test_loader.load(index=index_tmp)[:3]
-mask6 = (tmp_count == 6)
-reference_imgs = tmp_imgs[mask6][:16]
-reference_seg = tmp_seg[mask6][:16]
-reference_count = tmp_count[mask6][:16]
+mask = (tmp_count == 6) or (tmp_count == 5)
+reference_imgs = tmp_imgs[mask][:16]
+reference_seg = tmp_seg[mask][:16]
+reference_count = tmp_count[mask][:16]
 reference_imgs_fig = show_batch(reference_imgs, normalize_range=(0.0, 1.0), neptune_name="reference_imgs", experiment=exp)
 
 if torch.cuda.is_available():

@@ -5,7 +5,7 @@
  "simulation" : {
    "__comment" : "there are 3 types of runs: scratch, resume, pretrained",
    "type" : "scratch",
-   "MAX_EPOCHS" : 501,
+   "MAX_EPOCHS" : 701,
    "TEST_FREQUENCY" : 10,
    "CHECKPOINT_FREQUENCY" : 50,
    "batch_size" : 128,
@@ -15,7 +15,7 @@
 
  "architecture" : {
    "__comment" : "architecture parameters, level_zwhere_output is between 0 and n_max_pool included",
-   "dim_zinstance" : 5,
+   "dim_zinstance" : 20,
    "dim_zwhere" : 4,
    "dim_zbg" : 4,
    "dim_logit" : 1,
@@ -85,7 +85,7 @@
  "shortcut_prob_corr_factor" : {
   "__comment" : "parameters for the shortcut for porb_corr_factor",
   "values" : [0.5, 0.0],
-  "times" : [25, 50]
+  "times" : [200, 500]
  },
 
  "soft_constraint" : {
@@ -94,7 +94,7 @@
 
   "overlap": {
     "__comment": "cost which discourages masks from overlapping",
-    "strength": 1E-2,
+    "strength": 0,
     "exponent": 1
   },
 

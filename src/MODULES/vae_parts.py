@@ -205,6 +205,7 @@ class Inference_and_Generation(torch.nn.Module):
                          mixing_bg=torch.ones_like(mixing_fg) - mixing_fg,
                          big_img=big_img,
                          # the sample of the 4 latent variables
+                         c_map_before_nms=c_map,
                          sample_c_map=c_map_after_nms,
                          sample_c=c_few,
                          sample_bb=bounding_box_few,
