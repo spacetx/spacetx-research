@@ -192,7 +192,6 @@ class Inference(NamedTuple):
     big_bg: torch.Tensor
     big_img: torch.Tensor
     mixing: torch.Tensor
-    mixing_bg: torch.Tensor
     # the samples of the 3 latent variables
     sample_c_map_before_nms: torch.Tensor  # shape -> batch, 1, width, height
     sample_c_map_after_nms: torch.Tensor   # shape -> batch, 1, width, height

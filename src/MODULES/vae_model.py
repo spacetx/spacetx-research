@@ -155,8 +155,10 @@ class CompositionalVae(torch.nn.Module):
 
         # 1. Mixing probability should become certain
         xfg = torch.sum(inference.mixing * (inference.mixing-1), dim=-5)
-        xbg = inference.mixing_bg * (inference.mixing_bg - 1)
-        entropy = (- xfg - xbg).sum(dim=(-1, -2, -3))  # sum over ch, w, h
+        # TODO: remove the background from this expression.
+        # xbg = inference.mixing_bg * (inference.mixing_bg - 1)
+        # entropy = (- xfg - xbg).sum(dim=(-1, -2, -3))  # sum over ch, w, h
+        entropy = - xfg.sum(dim=(-1, -2, -3))  # sum over ch, w, h
         cost_overlap = sample_from_constraints_dict(dict_soft_constraints=self.dict_soft_constraints,
                                                     var_name="overlap",
                                                     var_value=entropy,
@@ -187,13 +189,15 @@ class CompositionalVae(torch.nn.Module):
         batch_size, ch, w, h = imgs_in.shape
 
         # 1. Observation model
+        mixing_fg = torch.sum(inference.mixing, dim=-5)  # sum over boxes
+        mixing_bg = torch.ones_like(mixing_fg) - mixing_fg
         mse = CompositionalVae.NLL_MSE(output=inference.big_img,
                                        target=imgs_in,
                                        sigma=self.sigma_fg)  # boxes, batch_size, ch, w, h
         mse_bg = CompositionalVae.NLL_MSE(output=inference.big_bg,
                                           target=imgs_in,
                                           sigma=self.sigma_bg)  # batch_size, ch, w, h
-        mse_av = ((inference.mixing * mse).sum(dim=-5) + inference.mixing_bg * mse_bg).mean()  # mean over batch_size, ch, w, h
+        mse_av = ((inference.mixing * mse).sum(dim=-5) + mixing_bg * mse_bg).mean()  # mean over batch_size, ch, w, h
 
         # 2. Sparsity should encourage:
         # 1. few object
@@ -204,7 +208,6 @@ class CompositionalVae(torch.nn.Module):
         # 1) All the terms contain c=Bernoulli(p). It is actually the same b/c during back prop c=p
         # 2) fg_fraction is based on the selected quantities
         # 3) sparsity n_cell is based on c_map so that the entire matrix becomes sparse.
-        mixing_fg = torch.sum(inference.mixing, dim=-5)
         c_times_area_few = inference.sample_c * inference.sample_bb.bw * inference.sample_bb.bh
         sparsity_fgfraction = (torch.sum(mixing_fg) + torch.sum(c_times_area_few)) / torch.numel(mixing_fg)
         sparsity_ncell = torch.sum(inference.sample_c_map_before_nms) / torch.numel(c_times_area_few)  # divide by batch x box_fex

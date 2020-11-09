@@ -152,7 +152,8 @@ class Inference_and_Generation(torch.nn.Module):
                                         similarity_kernel=similarity_kernel)
         kl_logit_posterior = compute_kl_Bernoulli(c_map=c_map_before_nms,
                                                   logit_map=unet_output.logit)
-        kl_cmap = kl_logit_posterior - kl_logit_prior
+        kl_cmap = kl_logit_posterior - kl_logit_prior  # increase entropy of posterior, make prior close to prior
+        # print("kl_logit_posterior, kl_logit_prior", kl_logit_posterior.mean(), kl_logit_prior.mean())
 
         c_all = convert_to_box_list(c_map_after_nms).squeeze(-1)
         c_few = torch.gather(c_all, dim=0, index=nms_output.index_top_k)
@@ -189,28 +190,19 @@ class Inference_and_Generation(torch.nn.Module):
                                                             noisy_sampling=noisy_sampling,
                                                             sample_from_prior=generate_synthetic_data)
 
-        small_stuff_raw = self.decoder_zinstance.forward(zinstance_few.sample)
-        # Apply softplus to first channel (i.e. mask channel) and sigmoid to all others (i.e. img channels)
-        small_stuff = torch.cat((F.softplus(small_stuff_raw[..., :1, :, :]),
-                                 torch.sigmoid(small_stuff_raw[..., 1:, :, :])), dim=-3)
+        small_stuff = torch.sigmoid(self.decoder_zinstance.forward(zinstance_few.sample))  # stuff between 0 and 1
         big_stuff = Uncropper.uncrop(bounding_box=bounding_box_few,
                                      small_stuff=small_stuff,
                                      width_big=width_raw_image,
                                      height_big=height_raw_image)  # shape: n_box, batch, ch, w, h
-        ch_size = big_stuff.shape[-3]
-        big_weight, big_img = torch.split(big_stuff, split_size_or_sections=(1, ch_size-1), dim=-3)
-
-        # -----------------------
-        # 7. From weight to masks: Note that I multiply by c_few
-        # ------------------------
-        mixing = from_w_to_pi(weight=big_weight, dim=-5) * c_few[..., None, None, None]
-        mixing_fg = mixing.sum(dim=-5)
+        big_mask, big_img = torch.split(big_stuff, split_size_or_sections=(1, big_stuff.shape[-3]-1), dim=-3)
+        big_mask_times_c = big_mask * c_few[..., None, None, None]  # this is strictly smaller than 1
+        mixing = big_mask_times_c / big_mask_times_c.sum(dim=-5).clamp_(min=1.0).detach()  # softplus-like function
         similarity_l, similarity_w = self.similarity_kernel_dpp.get_l_w()
 
         return Inference(prob_map=p_map,
                          big_bg=big_bg,
                          mixing=mixing,
-                         mixing_bg=torch.ones_like(mixing_fg) - mixing_fg,
                          big_img=big_img,
                          # the sample of the 4 latent variables
                          sample_c_map_before_nms=c_map_before_nms,
