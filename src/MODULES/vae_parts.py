@@ -6,7 +6,8 @@ from MODULES.unet_model import UNet
 from MODULES.encoders_decoders import EncoderConv, DecoderConv, Decoder1by1Linear, DecoderBackground
 from MODULES.utilities import tmaps_to_bb, convert_to_box_list, invert_convert_to_box_list
 from MODULES.utilities import compute_ranking, compute_average_in_box
-from MODULES.utilities_ml import sample_and_kl_diagonal_normal, sample_c_map, compute_kl_cmap, SimilarityKernel
+from MODULES.utilities_ml import sample_and_kl_diagonal_normal, sample_c_map
+from MODULES.utilities_ml import compute_kl_DPP, compute_kl_Bernoulli, SimilarityKernel
 from MODULES.namedtuple import Inference, NMSoutput, BB, UNEToutput, ZZ, DIST
 from MODULES.non_max_suppression import NonMaxSuppression
 
@@ -121,30 +122,37 @@ class Inference_and_Generation(torch.nn.Module):
         # Sample the probability map from prior or posterior
         similarity_kernel = self.similarity_kernel_dpp.forward(n_width=unet_output.logit.shape[-2],
                                                                n_height=unet_output.logit.shape[-1])
-        c_map = sample_c_map(p_map=p_map,
-                             similarity_kernel=similarity_kernel,
-                             noisy_sampling=noisy_sampling,
-                             sample_from_prior=generate_synthetic_data)
+        c_map_before_nms = sample_c_map(p_map=p_map,
+                                        similarity_kernel=similarity_kernel,
+                                        noisy_sampling=noisy_sampling,
+                                        sample_from_prior=generate_synthetic_data)
         # print("c_map.shape", c_map.shape)  # shape: batch_size, 1, w, h
 
         # NMS + top-K operation
         with torch.no_grad():
-            score = convert_to_box_list(c_map+p_map).squeeze(-1)  # shape: n_box_all, batch_size
+            score = convert_to_box_list(c_map_before_nms+p_map).squeeze(-1)  # shape: n_box_all, batch_size
+            combined_topk_only = topk_only or generate_synthetic_data  # if generating from DPP do not do NMS
             nms_output: NMSoutput = NonMaxSuppression.compute_mask_and_index(score=score,
                                                                              bounding_box=bounding_box_all,
                                                                              overlap_threshold=overlap_threshold,
                                                                              n_objects_max=n_objects_max,
-                                                                             topk_only=topk_only)
+                                                                             topk_only=combined_topk_only)
+            # Mask with all zero except 1s where the box where selected
+            mask = torch.zeros_like(score).scatter(dim=0,
+                                                   index=nms_output.index_top_k,
+                                                   src=torch.ones_like(score))  # shape: n_box_all, batch_size
+            mask_map = invert_convert_to_box_list(mask.unsqueeze(-1),
+                                                  original_width=c_map_before_nms.shape[-2],
+                                                  original_height=c_map_before_nms.shape[-1])  # shape: batch_size, 1, w, h
+            c_map_after_nms = c_map_before_nms * mask_map
 
-            # print("nms_output.nms_mask.shape", nms_output.nms_mask.shape)        # shape: n_box_all, batch_size
-            # print("nms_output.index_top_k.shape", nms_output.index_top_k.shape)  # shape: n_box_few, batch_size
-
-        c_map_after_nms = c_map * invert_convert_to_box_list(nms_output.nms_mask.unsqueeze(-1),
-                                                             original_width=c_map.shape[-2],
-                                                             original_height=c_map.shape[-1])
-        kl_cmap = compute_kl_cmap(c_map=c_map_after_nms,
-                                  similarity_kernel=similarity_kernel,
-                                  logit_map=unet_output.logit)
+        # Note that I use two different c_map to compute KL wrt prior and posterior.
+        # After a short transient the two cmap become identical
+        kl_logit_prior = compute_kl_DPP(c_map=c_map_after_nms,
+                                        similarity_kernel=similarity_kernel)
+        kl_logit_posterior = compute_kl_Bernoulli(c_map=c_map_before_nms,
+                                                  logit_map=unet_output.logit)
+        kl_cmap = kl_logit_posterior - kl_logit_prior
 
         c_all = convert_to_box_list(c_map_after_nms).squeeze(-1)
         c_few = torch.gather(c_all, dim=0, index=nms_output.index_top_k)
@@ -205,8 +213,8 @@ class Inference_and_Generation(torch.nn.Module):
                          mixing_bg=torch.ones_like(mixing_fg) - mixing_fg,
                          big_img=big_img,
                          # the sample of the 4 latent variables
-                         c_map_before_nms=c_map,
-                         sample_c_map=c_map_after_nms,
+                         sample_c_map_before_nms=c_map_before_nms,
+                         sample_c_map_after_nms=c_map_after_nms,
                          sample_c=c_few,
                          sample_bb=bounding_box_few,
                          sample_zwhere=zwhere_sample_few,

@@ -61,21 +61,20 @@ def sample_c_map(p_map: torch.Tensor,
     return c_map
 
 
-def compute_kl_cmap(c_map: torch.Tensor,
-                    similarity_kernel: torch.Tensor,
-                    logit_map: torch.Tensor):
-
-    log_p = F.logsigmoid(logit_map)
-    log_one_minus_p = F.logsigmoid(-logit_map)
-
-    # Here the gradients are only through log_q and similarity_kernel not c
-    mask = c_map.bool()  # bool variable has requires_grad = False
-    log_prob_posterior = (mask * log_p + log_one_minus_p * ~mask).sum(dim=(-1, -2, -3))  # sum over ch=1, w, h
+def compute_kl_DPP(c_map: torch.Tensor,
+                   similarity_kernel: torch.Tensor):
     c_no_grad = convert_to_box_list(c_map).squeeze(-1).bool().detach()  # shape n_boxes_all, batch_size
     log_prob_prior = FiniteDPP(L=similarity_kernel).log_prob(c_no_grad.transpose(-1, -2))  # shape: batch_shape
-    assert log_prob_posterior.shape == log_prob_prior.shape
-    kl = log_prob_posterior - log_prob_prior
-    return kl
+    return log_prob_prior
+
+
+def compute_kl_Bernoulli(c_map: torch.Tensor,
+                         logit_map: torch.Tensor):
+    log_p = F.logsigmoid(logit_map)
+    log_one_minus_p = F.logsigmoid(-logit_map)
+    mask = c_map.bool()  # bool variable has requires_grad = False
+    log_prob_posterior = (mask * log_p + log_one_minus_p * ~mask).sum(dim=(-1, -2, -3))  # sum over ch=1, w, h
+    return log_prob_posterior
 
 
 class SimilarityKernel(torch.nn.Module):

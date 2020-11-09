@@ -635,21 +635,28 @@ def plot_generation(output: Output,
                    normalize_range=(0.0, 1.0),
                    title='imgs, epoch= {0:6d}'.format(epoch),
                    experiment=_exp,
-                   neptune_name=prefix+"imgs"+postfix)
-    _ = show_batch(output.inference.sample_c_map[:8].float(),
+                   neptune_name=prefix + "imgs" + postfix)
+    _ = show_batch(output.inference.sample_c_map_before_nms[:8].float(),
                    n_col=4,
                    n_padding=4,
                    normalize_range=(0.0, 1.0),
                    title='c_map, epoch= {0:6d}'.format(epoch),
                    experiment=_exp,
-                   neptune_name=prefix+"c_map"+postfix)
+                   neptune_name=prefix + "c_map_before_nms" + postfix)
+    _ = show_batch(output.inference.sample_c_map_after_nms[:8].float(),
+                   n_col=4,
+                   n_padding=4,
+                   normalize_range=(0.0, 1.0),
+                   title='c_map, epoch= {0:6d}'.format(epoch),
+                   experiment=_exp,
+                   neptune_name=prefix + "c_map_after_nms" + postfix)
     _ = show_batch(output.inference.big_bg[:8],
                    n_col=4,
                    n_padding=4,
                    normalize_range=(0.0, 1.0),
                    title='background, epoch= {0:6d}'.format(epoch),
                    experiment=_exp,
-                   neptune_name=prefix+"bg"+postfix)
+                   neptune_name=prefix + "bg" + postfix)
 
     if verbose:
         print("leaving plot_generation")
@@ -673,20 +680,20 @@ def plot_reconstruction_and_inference(output: Output,
                    title='imgs, epoch= {0:6d}'.format(epoch),
                    experiment=_exp,
                    neptune_name=prefix+"imgs"+postfix)
-    _ = show_batch(output.inference.c_map_before_nms[:8].float(),
+    _ = show_batch(output.inference.sample_c_map_before_nms[:8].float(),
                    n_col=4,
                    n_padding=4,
                    normalize_range=(0.0, 1.0),
                    title='c_map, epoch= {0:6d}'.format(epoch),
                    experiment=_exp,
                    neptune_name=prefix+"c_map_before_nms"+postfix)
-    _ = show_batch(output.inference.sample_c_map[:8].float(),
+    _ = show_batch(output.inference.sample_c_map_after_nms[:8].float(),
                    n_col=4,
                    n_padding=4,
                    normalize_range=(0.0, 1.0),
                    title='c_map, epoch= {0:6d}'.format(epoch),
                    experiment=_exp,
-                   neptune_name=prefix+"c_map"+postfix)
+                   neptune_name=prefix+"c_map_after_nms"+postfix)
     _ = show_batch(output.inference.prob_map[:8],
                    n_col=4,
                    n_padding=4,

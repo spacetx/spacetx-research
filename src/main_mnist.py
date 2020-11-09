@@ -75,7 +75,7 @@ if torch.cuda.is_available():
 # Make reference images
 index_tmp = torch.arange(test_loader.img.shape[0])[:128]
 tmp_imgs, tmp_seg, tmp_count = test_loader.load(index=index_tmp)[:3]
-mask = (tmp_count == 6) or (tmp_count == 5)
+mask = (tmp_count == 6) + (tmp_count == 5)
 reference_imgs = tmp_imgs[mask][:16]
 reference_seg = tmp_seg[mask][:16]
 reference_count = tmp_count[mask][:16]
