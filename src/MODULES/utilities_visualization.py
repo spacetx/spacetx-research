@@ -694,14 +694,6 @@ def plot_reconstruction_and_inference(output: Output,
                    title='background, epoch= {0:6d}'.format(epoch),
                    experiment=_exp,
                    neptune_name=prefix+"bg"+postfix)
-    _ = show_batch(output.inference.area_map[:8],
-                   n_col=4,
-                   n_padding=4,
-                   normalize_range=None,  # use min_max of tensor
-                   title='area_map, epoch= {0:6d}'.format(epoch),
-                   experiment=_exp,
-                   neptune_name=prefix + "area_map" + postfix)
-
     if verbose:
         print("leaving plot_reconstruction_and_inference")
 

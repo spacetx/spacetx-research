@@ -44,26 +44,6 @@ def tmaps_to_bb(tmaps, width_raw_image: int, height_raw_image: int, min_box_size
               bh=convert_to_box_list(bh_map).squeeze(-1))
 
 
-class PassBernoulli(torch.autograd.Function):
-    """ Forward is c=Bernoulli(p). Backward is identity"""
-
-    @staticmethod
-    def forward(ctx, p, noisy_sampling):
-        if noisy_sampling:
-            c = torch.rand_like(p) < p
-        else:
-            c = (p > 0.5)
-        return c.float().requires_grad_(True)
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        return grad_output, None  # the gradient of noisy_sampling is None
-
-
-def pass_bernoulli(prob, noisy_sampling):
-    return PassBernoulli.apply(prob, noisy_sampling)
-
-
 def linear_interpolation(t: Union[numpy.array, float], values: tuple, times: tuple) -> Union[numpy.array, float]:
     """ Makes an interpolation between (t_in,v_in) and (t_fin,v_fin)
         For time t>t_fin and t<t_in the value of v is clamped to either v_in or v_fin
