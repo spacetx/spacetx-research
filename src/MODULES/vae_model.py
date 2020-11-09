@@ -207,7 +207,7 @@ class CompositionalVae(torch.nn.Module):
         mixing_fg = torch.sum(inference.mixing, dim=-5)
         c_times_area_few = inference.sample_c * inference.sample_bb.bw * inference.sample_bb.bh
         sparsity_fgfraction = (torch.sum(mixing_fg) + torch.sum(c_times_area_few)) / torch.numel(mixing_fg)
-        sparsity_ncell = torch.mean(inference.sample_c)  # divide by batch x box_fex
+        sparsity_ncell = torch.sum(inference.sample_c_map_before_nms) / torch.numel(c_times_area_few)  # divide by batch x box_fex
 
         # 3. compute KL
         # Note that I compute the mean over batch, latent_dimensions and n_object.
