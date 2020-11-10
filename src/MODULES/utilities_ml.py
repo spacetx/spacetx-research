@@ -568,6 +568,7 @@ def process_one_epoch(model: torch.nn.Module,
                       optimizer: Optional[torch.optim.Optimizer] = None,
                       weight_clipper: Optional[Callable[[None], None]] = None,
                       verbose: bool = False,
+                      noisy_sampling: bool = True,
                       neptune_experiment: Optional[neptune.experiments.Experiment] = None,
                       neptune_prefix: Optional[str] = None) -> MetricMiniBatch:
     """ return a tuple with all the metrics averaged over a epoch """
@@ -581,7 +582,7 @@ def process_one_epoch(model: torch.nn.Module,
         if torch.cuda.is_available() and (imgs.device == torch.device('cpu')): 
             imgs = imgs.cuda()
 
-        metrics = model.forward(imgs_in=imgs).metrics  # the forward function returns metric and other stuff
+        metrics = model.forward(imgs_in=imgs, noisy_sampling=noisy_sampling).metrics  # the forward function returns metric and other stuff
         if verbose:
             print("i = %3d train_loss=%.5f" % (i, metrics.loss))
 

@@ -150,7 +150,8 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
         with torch.enable_grad():
             vae.train()
             train_metrics = process_one_epoch(model=vae, 
-                                              dataloader=train_loader, 
+                                              noisy_sampling=True,
+                                              dataloader=train_loader,
                                               optimizer=optimizer, 
                                               verbose=(epoch == 0),
                                               weight_clipper=None,
@@ -171,7 +172,8 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                 if (epoch % TEST_FREQUENCY) == 0:
 
                     vae.eval()
-                    test_metrics = process_one_epoch(model=vae, 
+                    test_metrics = process_one_epoch(model=vae,
+                                                     noisy_sampling=False,
                                                      dataloader=test_loader, 
                                                      optimizer=optimizer, 
                                                      verbose=(epoch == 0),
@@ -193,7 +195,11 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                         _ = show_batch(in_out, n_col=4, title="error epoch="+str(epoch),
                                        experiment=exp, neptune_name="test_errors")
 
-                    output: Output = vae.forward(reference_imgs, draw_image=True, draw_boxes=True, verbose=False)
+                    output: Output = vae.forward(reference_imgs,
+                                                 noisy_sampling=False,
+                                                 draw_image=True,
+                                                 draw_boxes=True,
+                                                 verbose=False)
                     plot_reconstruction_and_inference(output, epoch=epoch, prefix="rec_")
                     reference_n_cells_inferred = output.inference.sample_c.sum().item()
                     reference_n_cells_truth = reference_count.sum().item()
@@ -204,7 +210,8 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                     history_dict = append_to_dict(source=tmp_dict,
                                                   destination=history_dict)
 
-                    segmentation: Segmentation = vae.segment(batch_imgs=reference_imgs)
+                    segmentation: Segmentation = vae.segment(batch_imgs=reference_imgs,
+                                                             noisy_sampling=False)
                     plot_segmentation(segmentation, epoch=epoch, prefix="seg_", experiment=exp)
 
                     # Here I could add a measure of agreement with the ground truth
@@ -215,7 +222,8 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                     #plot_concordance(concordance=concordance_vs_gt, neptune_name="concordance_vs_gt_")
                     #log_concordance(concordance=concordance_vs_gt, prefix="concordance_vs_gt_")
 
-                    generated: Output = vae.generate(imgs_in=reference_imgs, draw_boxes=True)
+                    generated: Output = vae.generate(imgs_in=reference_imgs,
+                                                     draw_boxes=True)
                     plot_generation(generated, epoch=epoch, prefix="gen_", experiment=exp)
 
                     test_loss = test_metrics.loss

@@ -619,7 +619,8 @@ class CompositionalVae(torch.nn.Module):
                 draw_image: bool = False,
                 draw_bg: bool = False,
                 draw_boxes: bool = False,
-                verbose: bool = False):
+                verbose: bool = False,
+                noisy_sampling: bool = True):
 
         return self.process_batch_imgs(imgs_in=imgs_in,
                                        generate_synthetic_data=False,
@@ -628,7 +629,7 @@ class CompositionalVae(torch.nn.Module):
                                        draw_bg=draw_bg,
                                        draw_boxes=draw_boxes,
                                        verbose=verbose,
-                                       noisy_sampling=True,  # True if self.training else False,
+                                       noisy_sampling=noisy_sampling,
                                        prob_corr_factor=getattr(self, "prob_corr_factor", 0.0),
                                        overlap_threshold=self.nms_dict.get("overlap_threshold", 0.3),
                                        n_objects_max=self.input_img_dict["n_objects_max"])
