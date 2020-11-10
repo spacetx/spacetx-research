@@ -423,22 +423,22 @@ def plot_loss_term(history_dict: dict,
         reg = numpy.array(history_dict["test_reg_tot"])
         kl = numpy.array(history_dict["test_kl_tot"])
         sparsity = numpy.array(history_dict["test_sparsity_tot"])
-        geco_mse = numpy.array(history_dict["test_geco_mse"])
+        lambda_mse = numpy.array(history_dict["test_lambda_mse"])
     elif train_or_test == "train":
         loss = numpy.array(history_dict["train_loss"])
         mse = numpy.array(history_dict["train_mse_tot"])
         reg = numpy.array(history_dict["train_reg_tot"])
         kl = numpy.array(history_dict["train_kl_tot"])
         sparsity = numpy.array(history_dict["train_sparsity_tot"])
-        geco_mse = numpy.array(history_dict["train_geco_mse"])
+        lambda_mse = numpy.array(history_dict["train_lambda_mse"])
     else:
         raise Exception
 
     fig, ax = plt.subplots()
     ax.plot(loss, '-', label="loss")
-    ax.plot(geco_mse * mse, '.-', label="scaled mse")
-    ax.plot(geco_mse * reg, '.--', label="scaled reg")
-    ax.plot((1-geco_mse) * kl, '.--', label="scaled kl")
+    ax.plot(lambda_mse * mse, '.-', label="scaled mse")
+    ax.plot(lambda_mse * reg, '.--', label="scaled reg")
+    ax.plot((1-lambda_mse) * kl, '.--', label="scaled kl")
     ax.plot(sparsity, '.--', label="scaled sparsity")
 
     ax.set_xlabel('epoch')
@@ -610,8 +610,8 @@ def plot_all_from_dictionary(history_dict: dict,
     plot_kl(history_dict, train_or_test=train_or_test, experiment=_exp, neptune_name="kl_history_"+train_or_test)
     plot_loss_term(history_dict, train_or_test=train_or_test, experiment=_exp, neptune_name="loss_terms_"+train_or_test)
     plot_trajectory(history_dict, train_or_test=train_or_test, experiment=_exp, neptune_name="trajectory_"+train_or_test)
-    plot_geco_parameters(history_dict, params, train_or_test=train_or_test, experiment=_exp,
-                         neptune_name="geco_params_trajectory_"+train_or_test)
+    # plot_geco_parameters(history_dict, params, train_or_test=train_or_test, experiment=_exp,
+    #                     neptune_name="geco_params_trajectory_"+train_or_test)
 
     if verbose:
         print("leaving plot_all_from_dictionary ->"+train_or_test)

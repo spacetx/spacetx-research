@@ -212,19 +212,19 @@ class CompositionalVae(torch.nn.Module):
         # 2) fg_fraction is based on the selected quantities
         # 3) sparsity n_cell is based on c_map so that the entire matrix becomes sparse.
         c_times_area_few = inference.sample_c * inference.sample_bb.bw * inference.sample_bb.bh
-        x_sparsity = 0.5 * (torch.sum(mixing_fg) + torch.sum(c_times_area_few)) / torch.numel(mixing_fg)
         x_sparsity_av = torch.mean(mixing_fg)
         x_sparsity_max = max(self.geco_dict["target_fgfraction"])
         x_sparsity_min = min(self.geco_dict["target_fgfraction"])
-        f_sparsity = (x_sparsity - x_sparsity_min).clamp_(min=0) + (x_sparsity_min - x_sparsity).clamp_(min=0)
-        g_sparsity = torch.min(x_sparsity_av - x_sparsity_min, x_sparsity_max - x_sparsity_av)
+        g_sparsity = torch.min(x_sparsity_av - x_sparsity_min, x_sparsity_max - x_sparsity_av)  # positive if in range, negative otherwise
+        x_sparsity = 0.5 * (torch.sum(mixing_fg) + torch.sum(c_times_area_few)) / torch.numel(mixing_fg)
+        f_sparsity = x_sparsity * torch.sign(x_sparsity_av - x_sparsity_min)
 
-        x_cell = torch.sum(inference.sample_c_map_before_nms) / (batch_size * n_box_few)
         x_cell_av = torch.sum(inference.sample_c) / batch_size
         x_cell_max = max(self.geco_dict["target_ncell"]) / n_box_few
         x_cell_min = min(self.geco_dict["target_ncell"]) / n_box_few
-        f_cell = (x_cell - x_cell_min).clamp_(min=0) + (x_cell_min - x_cell).clamp_(min=0)
-        g_cell = torch.min(x_cell_av - x_cell_min, x_cell_max - x_cell_av)
+        g_cell = torch.min(x_cell_av - x_cell_min, x_cell_max - x_cell_av)  # positive if in range, negative otherwise
+        x_cell = torch.sum(inference.sample_c_map_before_nms) / (batch_size * n_box_few)
+        f_cell = x_cell * torch.sign(x_cell_av - x_cell_min)
 
         # 3. compute KL
         # Note that I compute the mean over batch, latent_dimensions and n_object.
@@ -271,20 +271,21 @@ class CompositionalVae(torch.nn.Module):
                                reg_overlap=regularizations.reg_overlap.detach().item(),
                                reg_area_obj=regularizations.reg_area_obj.detach().item(),
 
-                               geco_fgfraction=self.geco_fgfraction.data.detach().item(),
-                               geco_ncell=self.geco_ncell.data.detach().item(),
-                               geco_mse=self.geco_mse.data.detach().item(),
-
+                               lambda_sparsity=self.geco_fgfraction.data.detach().item(),
+                               lambda_cell=self.geco_ncell.data.detach().item(),
+                               lambda_mse=self.geco_mse.data.detach().item(),
+                               f_sparsity=f_sparsity.detach().item(),
+                               g_sparsity=g_sparsity.detach().item(),
+                               f_cell=f_cell.detach().item(),
+                               g_cell=g_cell.detach().item(),
+                               f_mse=mse_av.detach().item(),
+                               g_mse=g_mse.detach().item(),
                                fg_fraction_av=x_sparsity_av.detach().item(),
                                n_cell_av=x_cell_av.detach().item(),
 
                                count_prediction=torch.sum(inference.sample_c, dim=0).detach().cpu().numpy(),
                                wrong_examples=-1*numpy.ones(1),
                                accuracy=-1.0,
-
-                               delta_fgfraction=g_sparsity.detach().item(),
-                               delta_ncell=g_cell.detach().item(),
-                               delta_mse=g_mse.detach().item(),
 
                                similarity_l=inference.similarity_l.detach().item(),
                                similarity_w=inference.similarity_w.detach().item(),
