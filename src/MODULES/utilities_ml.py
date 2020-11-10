@@ -44,6 +44,7 @@ def sample_c_map(p_map: torch.Tensor,
                  similarity_kernel: torch.Tensor,
                  noisy_sampling: bool,
                  sample_from_prior: bool):
+
     if sample_from_prior:
         with torch.no_grad():
             batch_size = torch.Size([p_map.shape[0]])
@@ -53,12 +54,11 @@ def sample_c_map(p_map: torch.Tensor,
             c_map = invert_convert_to_box_list(c_reshaped,
                                                original_width=p_map.shape[-2],
                                                original_height=p_map.shape[-1])
+            return c_map
     else:
-        if noisy_sampling:
-            c_map = (torch.rand_like(p_map) < p_map).float() + p_map - p_map.detach()
-        else:
-            c_map = (0.5 < p_map).float() + p_map - p_map.detach()
-    return c_map
+        with torch.no_grad():
+            c_map = (torch.rand_like(p_map) < p_map) if noisy_sampling else (0.5 < p_map)
+        return c_map.float() + p_map - p_map.detach()
 
 
 def compute_kl_DPP(c_map: torch.Tensor,
@@ -69,17 +69,14 @@ def compute_kl_DPP(c_map: torch.Tensor,
 
 
 def compute_kl_Bernoulli(c_map: torch.Tensor,
-                         logit_map: torch.Tensor):
-    log_p = F.logsigmoid(logit_map)
-    log_one_minus_p = F.logsigmoid(-logit_map)
-    mask = c_map.bool()  # bool variable has requires_grad = False
-    log_prob_posterior = (mask * log_p + log_one_minus_p * ~mask).sum(dim=(-1, -2, -3))  # sum over ch=1, w, h
+                         log_p_map: torch.Tensor,
+                         log_one_minus_p_map: torch.Tensor):
+    log_prob_posterior = (c_map * log_p_map + (c_map - 1) * log_one_minus_p_map).sum(dim=(-1, -2, -3))  # sum over ch=1, w, h
     return log_prob_posterior
 
 
 class SimilarityKernel(torch.nn.Module):
     """ Similarity based on sum of gaussian kernels of different strength and length_scales """
-
     def __init__(self, n_kernels: int = 4,
                  pbc: bool = False,
                  eps: float = 1E-4,

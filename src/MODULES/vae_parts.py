@@ -100,11 +100,10 @@ class Inference_and_Generation(torch.nn.Module):
                                            height_raw_image=height_raw_image,
                                            min_box_size=self.size_min,
                                            max_box_size=self.size_max)
-        # print("bounding_box_all.bx.shape -->", bounding_box_all.bx.shape)  # shape: n_box_all, batch_size
 
-        # Correct probability if necessary
-        p_map_uncorrected = torch.sigmoid(unet_output.logit)
         with torch.no_grad():
+
+            # Correct probability if necessary
             if (prob_corr_factor > 0) and (prob_corr_factor <= 1.0):
                 av_intensity = compute_average_in_box((imgs_in - big_bg).abs(), bounding_box_all)
                 assert len(av_intensity.shape) == 2
@@ -115,9 +114,17 @@ class Inference_and_Generation(torch.nn.Module):
                 p_map_delta = invert_convert_to_box_list(q_approx.unsqueeze(-1),
                                                          original_width=unet_output.logit.shape[-2],
                                                          original_height=unet_output.logit.shape[-1])
-            else:
-                p_map_delta = torch.zeros_like(p_map_uncorrected)
-        p_map = ((1 - prob_corr_factor) * p_map_uncorrected + prob_corr_factor * p_map_delta)
+
+        # Now I have p, log(p), log(1-p)
+        if (prob_corr_factor > 0) and (prob_corr_factor <= 1.0):
+            p_map = ((1 - prob_corr_factor) * torch.sigmoid(unet_output.logit) +
+                     prob_corr_factor * p_map_delta).clamp(min=1E-4, max=1-1E-4)
+            log_p_map = torch.log(p_map)
+            log_one_minus_p_map = torch.log1p(-p_map)
+        else:
+            p_map = torch.sigmoid(unet_output.logit)
+            log_p_map = F.logsigmoid(unet_output.logit)
+            log_one_minus_p_map = F.logsigmoid(-unet_output.logit)
 
         # Sample the probability map from prior or posterior
         similarity_kernel = self.similarity_kernel_dpp.forward(n_width=unet_output.logit.shape[-2],
@@ -144,19 +151,16 @@ class Inference_and_Generation(torch.nn.Module):
             mask_map = invert_convert_to_box_list(mask.unsqueeze(-1),
                                                   original_width=c_map_before_nms.shape[-2],
                                                   original_height=c_map_before_nms.shape[-1])  # shape: batch_size, 1, w, h
-            c_map_after_nms = c_map_before_nms * mask_map
 
-        # Note that I use two different c_map to compute KL wrt prior and posterior.
-        # After a short transient the two cmap become identical
-        kl_logit_prior = compute_kl_DPP(c_map=c_map_after_nms,
+        # TODO: check if I can use the c_map_after_nms in both places.....
+        kl_logit_prior = compute_kl_DPP(c_map=(c_map_before_nms * mask_map).detach(),
                                         similarity_kernel=similarity_kernel)
-        kl_logit_posterior = compute_kl_Bernoulli(c_map=c_map_before_nms,
-                                                  logit_map=unet_output.logit)
-        kl_cmap = kl_logit_posterior - kl_logit_prior  # increase entropy of posterior, make prior close to prior
-        # print("kl_logit_posterior, kl_logit_prior", kl_logit_posterior.mean(), kl_logit_prior.mean())
+        kl_logit_posterior = compute_kl_Bernoulli(c_map=(c_map_before_nms * mask_map).detach(),
+                                                  log_p_map=log_p_map,
+                                                  log_one_minus_p_map=log_one_minus_p_map)
+        kl_logit = kl_logit_posterior - kl_logit_prior  # this will make adjust DPP and keep entropy of posterior
 
-        c_all = convert_to_box_list(c_map_after_nms).squeeze(-1)
-        c_few = torch.gather(c_all, dim=0, index=nms_output.index_top_k)
+        c_few = torch.gather(convert_to_box_list(c_map_before_nms).squeeze(-1), dim=0, index=nms_output.index_top_k)
 
         bounding_box_few: BB = BB(bx=torch.gather(bounding_box_all.bx, dim=0, index=nms_output.index_top_k),
                                   by=torch.gather(bounding_box_all.by, dim=0, index=nms_output.index_top_k),
@@ -197,7 +201,7 @@ class Inference_and_Generation(torch.nn.Module):
                                      height_big=height_raw_image)  # shape: n_box, batch, ch, w, h
         big_mask, big_img = torch.split(big_stuff, split_size_or_sections=(1, big_stuff.shape[-3]-1), dim=-3)
         big_mask_times_c = big_mask * c_few[..., None, None, None]  # this is strictly smaller than 1
-        mixing = big_mask_times_c / big_mask_times_c.sum(dim=-5).clamp_(min=1.0).detach()  # softplus-like function
+        mixing = big_mask_times_c / big_mask_times_c.sum(dim=-5).clamp_(min=1.0)  # softplus-like function
         similarity_l, similarity_w = self.similarity_kernel_dpp.get_l_w()
 
         return Inference(prob_map=p_map,
@@ -206,14 +210,14 @@ class Inference_and_Generation(torch.nn.Module):
                          big_img=big_img,
                          # the sample of the 4 latent variables
                          sample_c_map_before_nms=c_map_before_nms,
-                         sample_c_map_after_nms=c_map_after_nms,
+                         sample_c_map_after_nms=(c_map_before_nms * mask_map),
                          sample_c=c_few,
                          sample_bb=bounding_box_few,
                          sample_zwhere=zwhere_sample_few,
                          sample_zinstance=zinstance_few.sample,
                          sample_zbg=zbg.sample,
                          # the kl of the 4 latent variables
-                         kl_logit=kl_cmap,
+                         kl_logit=kl_logit,
                          kl_zwhere=zwhere_kl_few,
                          kl_zinstance=zinstance_few.kl,
                          kl_zbg=zbg.kl,
