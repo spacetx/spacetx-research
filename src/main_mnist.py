@@ -141,7 +141,6 @@ torch.cuda.empty_cache()
 for delta_epoch in range(1, NUM_EPOCHS+1):
     epoch = delta_epoch+epoch_restart    
 
-    vae.topk_only = (epoch > params["nms"]["switch_off_nms_epoch"])
     vae.prob_corr_factor = linear_interpolation(epoch,
                                                 values=params["shortcut_prob_corr_factor"]["values"],
                                                 times=params["shortcut_prob_corr_factor"]["times"])
@@ -150,15 +149,16 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
     with torch.autograd.set_detect_anomaly(False):
         with torch.enable_grad():
             vae.train()
-            train_metrics = process_one_epoch(model=vae, 
-                                              noisy_sampling=True,
-                                              topk_only=vae.topk_only,
+            train_metrics = process_one_epoch(model=vae,
                                               dataloader=train_loader,
-                                              optimizer=optimizer, 
+                                              optimizer=optimizer,
+                                              noisy_sampling=True,
+                                              overlap_threshold=params["nms"]["overlap_threshold_train"],
                                               verbose=(epoch == 0),
                                               weight_clipper=None,
                                               neptune_experiment=exp,
                                               neptune_prefix="train_")
+
             print("Train " + train_metrics.pretty_print(epoch))
 
             if params["optimizer"]["scheduler_is_active"]:
@@ -175,10 +175,10 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
 
                     vae.eval()
                     test_metrics = process_one_epoch(model=vae,
+                                                     dataloader=test_loader,
+                                                     optimizer=optimizer,
                                                      noisy_sampling=False,
-                                                     topk_only=vae.topk_only,
-                                                     dataloader=test_loader, 
-                                                     optimizer=optimizer, 
+                                                     overlap_threshold=params["nms"]["overlap_threshold_test"],
                                                      verbose=(epoch == 0),
                                                      weight_clipper=None,
                                                      neptune_experiment=exp,
@@ -192,24 +192,35 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
 
                     if len(test_metrics.wrong_examples) > 0:
                         error_index = torch.tensor(test_metrics.wrong_examples[:4], dtype=torch.long)
-                        error_img = test_loader.load(index=error_index)[0].to(reference_imgs.device)
-                        error_output: Output = vae.forward(error_img, draw_image=True, draw_boxes=True, verbose=False)
-                        in_out = torch.cat((error_output.imgs, error_img.expand_as(error_output.imgs)), dim=0)
-                        _ = show_batch(in_out, n_col=4, title="error epoch="+str(epoch),
-                                       experiment=exp, neptune_name="test_errors")
+                    else:
+                        error_index = torch.arange(5, dtype=torch.long)
+
+                    error_img = test_loader.load(index=error_index)[0].to(reference_imgs.device)
+                    error_output: Output = vae.forward(error_img,
+                                                       overlap_threshold=params["nms"]["overlap_threshold_test"],
+                                                       noisy_sampling=False,
+                                                       draw_image=True,
+                                                       draw_boxes=True,
+                                                       draw_bg=True,
+                                                       verbose=False)
+
+                    in_out = torch.cat((error_output.imgs, error_img.expand_as(error_output.imgs)), dim=0)
+                    _ = show_batch(in_out, n_col=in_out.shape[0]//2, title="error epoch="+str(epoch),
+                                   experiment=exp, neptune_name="test_errors")
 
                     output: Output = vae.forward(reference_imgs,
+                                                 overlap_threshold=params["nms"]["overlap_threshold_test"],
                                                  noisy_sampling=False,
-                                                 topk_only=vae.topk_only,
                                                  draw_image=True,
                                                  draw_boxes=True,
+                                                 draw_bg=True,
                                                  verbose=False)
                     plot_reconstruction_and_inference(output, epoch=epoch, prefix="rec_")
                     reference_n_cells_inferred = output.inference.sample_c.sum().item()
                     reference_n_cells_truth = reference_count.sum().item()
                     delta_n_cells = reference_n_cells_inferred - reference_n_cells_truth
                     tmp_dict = {"reference_n_cells_inferred": reference_n_cells_inferred,
-                                "delta_n_cells": delta_n_cells}
+                                "reference_delta_n_cells": delta_n_cells}
                     log_dict_metrics(tmp_dict, prefix="test_", experiment=exp)
                     history_dict = append_to_dict(source=tmp_dict,
                                                   destination=history_dict)

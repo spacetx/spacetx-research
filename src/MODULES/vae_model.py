@@ -351,7 +351,7 @@ class CompositionalVae(torch.nn.Module):
         # start_time = time.time()
         n_objects_max = self.input_img_dict["n_objects_max"] if n_objects_max is None else n_objects_max
         prob_corr_factor = getattr(self, "prob_corr_factor", 0.0) if prob_corr_factor is None else prob_corr_factor
-        overlap_threshold = self.nms_dict["overlap_threshold"] if overlap_threshold is None else overlap_threshold
+        overlap_threshold = self.nms_dict["overlap_threshold_test"] if overlap_threshold is None else overlap_threshold
 
         with torch.no_grad():
             inference: Inference = self.inference_and_generator(imgs_in=batch_imgs,
@@ -567,7 +567,7 @@ class CompositionalVae(torch.nn.Module):
                                                             index_matrix=index_matrix_padded[0, 0, pad_w:pad_w + w_img,
                                                                          pad_h:pad_h + h_img]))
 
-    # this is the generic function which has all the options unspecified
+    # this is the fully generic function which has all the options unspecified
     def process_batch_imgs(self,
                            imgs_in: torch.tensor,
                            generate_synthetic_data: bool,
@@ -618,23 +618,23 @@ class CompositionalVae(torch.nn.Module):
 
     def forward(self,
                 imgs_in: torch.tensor,
+                overlap_threshold: float,
+                noisy_sampling: bool = True,
                 draw_image: bool = False,
                 draw_bg: bool = False,
                 draw_boxes: bool = False,
-                verbose: bool = False,
-                noisy_sampling: bool = True,
-                topk_only: bool = False):
+                verbose: bool = False):
 
         return self.process_batch_imgs(imgs_in=imgs_in,
                                        generate_synthetic_data=False,
-                                       topk_only=topk_only,
+                                       topk_only=False,
                                        draw_image=draw_image,
                                        draw_bg=draw_bg,
                                        draw_boxes=draw_boxes,
                                        verbose=verbose,
                                        noisy_sampling=noisy_sampling,
                                        prob_corr_factor=getattr(self, "prob_corr_factor", 0.0),
-                                       overlap_threshold=self.nms_dict.get("overlap_threshold", 0.3),
+                                       overlap_threshold=overlap_threshold,
                                        n_objects_max=self.input_img_dict["n_objects_max"])
 
     def generate(self,
@@ -653,5 +653,5 @@ class CompositionalVae(torch.nn.Module):
                                            verbose=verbose,
                                            noisy_sampling=True,
                                            prob_corr_factor=0.0,
-                                           overlap_threshold=self.nms_dict.get("overlap_threshold", 0.3),
+                                           overlap_threshold=-1.0,
                                            n_objects_max=self.input_img_dict["n_objects_max"])

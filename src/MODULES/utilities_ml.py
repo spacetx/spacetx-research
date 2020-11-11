@@ -569,7 +569,7 @@ def process_one_epoch(model: torch.nn.Module,
                       weight_clipper: Optional[Callable[[None], None]] = None,
                       verbose: bool = False,
                       noisy_sampling: bool = True,
-                      topk_only: bool = False,
+                      overlap_threshold: float = 0.3,
                       neptune_experiment: Optional[neptune.experiments.Experiment] = None,
                       neptune_prefix: Optional[str] = None) -> MetricMiniBatch:
     """ return a tuple with all the metrics averaged over a epoch """
@@ -584,8 +584,8 @@ def process_one_epoch(model: torch.nn.Module,
             imgs = imgs.cuda()
 
         metrics = model.forward(imgs_in=imgs,
-                                noisy_sampling=noisy_sampling,
-                                topk_only=topk_only).metrics  # the forward function returns metric and other stuff
+                                overlap_threshold=overlap_threshold,
+                                noisy_sampling=noisy_sampling).metrics  # the forward function returns metric and other stuff
         if verbose:
             print("i = %3d train_loss=%.5f" % (i, metrics.loss))
 
