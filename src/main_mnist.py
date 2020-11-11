@@ -238,7 +238,8 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                     #log_concordance(concordance=concordance_vs_gt, prefix="concordance_vs_gt_")
 
                     generated: Output = vae.generate(imgs_in=reference_imgs,
-                                                     draw_boxes=True)
+                                                     draw_boxes=True,
+                                                     draw_bg=True)
                     plot_generation(generated, epoch=epoch, prefix="gen_", experiment=exp)
 
                     test_loss = test_metrics.loss
