@@ -133,7 +133,6 @@ class Inference_and_Generation(torch.nn.Module):
                                         similarity_kernel=similarity_kernel,
                                         noisy_sampling=noisy_sampling,
                                         sample_from_prior=generate_synthetic_data)
-        # print("c_map.shape", c_map.shape)  # shape: batch_size, 1, w, h
 
         # NMS + top-K operation
         with torch.no_grad():
