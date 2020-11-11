@@ -140,7 +140,8 @@ NUM_EPOCHS = params["simulation"]["MAX_EPOCHS"]
 torch.cuda.empty_cache()
 for delta_epoch in range(1, NUM_EPOCHS+1):
     epoch = delta_epoch+epoch_restart    
-    
+
+    vae.topk_only = (epoch > params["nms"]["switch_off_nms_epoch"])
     vae.prob_corr_factor = linear_interpolation(epoch,
                                                 values=params["shortcut_prob_corr_factor"]["values"],
                                                 times=params["shortcut_prob_corr_factor"]["times"])
@@ -151,6 +152,7 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
             vae.train()
             train_metrics = process_one_epoch(model=vae, 
                                               noisy_sampling=True,
+                                              topk_only=vae.topk_only,
                                               dataloader=train_loader,
                                               optimizer=optimizer, 
                                               verbose=(epoch == 0),
@@ -174,6 +176,7 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                     vae.eval()
                     test_metrics = process_one_epoch(model=vae,
                                                      noisy_sampling=False,
+                                                     topk_only=vae.topk_only,
                                                      dataloader=test_loader, 
                                                      optimizer=optimizer, 
                                                      verbose=(epoch == 0),
@@ -197,6 +200,7 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
 
                     output: Output = vae.forward(reference_imgs,
                                                  noisy_sampling=False,
+                                                 topk_only=vae.topk_only,
                                                  draw_image=True,
                                                  draw_boxes=True,
                                                  verbose=False)

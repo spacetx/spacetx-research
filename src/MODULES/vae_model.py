@@ -153,17 +153,16 @@ class CompositionalVae(torch.nn.Module):
             2. overlap make sure that mask do not overlap
         """
 
-        # 1. Mixing probability should become certain
-        xfg = torch.sum(inference.mixing * (inference.mixing-1), dim=-5)
-        # TODO: remove the background from this expression.
-        # xbg = inference.mixing_bg * (inference.mixing_bg - 1)
-        # entropy = (- xfg - xbg).sum(dim=(-1, -2, -3))  # sum over ch, w, h
-        entropy = - xfg.sum(dim=(-1, -2, -3))  # sum over ch, w, h
+        # 1. Mixing probability should become certain.
+        # I want to minimize the entropy: - sum_k pi_k log(pi_k)
+        # Equivalently I can minimize overlap: sum_k pi_k * (1 - pi_k)
+        # Both are minimized if pi_k = 0,1
+        overlap = torch.sum(inference.mixing * (torch.ones_like(inference.mixing) - inference.mixing), dim=-5)  # sum boxes
         cost_overlap = sample_from_constraints_dict(dict_soft_constraints=self.dict_soft_constraints,
                                                     var_name="overlap",
-                                                    var_value=entropy,
+                                                    var_value=overlap,
                                                     verbose=verbose,
-                                                    chosen=chosen)
+                                                    chosen=chosen).sum(dim=(-1, -2, -3))  # sum over ch, w, h
 
         # Mask should have a min and max volume
         volume_mask_absolute = inference.mixing.sum(dim=(-1, -2, -3))  # sum over ch,w,h
@@ -173,6 +172,7 @@ class CompositionalVae(torch.nn.Module):
                                                             verbose=verbose,
                                                             chosen=chosen)
         cost_volume_minibatch = (cost_volume_absolute * inference.sample_c.detach()).sum(dim=-2)  # sum boxes
+
         return RegMiniBatch(reg_overlap=cost_overlap.mean(),            # mean over batch_size
                             reg_area_obj=cost_volume_minibatch.mean())  # mean over batch_size
 
@@ -186,7 +186,6 @@ class CompositionalVae(torch.nn.Module):
                         regularizations: RegMiniBatch) -> MetricMiniBatch:
 
         # Preparation
-        batch_size, ch, w, h = imgs_in.shape
         n_box_few, batch_size = inference.sample_c.shape
 
         # 1. Observation model
@@ -342,6 +341,7 @@ class CompositionalVae(torch.nn.Module):
                 prob_corr_factor: Optional[float] = None,
                 overlap_threshold: Optional[float] = None,
                 noisy_sampling: bool = True,
+                topk_only: bool = False,
                 draw_boxes: bool = False,
                 batch_of_index: Optional[torch.tensor] = None,
                 max_index: Optional[int] = None,
@@ -359,7 +359,7 @@ class CompositionalVae(torch.nn.Module):
                                                                 prob_corr_factor=prob_corr_factor,
                                                                 overlap_threshold=overlap_threshold,
                                                                 n_objects_max=n_objects_max,
-                                                                topk_only=False,
+                                                                topk_only=topk_only,
                                                                 noisy_sampling=noisy_sampling)
 
             # Now compute fg_prob, integer_segmentation_mask, similarity
@@ -403,6 +403,7 @@ class CompositionalVae(torch.nn.Module):
                             n_objects_max_per_patch: Optional[int] = None,
                             prob_corr_factor: Optional[float] = None,
                             overlap_threshold: Optional[float] = None,
+                            topk_only: bool = False,
                             radius_nn: int = 5,
                             batch_size: int = 32) -> Segmentation:
         """ Uses a sliding window approach to collect a co_objectiveness information
@@ -516,6 +517,7 @@ class CompositionalVae(torch.nn.Module):
                                             prob_corr_factor=prob_corr_factor,
                                             overlap_threshold=overlap_threshold,
                                             noisy_sampling=True,
+                                            topk_only=topk_only,
                                             draw_boxes=False,
                                             batch_of_index=batch_index.to(self.sigma_fg.device),
                                             max_index=max_index,
@@ -620,11 +622,12 @@ class CompositionalVae(torch.nn.Module):
                 draw_bg: bool = False,
                 draw_boxes: bool = False,
                 verbose: bool = False,
-                noisy_sampling: bool = True):
+                noisy_sampling: bool = True,
+                topk_only: bool = False):
 
         return self.process_batch_imgs(imgs_in=imgs_in,
                                        generate_synthetic_data=False,
-                                       topk_only=False,
+                                       topk_only=topk_only,
                                        draw_image=draw_image,
                                        draw_bg=draw_bg,
                                        draw_boxes=draw_boxes,
