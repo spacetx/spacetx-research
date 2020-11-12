@@ -200,8 +200,9 @@ class CompositionalVae(torch.nn.Module):
         mse_av = ((inference.mixing * mse).sum(dim=-5) + mixing_bg * mse_bg).mean()  # mean over batch_size, ch, w, h
 
         # TODO: put htis stuff inside torch.no_grad()
-        g_mse = (min(self.geco_dict["target_mse"]) - mse_av).clamp(min=0) + \
-                (max(self.geco_dict["target_mse"]) - mse_av).clamp(max=0)
+        with torch.no_grad():
+            g_mse = (min(self.geco_dict["target_mse"]) - mse_av).clamp(min=0) + \
+                    (max(self.geco_dict["target_mse"]) - mse_av).clamp(max=0)
 
         # 2. Sparsity should encourage:
         # 1. few object
@@ -212,18 +213,22 @@ class CompositionalVae(torch.nn.Module):
         # 1) All the terms contain c=Bernoulli(p). It is actually the same b/c during back prop c=p
         # 2) fg_fraction is based on the selected quantities
         # 3) sparsity n_cell is based on c_map so that the entire matrix becomes sparse.
+        with torch.no_grad():
+            x_sparsity_av = torch.mean(mixing_fg)
+            x_sparsity_max = max(self.geco_dict["target_fgfraction"])
+            x_sparsity_min = min(self.geco_dict["target_fgfraction"])
+            g_sparsity = torch.min(x_sparsity_av - x_sparsity_min, x_sparsity_max - x_sparsity_av)  # positive if in range, negative otherwise
+
         c_times_area_few = inference.sample_c * inference.sample_bb.bw * inference.sample_bb.bh
-        x_sparsity_av = torch.mean(mixing_fg)
-        x_sparsity_max = max(self.geco_dict["target_fgfraction"])
-        x_sparsity_min = min(self.geco_dict["target_fgfraction"])
-        g_sparsity = torch.min(x_sparsity_av - x_sparsity_min, x_sparsity_max - x_sparsity_av)  # positive if in range, negative otherwise
         x_sparsity = 0.5 * (torch.sum(mixing_fg) + torch.sum(c_times_area_few)) / torch.numel(mixing_fg)
         f_sparsity = x_sparsity * torch.sign(x_sparsity_av - x_sparsity_min).detach()
 
-        x_cell_av = torch.sum(inference.sample_c) / batch_size
-        x_cell_max = max(self.geco_dict["target_ncell"])
-        x_cell_min = min(self.geco_dict["target_ncell"])
-        g_cell = torch.min(x_cell_av - x_cell_min, x_cell_max - x_cell_av) / n_box_few  # positive if in range, negative otherwise
+        with torch.no_grad():
+            x_cell_av = torch.sum(inference.sample_c) / batch_size
+            x_cell_max = max(self.geco_dict["target_ncell"])
+            x_cell_min = min(self.geco_dict["target_ncell"])
+            g_cell = torch.min(x_cell_av - x_cell_min, x_cell_max - x_cell_av) / n_box_few  # positive if in range, negative otherwise
+
         x_cell = torch.sum(inference.sample_c_map_before_nms) / (batch_size * n_box_few)
         f_cell = x_cell * torch.sign(x_cell_av - x_cell_min).detach()
 
