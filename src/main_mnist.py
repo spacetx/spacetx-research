@@ -183,7 +183,7 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                     test_metrics = process_one_epoch(model=vae,
                                                      dataloader=test_loader,
                                                      optimizer=optimizer,
-                                                     noisy_sampling=False,
+                                                     noisy_sampling=True,
                                                      overlap_threshold=params["nms"]["overlap_threshold_test"],
                                                      verbose=(epoch == 0),
                                                      weight_clipper=None,
@@ -205,7 +205,7 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                     # print("error_img test")
                     error_output: Output = vae.forward(error_img,
                                                        overlap_threshold=params["nms"]["overlap_threshold_test"],
-                                                       noisy_sampling=False,
+                                                       noisy_sampling=True,
                                                        draw_image=True,
                                                        draw_boxes=True,
                                                        draw_bg=True,
@@ -223,6 +223,15 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                                                  draw_boxes=True,
                                                  draw_bg=True,
                                                  verbose=False)
+                    plot_reconstruction_and_inference(output, epoch=epoch, prefix="rec_no_noise_")
+
+                    output: Output = vae.forward(reference_imgs,
+                                                 overlap_threshold=params["nms"]["overlap_threshold_train"],
+                                                 noisy_sampling=True,
+                                                 draw_image=True,
+                                                 draw_boxes=True,
+                                                 draw_bg=True,
+                                                 verbose=False)
                     plot_reconstruction_and_inference(output, epoch=epoch, prefix="rec_")
                     reference_n_cells_inferred = output.inference.sample_c.sum().item()
                     reference_n_cells_truth = reference_count.sum().item()
@@ -235,7 +244,8 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
 
                     # print("segmentation test")
                     segmentation: Segmentation = vae.segment(batch_imgs=reference_imgs,
-                                                             noisy_sampling=False)
+                                                             noisy_sampling=True,
+                                                             overlap_threshold=params["nms"]["overlap_threshold_test"])
                     plot_segmentation(segmentation, epoch=epoch, prefix="seg_", experiment=exp)
 
                     # Here I could add a measure of agreement with the ground truth
