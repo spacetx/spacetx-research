@@ -198,6 +198,8 @@ class CompositionalVae(torch.nn.Module):
                                           target=imgs_in,
                                           sigma=self.sigma_bg)  # batch_size, ch, w, h
         mse_av = ((inference.mixing * mse).sum(dim=-5) + mixing_bg * mse_bg).mean()  # mean over batch_size, ch, w, h
+
+        # TODO: put htis stuff inside torch.no_grad()
         g_mse = (min(self.geco_dict["target_mse"]) - mse_av).clamp(min=0) + \
                 (max(self.geco_dict["target_mse"]) - mse_av).clamp(max=0)
 
@@ -216,14 +218,14 @@ class CompositionalVae(torch.nn.Module):
         x_sparsity_min = min(self.geco_dict["target_fgfraction"])
         g_sparsity = torch.min(x_sparsity_av - x_sparsity_min, x_sparsity_max - x_sparsity_av)  # positive if in range, negative otherwise
         x_sparsity = 0.5 * (torch.sum(mixing_fg) + torch.sum(c_times_area_few)) / torch.numel(mixing_fg)
-        f_sparsity = x_sparsity * torch.sign(x_sparsity_av - x_sparsity_min)
+        f_sparsity = x_sparsity * torch.sign(x_sparsity_av - x_sparsity_min).detach()
 
         x_cell_av = torch.sum(inference.sample_c) / batch_size
         x_cell_max = max(self.geco_dict["target_ncell"])
         x_cell_min = min(self.geco_dict["target_ncell"])
         g_cell = torch.min(x_cell_av - x_cell_min, x_cell_max - x_cell_av) / n_box_few  # positive if in range, negative otherwise
         x_cell = torch.sum(inference.sample_c_map_before_nms) / (batch_size * n_box_few)
-        f_cell = x_cell * torch.sign(x_cell_av - x_cell_min)
+        f_cell = x_cell * torch.sign(x_cell_av - x_cell_min).detach()
 
         # 3. compute KL
         # Note that I compute the mean over batch, latent_dimensions and n_object.
