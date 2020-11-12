@@ -223,7 +223,7 @@ class CompositionalVae(torch.nn.Module):
         f_sparsity = 0.5 * (torch.sum(mixing_fg) + torch.sum(c_times_area_few)) / torch.numel(mixing_fg)
 
         with torch.no_grad():
-            x_cell_av = torch.sum(inference.sample_c_map_before_nms) / batch_size
+            x_cell_av = torch.sum(inference.sample_c_map_after_nms) / batch_size
             x_cell_max = max(self.geco_dict["target_ncell"])
             x_cell_min = min(self.geco_dict["target_ncell"])
             g_cell = ((x_cell_min - x_cell_av).clamp(min=0) + (x_cell_max - x_cell_av).clamp(max=0)) / n_box_few

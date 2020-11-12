@@ -215,16 +215,6 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                     _ = show_batch(in_out, n_col=in_out.shape[0]//2, title="error epoch="+str(epoch),
                                    experiment=exp, neptune_name="test_errors")
 
-                    # print("reference_imgs test")
-                    output: Output = vae.forward(reference_imgs,
-                                                 overlap_threshold=params["nms"]["overlap_threshold_test"],
-                                                 noisy_sampling=False,
-                                                 draw_image=True,
-                                                 draw_boxes=True,
-                                                 draw_bg=True,
-                                                 verbose=False)
-                    plot_reconstruction_and_inference(output, epoch=epoch, prefix="rec_no_noise_")
-
                     output: Output = vae.forward(reference_imgs,
                                                  overlap_threshold=params["nms"]["overlap_threshold_train"],
                                                  noisy_sampling=True,
