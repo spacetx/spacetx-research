@@ -222,7 +222,7 @@ class CompositionalVae(torch.nn.Module):
             g_sparsity = torch.min(x_sparsity_av - x_sparsity_min, x_sparsity_max - x_sparsity_av)  # positive if in range
         c_times_area_few = inference.sample_c * inference.sample_bb.bw * inference.sample_bb.bh
         x_sparsity = 0.5 * (torch.sum(mixing_fg) + torch.sum(c_times_area_few)) / torch.numel(mixing_fg)
-        f_sparsity = x_sparsity * torch.sign(x_sparsity_av - x_sparsity_min).detahc()
+        f_sparsity = x_sparsity * torch.sign(x_sparsity_av - x_sparsity_min).detach()
 
         with torch.no_grad():
             x_cell_av = torch.sum(inference.sample_c_map_after_nms) / batch_size
