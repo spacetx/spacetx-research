@@ -110,7 +110,7 @@ class Inference_and_Generation(torch.nn.Module):
                 n_boxes_all, batch_size = av_intensity.shape
                 ranking = compute_ranking(av_intensity)  # n_boxes_all, batch. It is in [0,n_box_all-1]
                 tmp = (ranking + 1).float() / n_boxes_all  # less or equal to 1
-                q_approx = tmp.pow(10)
+                q_approx = tmp.pow(10)  # suppress most probabilities but keep few close to 1.
                 p_map_delta = invert_convert_to_box_list(q_approx.unsqueeze(-1),
                                                          original_width=unet_output.logit.shape[-2],
                                                          original_height=unet_output.logit.shape[-1])
