@@ -160,8 +160,8 @@ def draw_img(bounding_box: BB,
     assert len(c.shape) == 2  # boxes, batch
     assert len(mixing_k.shape) == len(big_img.shape) == 5  # boxes, batch, ch, w, h
 
-    rec_imgs_no_bb = (c[..., None, None, None] * mixing_k * big_img).sum(dim=-5)  # sum over boxes
-    fg_mask = (c[..., None, None, None] * mixing_k).sum(dim=-5)  # sum over boxes
+    rec_imgs_no_bb = (mixing_k * big_img).sum(dim=-5)  # sum over boxes
+    fg_mask = mixing_k.sum(dim=-5)  # sum over boxes
     background = (1 - fg_mask) * big_bg if draw_bg else torch.zeros_like(big_bg)
 
     width, height = rec_imgs_no_bb.shape[-2:]

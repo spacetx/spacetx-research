@@ -149,6 +149,7 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
     with torch.autograd.set_detect_anomaly(False):
         with torch.enable_grad():
             vae.train()
+            print("process one epoch train")
             train_metrics = process_one_epoch(model=vae,
                                               dataloader=train_loader,
                                               optimizer=optimizer,
@@ -174,6 +175,11 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                 if (epoch % TEST_FREQUENCY) == 0:
 
                     vae.eval()
+                    print("-------")
+                    print("-------")
+                    print("-------")
+                    print("-------")
+                    print("process one epoch test")
                     test_metrics = process_one_epoch(model=vae,
                                                      dataloader=test_loader,
                                                      optimizer=optimizer,
@@ -196,6 +202,7 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                         error_index = torch.arange(5, dtype=torch.long)
 
                     error_img = test_loader.load(index=error_index)[0].to(reference_imgs.device)
+                    print("error_img test")
                     error_output: Output = vae.forward(error_img,
                                                        overlap_threshold=params["nms"]["overlap_threshold_test"],
                                                        noisy_sampling=False,
@@ -208,6 +215,7 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                     _ = show_batch(in_out, n_col=in_out.shape[0]//2, title="error epoch="+str(epoch),
                                    experiment=exp, neptune_name="test_errors")
 
+                    print("reference_imgs test")
                     output: Output = vae.forward(reference_imgs,
                                                  overlap_threshold=params["nms"]["overlap_threshold_test"],
                                                  noisy_sampling=False,
@@ -225,6 +233,7 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                     history_dict = append_to_dict(source=tmp_dict,
                                                   destination=history_dict)
 
+                    print("segmentation test")
                     segmentation: Segmentation = vae.segment(batch_imgs=reference_imgs,
                                                              noisy_sampling=False)
                     plot_segmentation(segmentation, epoch=epoch, prefix="seg_", experiment=exp)
@@ -237,6 +246,7 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                     #plot_concordance(concordance=concordance_vs_gt, neptune_name="concordance_vs_gt_")
                     #log_concordance(concordance=concordance_vs_gt, prefix="concordance_vs_gt_")
 
+                    print("generation test")
                     generated: Output = vae.generate(imgs_in=reference_imgs,
                                                      draw_boxes=True,
                                                      draw_bg=True)
@@ -245,22 +255,22 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                     test_loss = test_metrics.loss
                     min_test_loss = min(min_test_loss, test_loss)
 
-                    if (test_loss == min_test_loss) or (epoch % CHECKPOINT_FREQUENCY == 0):
-                        ckpt = create_ckpt(model=vae,
-                                           optimizer=optimizer,
-                                           epoch=epoch,
-                                           hyperparams_dict=params,
-                                           history_dict=history_dict)
-                        log_object_as_artifact(name="last_ckpt", obj=ckpt)  # log file into neptune
-                        plot_all_from_dictionary(history_dict,
-                                                 params,
-                                                 test_frequency=TEST_FREQUENCY,
-                                                 train_or_test="test",
-                                                 verbose=True)
-                        plot_all_from_dictionary(history_dict,
-                                                 params,
-                                                 test_frequency=TEST_FREQUENCY,
-                                                 train_or_test="train",
-                                                 verbose=True)
+##                    if (test_loss == min_test_loss) or (epoch % CHECKPOINT_FREQUENCY == 0):
+##                        ckpt = create_ckpt(model=vae,
+##                                           optimizer=optimizer,
+##                                           epoch=epoch,
+##                                           hyperparams_dict=params,
+##                                           history_dict=history_dict)
+##                        log_object_as_artifact(name="last_ckpt", obj=ckpt)  # log file into neptune
+##                        plot_all_from_dictionary(history_dict,
+##                                                 params,
+##                                                 test_frequency=TEST_FREQUENCY,
+##                                                 train_or_test="test",
+##                                                 verbose=True)
+##                        plot_all_from_dictionary(history_dict,
+##                                                 params,
+##                                                 test_frequency=TEST_FREQUENCY,
+##                                                 train_or_test="train",
+##                                                 verbose=True)
 
 exp.stop()

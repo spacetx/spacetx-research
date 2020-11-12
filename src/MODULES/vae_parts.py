@@ -114,6 +114,7 @@ class Inference_and_Generation(torch.nn.Module):
                 p_map_delta = invert_convert_to_box_list(q_approx.unsqueeze(-1),
                                                          original_width=unet_output.logit.shape[-2],
                                                          original_height=unet_output.logit.shape[-1])
+                print("p_map_delta.shape", p_map_delta.shape, p_map_delta.mean())
 
         # Now I have p, log(p), log(1-p)
         if (prob_corr_factor > 0) and (prob_corr_factor <= 1.0):
@@ -126,6 +127,7 @@ class Inference_and_Generation(torch.nn.Module):
             log_p_map = F.logsigmoid(unet_output.logit)
             log_one_minus_p_map = F.logsigmoid(-unet_output.logit)
 
+
         # Sample the probability map from prior or posterior
         similarity_kernel = self.similarity_kernel_dpp.forward(n_width=unet_output.logit.shape[-2],
                                                                n_height=unet_output.logit.shape[-1])
@@ -136,6 +138,10 @@ class Inference_and_Generation(torch.nn.Module):
 
         # NMS + top-K operation
         with torch.no_grad():
+
+            print("DEBUG prob_corr_factor, P_MAX", prob_corr_factor, p_map.max(),
+                  c_map_before_nms.sum(dim=(-1, -2, -3)).float().mean())
+
             score = convert_to_box_list(c_map_before_nms+p_map).squeeze(-1)  # shape: n_box_all, batch_size
             combined_topk_only = topk_only or generate_synthetic_data  # if generating from DPP do not do NMS
             nms_output: NMSoutput = NonMaxSuppression.compute_mask_and_index(score=score,
@@ -160,6 +166,7 @@ class Inference_and_Generation(torch.nn.Module):
         kl_logit = kl_logit_posterior - kl_logit_prior  # this will make adjust DPP and keep entropy of posterior
 
         c_few = torch.gather(convert_to_box_list(c_map_before_nms).squeeze(-1), dim=0, index=nms_output.index_top_k)
+        print("DEBUG nms_output.index_top_k.shape, c_few.mean()", nms_output.index_top_k.shape, c_few.sum(dim=0).float().mean())
 
         bounding_box_few: BB = BB(bx=torch.gather(bounding_box_all.bx, dim=0, index=nms_output.index_top_k),
                                   by=torch.gather(bounding_box_all.by, dim=0, index=nms_output.index_top_k),
@@ -200,7 +207,7 @@ class Inference_and_Generation(torch.nn.Module):
                                      height_big=height_raw_image)  # shape: n_box, batch, ch, w, h
         big_mask, big_img = torch.split(big_stuff, split_size_or_sections=(1, big_stuff.shape[-3]-1), dim=-3)
         big_mask_times_c = big_mask * c_few[..., None, None, None]  # this is strictly smaller than 1
-        mixing = big_mask_times_c / big_mask_times_c.sum(dim=-5).clamp_(min=1.0)  # softplus-like function
+        mixing = big_mask_times_c / big_mask_times_c.sum(dim=-5).clamp_(min=1.0).detach()  # softplus-like function
         similarity_l, similarity_w = self.similarity_kernel_dpp.get_l_w()
 
         return Inference(prob_map=p_map,
