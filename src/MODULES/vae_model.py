@@ -217,20 +217,27 @@ class CompositionalVae(torch.nn.Module):
             x_sparsity_av = torch.mean(mixing_fg)
             x_sparsity_max = max(self.geco_dict["target_fgfraction"])
             x_sparsity_min = min(self.geco_dict["target_fgfraction"])
-            g_sparsity = torch.min(x_sparsity_av - x_sparsity_min, x_sparsity_max - x_sparsity_av)  # positive if in range, negative otherwise
+            # g_sparsity = torch.min(x_sparsity_av - x_sparsity_min, x_sparsity_max - x_sparsity_av)  # positive if in range, negative otherwise
+            g_sparsity = (x_sparsity_min - x_sparsity_av).clamp(min=0) + \
+                         (x_sparsity_max - x_sparsity_av).clamp(max=0)
+
+        # c_times_area_few = inference.sample_c * inference.sample_bb.bw * inference.sample_bb.bh
+        # x_sparsity = 0.5 * (torch.sum(mixing_fg) + torch.sum(c_times_area_few)) / torch.numel(mixing_fg)
+        # f_sparsity = x_sparsity * torch.sign(x_sparsity_av - x_sparsity_min).detach()
 
         c_times_area_few = inference.sample_c * inference.sample_bb.bw * inference.sample_bb.bh
-        x_sparsity = 0.5 * (torch.sum(mixing_fg) + torch.sum(c_times_area_few)) / torch.numel(mixing_fg)
-        f_sparsity = x_sparsity * torch.sign(x_sparsity_av - x_sparsity_min).detach()
+        f_sparsity = 0.5 * (torch.sum(mixing_fg) + torch.sum(c_times_area_few)) / torch.numel(mixing_fg)
 
         with torch.no_grad():
             x_cell_av = torch.sum(inference.sample_c) / batch_size
             x_cell_max = max(self.geco_dict["target_ncell"])
             x_cell_min = min(self.geco_dict["target_ncell"])
-            g_cell = torch.min(x_cell_av - x_cell_min, x_cell_max - x_cell_av) / n_box_few  # positive if in range, negative otherwise
+            # g_cell = torch.min(x_cell_av - x_cell_min, x_cell_max - x_cell_av) / n_box_few  # positive if in range, negative otherwise
+            g_cell = ((x_cell_min - x_cell_av).clamp(min=0) + (x_cell_max - x_cell_av).clamp(max=0)) / n_box_few
 
-        x_cell = torch.sum(inference.sample_c_map_before_nms) / (batch_size * n_box_few)
-        f_cell = x_cell * torch.sign(x_cell_av - x_cell_min).detach()
+        # x_cell = torch.sum(inference.sample_c_map_before_nms) / (batch_size * n_box_few)
+        # f_cell = x_cell * torch.sign(x_cell_av - x_cell_min).detach()
+        f_cell = torch.sum(inference.sample_c_map_before_nms) / (batch_size * n_box_few)
 
         # 3. compute KL
         # Note that I compute the mean over batch, latent_dimensions and n_object.
