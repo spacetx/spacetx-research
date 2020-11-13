@@ -64,31 +64,24 @@ class EncoderBackground(nn.Module):
         self.ch_in = ch_in
         self.dim_z = dim_z
 
-        ch_hidden = (CH_BG_MAP + dim_z)//2
-
-        self.bg_map_before = MLP_1by1(ch_in=ch_in, ch_out=CH_BG_MAP, ch_hidden=-1)
+        # self.global_avg_2D = nn.AdaptiveAvgPool2d(output_size=(1,1))
+        # self.global_max_2D = nn.AdaptiveMaxPool2d(output_size=1)
         self.adaptive_avg_2D = nn.AdaptiveAvgPool2d(output_size=LOW_RESOLUTION_BG)
-        self.adaptive_max_2D = nn.AdaptiveAvgPool2d(output_size=LOW_RESOLUTION_BG)
+        self.adaptive_max_2D = nn.AdaptiveMaxPool2d(output_size=LOW_RESOLUTION_BG)
 
-        self.convolutional = nn.Sequential(
-            MLP_1by1(ch_in=2 * CH_BG_MAP, ch_out=CH_BG_MAP, ch_hidden=-1),  # 5x5
+        self.encode = nn.Sequential(
+            nn.Conv2d(in_channels=2 * ch_in, out_channels=CH_BG_MAP, kernel_size=1, stride=1, padding=0, bias=True),  # 5x5
             nn.ReLU(inplace=True),
-            nn.Conv2d(in_channels=CH_BG_MAP, out_channels=CH_BG_MAP, kernel_size=3),  # 3x3
+            nn.Conv2d(in_channels=CH_BG_MAP, out_channels=CH_BG_MAP, kernel_size=5),  # 1x1
+            nn.Flatten(start_dim=-3),  # batch, channels
             nn.ReLU(inplace=True),
-            nn.Conv2d(in_channels=CH_BG_MAP, out_channels=CH_BG_MAP, kernel_size=3),  # 1x1
-            nn.ReLU(inplace=True))
-
-        self.linear = nn.Sequential(
-            nn.Linear(in_features=CH_BG_MAP, out_features=ch_hidden),
-            nn.ReLU(inplace=True),
-            nn.Linear(in_features=ch_hidden, out_features=2*self.dim_z))
+            torch.nn.Linear(in_features=CH_BG_MAP, out_features=2*self.dim_z))
 
     def forward(self, x: torch.Tensor) -> ZZ:
-        # TODO: see how fast.ai does UNET
-        y1 = self.bg_map_before(x)  # B, 32, small_w, small_h
-        y2 = torch.cat((self.adaptive_avg_2D(y1), self.adaptive_max_2D(y1)), dim=-3)  # 2*ch_bg_map , low_res, low_res
-        y3 = self.convolutional(y2)  # B, 32, 1, 1
-        mu, std = torch.split(self.linear(y3.flatten(start_dim=-3)), self.dim_z, dim=-1)  # B, dim_z
+
+        # y_global = torch.cat((self.global_avg_2D(x), self.global_max_2D(x)), dim=-3) # B, ch_in , 1 , 1
+        y_spatial = torch.cat((self.adaptive_avg_2D(x), self.adaptive_max_2D(x)), dim=-3)  # B, ch_in, 5, 5
+        mu, std = torch.split(self.encode(y_spatial), self.dim_z, dim=-1)  # B, dim_z
         return ZZ(mu=mu, std=F.softplus(std) + EPS_STD)
 
 
