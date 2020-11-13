@@ -258,11 +258,12 @@ class CompositionalVae(torch.nn.Module):
 
         reg_av = regularizations.total()
         sparsity_av = geco_fgfraction_detached * f_sparsity + geco_ncell_detached * f_cell
-        loss_vae = sparsity_av + geco_mse_detached * (mse_av + reg_av) + one_minus_geco_mse_detached * kl_av
-        loss_geco = self.geco_fgfraction * g_sparsity.detach() + \
-                    self.geco_ncell * g_cell.detach() + \
-                    self.geco_mse * g_mse.detach()
-        loss = loss_vae + loss_geco - loss_geco.detach()
+#####        loss_vae = sparsity_av + geco_mse_detached * (mse_av + reg_av) + one_minus_geco_mse_detached * kl_av
+#####        loss_geco = self.geco_fgfraction * g_sparsity.detach() + \
+#####                    self.geco_ncell * g_cell.detach() + \
+#####                    self.geco_mse * g_mse.detach()
+#####        loss = loss_vae + loss_geco - loss_geco.detach()
+        loss = geco_mse_detached * mse_av + one_minus_geco_mse_detached * kl_av
 
         # add everything you want as long as there is one loss
         return MetricMiniBatch(loss=loss,

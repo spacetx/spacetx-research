@@ -206,12 +206,12 @@ class Inference_and_Generation(torch.nn.Module):
 
         return Inference(prob_map=p_map,
                          big_bg=big_bg,
-                         mixing=mixing,
+                         mixing=torch.zeros_like(mixing),
                          big_img=big_img,
                          # the sample of the 4 latent variables
-                         sample_c_map_before_nms=c_map_before_nms,
-                         sample_c_map_after_nms=(c_map_before_nms * mask_map),
-                         sample_c=c_few,
+                         sample_c_map_before_nms=torch.zeros_like(c_map_before_nms),
+                         sample_c_map_after_nms=torch.zeros_like(c_map_before_nms * mask_map),
+                         sample_c=torch.zeros_like(c_few),
                          sample_bb=bounding_box_few,
                          sample_zwhere=zwhere_sample_few,
                          sample_zinstance=zinstance_few.sample,
