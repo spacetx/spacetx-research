@@ -295,6 +295,7 @@ def show_batch(images: torch.Tensor,
         
     fig = plt.figure(figsize=figsize)
     plt.imshow(grid.detach().permute(1, 2, 0).squeeze(-1).numpy())
+    plt.axis("off")
     if isinstance(title, str):
         plt.title(title)
     fig.tight_layout()

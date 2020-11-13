@@ -35,8 +35,6 @@ class Inference_and_Generation(torch.nn.Module):
         self.size_min: int = params["input_image"]["size_object_min"]
         self.cropped_size: int = params["architecture"]["cropped_size"]
 
-
-
         # modules
         self.similarity_kernel_dpp = SimilarityKernel(n_kernels=params["DPP"]["n_kernels"])
         self.unet: UNet = UNet(params)
