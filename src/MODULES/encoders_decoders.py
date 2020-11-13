@@ -80,6 +80,7 @@ class EncoderBackground(nn.Module):
     def forward(self, x: torch.Tensor) -> ZZ:
 
         # y_global = torch.cat((self.global_avg_2D(x), self.global_max_2D(x)), dim=-3) # B, ch_in , 1 , 1
+        print("DEBUG",x.shape)
         y_spatial = torch.cat((self.adaptive_avg_2D(x), self.adaptive_max_2D(x)), dim=-3)  # B, ch_in, 5, 5
         mu, std = torch.split(self.encode(y_spatial), self.dim_z, dim=-1)  # B, dim_z
         return ZZ(mu=mu, std=F.softplus(std) + EPS_STD)
