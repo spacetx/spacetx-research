@@ -27,7 +27,11 @@ def contours_from_labels(labels: numpy.ndarray,
     return contours
 
 
-def add_red_contours(image: numpy.ndarray, contours: numpy.ndarray) -> numpy.ndarray:
+def add_red_contours(image: numpy.ndarray, contours: numpy.ndarray):
+    return draw_contours(image, contours, 'red')
+
+
+def draw_contours(image: numpy.ndarray, contours: numpy.ndarray, contours_color: str = 'red') -> numpy.ndarray:
     assert isinstance(image, numpy.ndarray)
     assert isinstance(contours, numpy.ndarray)
     assert contours.dtype == bool
@@ -37,8 +41,17 @@ def add_red_contours(image: numpy.ndarray, contours: numpy.ndarray) -> numpy.nda
         image_with_contours = skimage.color.gray2rgb(image)
     else:
         raise Exception
-    image_with_contours[contours, 0] = numpy.max(image_with_contours)
-    image_with_contours[contours, 1:] = 0
+    if contours_color == 'red':
+        ch_index = 0
+    elif contours_color == 'green':
+        ch_index = 1
+    elif contours_color == 'blue':
+        ch_index = 2
+    else:
+        raise Exception("contours_color not recognized. Should be 'red' or 'green' or 'blue'")
+
+    image_with_contours[contours, :] = 0
+    image_with_contours[contours, ch_index] = numpy.max(image_with_contours)
     return image_with_contours
 
 
@@ -101,6 +114,7 @@ def plot_label_contours(label: Union[torch.Tensor, numpy.ndarray],
                         image: Union[torch.Tensor, numpy.ndarray],
                         window: Optional[tuple] = None,
                         contour_thickness: int = 2,
+                        contour_color: str = 'red',
                         figsize: tuple = (24, 24),
                         experiment: Optional[neptune.experiments.Experiment] = None,
                         neptune_name: Optional[str] = None):
@@ -121,7 +135,8 @@ def plot_label_contours(label: Union[torch.Tensor, numpy.ndarray],
         image = image[..., 0]
 
     assert image.shape[:2] == label.shape[:2]
-    
+
+    print(window)
     if window is None:
         window = [0, 0, label.shape[-2], label.shape[-1]]
     else:
@@ -129,14 +144,17 @@ def plot_label_contours(label: Union[torch.Tensor, numpy.ndarray],
                   max(0, window[1]),
                   min(label.shape[-2], window[2]),
                   min(label.shape[-1], window[3]))
-        
 
     contours = contours_from_labels(label[window[0]:window[2], window[1]:window[3]], contour_thickness)
+    img_with_contours = draw_contours(image=image[window[0]:window[2], window[1]:window[3]],
+                                      contours=contours,
+                                      contours_color=contour_color)
+
     fig, ax = plt.subplots(ncols=3, figsize=figsize)
-    ax[0].imshow(image[window[0]:window[2],window[1]:window[3]])
-    ax[1].imshow(add_red_contours(image[window[0]:window[2],window[1]:window[3]], contours))
-    ax[2].imshow(skimage.color.label2rgb(label=label[window[0]:window[2],window[1]:window[3]],
-                                         image=image[window[0]:window[2],window[1]:window[3]],
+    ax[0].imshow(image[window[0]:window[2], window[1]:window[3]], cmap='gray')
+    ax[1].imshow(img_with_contours)
+    ax[2].imshow(skimage.color.label2rgb(label=label[window[0]:window[2], window[1]:window[3]],
+                                         image=image[window[0]:window[2], window[1]:window[3]],
                                          alpha=0.25, 
                                          bg_label=0))
 

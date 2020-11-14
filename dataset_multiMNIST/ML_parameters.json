@@ -5,7 +5,7 @@
  "simulation" : {
    "__comment" : "there are 3 types of runs: scratch, resume, pretrained",
    "type" : "scratch",
-   "MAX_EPOCHS" : 501,
+   "MAX_EPOCHS" : 1501,
    "TEST_FREQUENCY" : 50,
    "CHECKPOINT_FREQUENCY" : 50,
    "batch_size" : 128
