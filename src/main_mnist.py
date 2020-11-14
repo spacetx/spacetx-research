@@ -175,11 +175,6 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                 if (epoch % TEST_FREQUENCY) == 0:
 
                     vae.eval()
-                    # print("-------")
-                    # print("-------")
-                    # print("-------")
-                    # print("-------")
-                    # print("process one epoch test")
                     test_metrics = process_one_epoch(model=vae,
                                                      dataloader=test_loader,
                                                      optimizer=optimizer,

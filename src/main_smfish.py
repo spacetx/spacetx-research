@@ -175,13 +175,16 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
     with torch.autograd.set_detect_anomaly(False):
         with torch.enable_grad():
             vae.train()
-            train_metrics = process_one_epoch(model=vae, 
-                                              dataloader=train_loader, 
-                                              optimizer=optimizer, 
+            train_metrics = process_one_epoch(model=vae,
+                                              dataloader=train_loader,
+                                              optimizer=optimizer,
+                                              noisy_sampling=True,
+                                              overlap_threshold=params["nms"]["overlap_threshold_train"],
                                               verbose=(epoch == 0),
                                               weight_clipper=None,
                                               neptune_experiment=exp,
                                               neptune_prefix="train_")
+
             print("Train " + train_metrics.pretty_print(epoch))
 
             if params["optimizer"]["scheduler_is_active"]:
@@ -197,29 +200,41 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                 if (epoch % TEST_FREQUENCY) == 0:
 
                     vae.eval()
-                    test_metrics = process_one_epoch(model=vae, 
-                                                     dataloader=test_loader, 
-                                                     optimizer=optimizer, 
+                    test_metrics = process_one_epoch(model=vae,
+                                                     dataloader=test_loader,
+                                                     optimizer=optimizer,
+                                                     noisy_sampling=True,
+                                                     overlap_threshold=params["nms"]["overlap_threshold_test"],
                                                      verbose=(epoch == 0),
                                                      weight_clipper=None,
                                                      neptune_experiment=exp,
                                                      neptune_prefix="test_")
+
                     print("Test  "+test_metrics.pretty_print(epoch))
                     history_dict = append_to_dict(source=test_metrics,
                                                   destination=history_dict,
                                                   prefix_exclude="wrong_examples",
                                                   prefix_to_add="test_")
-                    
-                    output: Output = vae.forward(reference_imgs, draw_image=True, draw_boxes=True, verbose=False)
+
+                    output: Output = vae.forward(reference_imgs,
+                                                 overlap_threshold=params["nms"]["overlap_threshold_train"],
+                                                 noisy_sampling=True,
+                                                 draw_image=True,
+                                                 draw_boxes=True,
+                                                 draw_bg=True,
+                                                 verbose=False)
                     plot_reconstruction_and_inference(output, epoch=epoch, prefix="rec_")
-                    reference_n_cells = output.inference.sample_c_map.sum().item()
-                    tmp_dict = {"reference_n_cells": reference_n_cells}
-                    log_dict_metrics(tmp_dict)
+                    reference_n_cells_inferred = output.inference.sample_c.sum().item()
+                    tmp_dict = {"reference_n_cells_inferred": reference_n_cells_inferred}
+                    log_dict_metrics(tmp_dict, prefix="test_", experiment=exp)
                     history_dict = append_to_dict(source=tmp_dict,
                                                   destination=history_dict)
 
-                    segmentation: Segmentation = vae.segment(batch_imgs=reference_imgs)
-                    plot_segmentation(segmentation, epoch=epoch, prefix="seg_")
+                    # print("segmentation test")
+                    segmentation: Segmentation = vae.segment(batch_imgs=reference_imgs,
+                                                             noisy_sampling=True,
+                                                             overlap_threshold=params["nms"]["overlap_threshold_test"])
+                    plot_segmentation(segmentation, epoch=epoch, prefix="seg_", experiment=exp)
 
                     generated: Output = vae.generate(imgs_in=reference_imgs, draw_boxes=True)
                     plot_generation(generated, epoch=epoch, prefix="gen_")
@@ -262,8 +277,8 @@ tiling: Segmentation = vae.segment_with_tiling(single_img=img_to_segment,
                                                crop_size=None,
                                                stride=(40, 40),
                                                n_objects_max_per_patch=None,
-                                               prob_corr_factor=None,
-                                               overlap_threshold=None,
+                                               prob_corr_factor=0,
+                                               overlap_threshold=params["nms"]["overlap_threshold_test"],
                                                radius_nn=10,
                                                batch_size=64)
 log_object_as_artifact(name="tiling", obj=tiling, verbose=True)
@@ -271,7 +286,7 @@ tiling_fig = plot_tiling(tiling, neptune_name="tiling_before_graph")
 
 # perform graph analysis
 g = GraphSegmentation(tiling, min_fg_prob=0.1, min_edge_weight=0.01, normalize_graph_edges=True)
-partition_graph = g.find_partition_leiden(resolution=1.0,
+partition_graph = g.find_partition_leiden(resolution=20.0,
                                           window=None,
                                           min_size=30,
                                           cpm_or_modularity="modularity",
