@@ -5,19 +5,17 @@
  "simulation" : {
    "__comment" : "there are 3 types of runs: scratch, resume, pretrained",
    "type" : "scratch",
-   "MAX_EPOCHS" : 751,
+   "MAX_EPOCHS" : 501,
    "TEST_FREQUENCY" : 50,
    "CHECKPOINT_FREQUENCY" : 50,
-   "batch_size" : 128,
-   "N_test" : 128,
-   "N_train" : 512
+   "batch_size" : 128
  },
 
  "architecture" : {
    "__comment" : "architecture parameters, level_zwhere_output is between 0 and n_max_pool included",
    "dim_zinstance" : 20,
    "dim_zwhere" : 4,
-   "dim_zbg" : 4,
+   "dim_zbg" : 20,
    "dim_logit" : 1,
    "cropped_size" : 28,
    "n_max_pool" : 4,
@@ -45,21 +43,21 @@
 
  "nms" : {
    "__comment" : "parameters for the non-max-suppression",
-   "overlap_threshold" : 0.3
+   "overlap_threshold_train" : 0.3,
+   "overlap_threshold_test" : 0.5
  },
-
 
  "GECO_loss" : {
    "__comment" : "if active=false use ELBO, else use GECO with Log-Likelihood threshold = n_pixels * n_channel * threshold",
    "is_active" : true,
 
    "geco_mse_range" : [0.1, 0.8, 0.9],
-   "geco_fgfraction_range" : [0.1, 1.0, 3.0],
-   "geco_ncell_range" : [0.1, 1.0, 3.0],
+   "geco_fgfraction_range" : [0.1, 1.0, 10.0],
+   "geco_ncell_range" : [0.1, 1.0, 10.0],
 
-   "target_fgfraction" : [0.08, 0.15],
-   "target_mse" : [0.95, 1.00],
-   "target_ncell" : [3.5, 4.5],
+   "target_fgfraction" : [0.05, 0.15],
+   "target_mse" : [0.25, 0.75],
+   "target_ncell" : [3.0, 5.0],
 
    "bg_std" : 0.1,
    "fg_std" : 0.1
@@ -84,8 +82,8 @@
 
  "shortcut_prob_corr_factor" : {
   "__comment" : "parameters for the shortcut for porb_corr_factor",
-  "values" : [0.5, 0.0],
-  "times" : [25, 50]
+  "values" : [0.4, 0.0],
+  "times" : [50, 150]
  },
 
  "soft_constraint" : {
@@ -94,7 +92,7 @@
 
   "overlap": {
     "__comment": "cost which discourages masks from overlapping",
-    "strength": 1E-2,
+    "strength": 0,
     "exponent": 1
   },
 

@@ -1,11 +1,11 @@
 {
   "neptune_ml.credentials_json": "gs://ld-data-bucket/credentials.json",
-  "neptune_ml.data_train": "gs://ld-data-bucket/cell_segmenter/multiMNIST/multi_mnist_train.pt",
-  "neptune_ml.data_test": "gs://ld-data-bucket/cell_segmenter/multiMNIST/multi_mnist_test.pt",
+  "neptune_ml.data_train": "gs://ld-data-bucket/cell_segmenter/multiMNIST/DISCRETE_GRID_multi_mnist_train.pt",
+  "neptune_ml.data_test": "gs://ld-data-bucket/cell_segmenter/multiMNIST/DISCRETE_GRID_multi_mnist_test.pt",
   "neptune_ml.ckpt": "gs://ld-data-bucket/cell_segmenter/multiMNIST/dummy1.pt",
   "neptune_ml.ground_truth": "gs://ld-data-bucket/cell_segmenter/multiMNIST/dummy2.pt",
-  "neptune_ml.git_branch_or_commit": "cff87ae1ee63804349d223db9a714dd6141c2ded",
-"neptune_ml.git_repo":  "https://github.com/spacetx/spacetx-research.git",
+  "neptune_ml.git_branch_or_commit": "75e27a593c9267a0ff445a81468fb2e669d7f329",
+ "neptune_ml.git_repo":  "https://github.com/spacetx/spacetx-research.git",
   "neptune_ml.main_file_name": "main_mnist.py"
 }
 

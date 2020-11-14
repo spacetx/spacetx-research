@@ -35,8 +35,6 @@ class Inference_and_Generation(torch.nn.Module):
         self.size_min: int = params["input_image"]["size_object_min"]
         self.cropped_size: int = params["architecture"]["cropped_size"]
 
-
-
         # modules
         self.similarity_kernel_dpp = SimilarityKernel(n_kernels=params["DPP"]["n_kernels"])
         self.unet: UNet = UNet(params)
@@ -109,8 +107,8 @@ class Inference_and_Generation(torch.nn.Module):
                 assert len(av_intensity.shape) == 2
                 n_boxes_all, batch_size = av_intensity.shape
                 ranking = compute_ranking(av_intensity)  # n_boxes_all, batch. It is in [0,n_box_all-1]
-                tmp = ((ranking + 1).float() / (n_boxes_all + 1))
-                q_approx = tmp.pow(10)
+                tmp = (ranking + 1).float() / n_boxes_all  # less or equal to 1
+                q_approx = tmp.pow(10)  # suppress most probabilities but keep few close to 1.
                 p_map_delta = invert_convert_to_box_list(q_approx.unsqueeze(-1),
                                                          original_width=unet_output.logit.shape[-2],
                                                          original_height=unet_output.logit.shape[-1])
@@ -126,6 +124,7 @@ class Inference_and_Generation(torch.nn.Module):
             log_p_map = F.logsigmoid(unet_output.logit)
             log_one_minus_p_map = F.logsigmoid(-unet_output.logit)
 
+
         # Sample the probability map from prior or posterior
         similarity_kernel = self.similarity_kernel_dpp.forward(n_width=unet_output.logit.shape[-2],
                                                                n_height=unet_output.logit.shape[-1])
@@ -133,7 +132,6 @@ class Inference_and_Generation(torch.nn.Module):
                                         similarity_kernel=similarity_kernel,
                                         noisy_sampling=noisy_sampling,
                                         sample_from_prior=generate_synthetic_data)
-        # print("c_map.shape", c_map.shape)  # shape: batch_size, 1, w, h
 
         # NMS + top-K operation
         with torch.no_grad():

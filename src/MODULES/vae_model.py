@@ -153,17 +153,16 @@ class CompositionalVae(torch.nn.Module):
             2. overlap make sure that mask do not overlap
         """
 
-        # 1. Mixing probability should become certain
-        xfg = torch.sum(inference.mixing * (inference.mixing-1), dim=-5)
-        # TODO: remove the background from this expression.
-        # xbg = inference.mixing_bg * (inference.mixing_bg - 1)
-        # entropy = (- xfg - xbg).sum(dim=(-1, -2, -3))  # sum over ch, w, h
-        entropy = - xfg.sum(dim=(-1, -2, -3))  # sum over ch, w, h
+        # 1. Mixing probability should become certain.
+        # I want to minimize the entropy: - sum_k pi_k log(pi_k)
+        # Equivalently I can minimize overlap: sum_k pi_k * (1 - pi_k)
+        # Both are minimized if pi_k = 0,1
+        overlap = torch.sum(inference.mixing * (torch.ones_like(inference.mixing) - inference.mixing), dim=-5)  # sum boxes
         cost_overlap = sample_from_constraints_dict(dict_soft_constraints=self.dict_soft_constraints,
                                                     var_name="overlap",
-                                                    var_value=entropy,
+                                                    var_value=overlap,
                                                     verbose=verbose,
-                                                    chosen=chosen)
+                                                    chosen=chosen).sum(dim=(-1, -2, -3))  # sum over ch, w, h
 
         # Mask should have a min and max volume
         volume_mask_absolute = inference.mixing.sum(dim=(-1, -2, -3))  # sum over ch,w,h
@@ -173,6 +172,7 @@ class CompositionalVae(torch.nn.Module):
                                                             verbose=verbose,
                                                             chosen=chosen)
         cost_volume_minibatch = (cost_volume_absolute * inference.sample_c.detach()).sum(dim=-2)  # sum boxes
+
         return RegMiniBatch(reg_overlap=cost_overlap.mean(),            # mean over batch_size
                             reg_area_obj=cost_volume_minibatch.mean())  # mean over batch_size
 
@@ -186,7 +186,6 @@ class CompositionalVae(torch.nn.Module):
                         regularizations: RegMiniBatch) -> MetricMiniBatch:
 
         # Preparation
-        batch_size, ch, w, h = imgs_in.shape
         n_box_few, batch_size = inference.sample_c.shape
 
         # 1. Observation model
@@ -199,8 +198,11 @@ class CompositionalVae(torch.nn.Module):
                                           target=imgs_in,
                                           sigma=self.sigma_bg)  # batch_size, ch, w, h
         mse_av = ((inference.mixing * mse).sum(dim=-5) + mixing_bg * mse_bg).mean()  # mean over batch_size, ch, w, h
-        g_mse = (min(self.geco_dict["target_mse"]) - mse_av).clamp(min=0) + \
-                (max(self.geco_dict["target_mse"]) - mse_av).clamp(max=0)
+
+        # TODO: put htis stuff inside torch.no_grad()
+        with torch.no_grad():
+            g_mse = (min(self.geco_dict["target_mse"]) - mse_av).clamp(min=0) + \
+                    (max(self.geco_dict["target_mse"]) - mse_av).clamp(max=0)
 
         # 2. Sparsity should encourage:
         # 1. few object
@@ -211,20 +213,26 @@ class CompositionalVae(torch.nn.Module):
         # 1) All the terms contain c=Bernoulli(p). It is actually the same b/c during back prop c=p
         # 2) fg_fraction is based on the selected quantities
         # 3) sparsity n_cell is based on c_map so that the entire matrix becomes sparse.
+        with torch.no_grad():
+            x_sparsity_av = torch.mean(mixing_fg)
+            x_sparsity_max = max(self.geco_dict["target_fgfraction"])
+            x_sparsity_min = min(self.geco_dict["target_fgfraction"])
+            # g_sparsity = (x_sparsity_min - x_sparsity_av).clamp(min=0) + \
+            #              (x_sparsity_max - x_sparsity_av).clamp(max=0)
+            g_sparsity = torch.min(x_sparsity_av - x_sparsity_min, x_sparsity_max - x_sparsity_av)  # positive if in range
         c_times_area_few = inference.sample_c * inference.sample_bb.bw * inference.sample_bb.bh
-        x_sparsity_av = torch.mean(mixing_fg)
-        x_sparsity_max = max(self.geco_dict["target_fgfraction"])
-        x_sparsity_min = min(self.geco_dict["target_fgfraction"])
-        g_sparsity = torch.min(x_sparsity_av - x_sparsity_min, x_sparsity_max - x_sparsity_av)  # positive if in range, negative otherwise
         x_sparsity = 0.5 * (torch.sum(mixing_fg) + torch.sum(c_times_area_few)) / torch.numel(mixing_fg)
-        f_sparsity = x_sparsity * torch.sign(x_sparsity_av - x_sparsity_min)
+        f_sparsity = x_sparsity * torch.sign(x_sparsity_av - x_sparsity_min).detach()
 
-        x_cell_av = torch.sum(inference.sample_c) / batch_size
-        x_cell_max = max(self.geco_dict["target_ncell"])
-        x_cell_min = min(self.geco_dict["target_ncell"])
-        g_cell = torch.min(x_cell_av - x_cell_min, x_cell_max - x_cell_av) / n_box_few # positive if in range, negative otherwise
+        with torch.no_grad():
+            x_cell_av = torch.sum(inference.sample_c_map_after_nms) / batch_size
+            x_cell_max = max(self.geco_dict["target_ncell"])
+            x_cell_min = min(self.geco_dict["target_ncell"])
+            # g_cell = ((x_cell_min - x_cell_av).clamp(min=0) + (x_cell_max - x_cell_av).clamp(max=0)) / n_box_few
+            g_cell = torch.min(x_cell_av - x_cell_min,
+                               x_cell_max - x_cell_av) / n_box_few  # positive if in range, negative otherwise
         x_cell = torch.sum(inference.sample_c_map_before_nms) / (batch_size * n_box_few)
-        f_cell = x_cell * torch.sign(x_cell_av - x_cell_min)
+        f_cell = x_cell * torch.sign(x_cell_av - x_cell_min).detach()
 
         # 3. compute KL
         # Note that I compute the mean over batch, latent_dimensions and n_object.
@@ -342,6 +350,7 @@ class CompositionalVae(torch.nn.Module):
                 prob_corr_factor: Optional[float] = None,
                 overlap_threshold: Optional[float] = None,
                 noisy_sampling: bool = True,
+                topk_only: bool = False,
                 draw_boxes: bool = False,
                 batch_of_index: Optional[torch.tensor] = None,
                 max_index: Optional[int] = None,
@@ -351,7 +360,7 @@ class CompositionalVae(torch.nn.Module):
         # start_time = time.time()
         n_objects_max = self.input_img_dict["n_objects_max"] if n_objects_max is None else n_objects_max
         prob_corr_factor = getattr(self, "prob_corr_factor", 0.0) if prob_corr_factor is None else prob_corr_factor
-        overlap_threshold = self.nms_dict["overlap_threshold"] if overlap_threshold is None else overlap_threshold
+        overlap_threshold = self.nms_dict["overlap_threshold_test"] if overlap_threshold is None else overlap_threshold
 
         with torch.no_grad():
             inference: Inference = self.inference_and_generator(imgs_in=batch_imgs,
@@ -359,7 +368,7 @@ class CompositionalVae(torch.nn.Module):
                                                                 prob_corr_factor=prob_corr_factor,
                                                                 overlap_threshold=overlap_threshold,
                                                                 n_objects_max=n_objects_max,
-                                                                topk_only=False,
+                                                                topk_only=topk_only,
                                                                 noisy_sampling=noisy_sampling)
 
             # Now compute fg_prob, integer_segmentation_mask, similarity
@@ -403,6 +412,7 @@ class CompositionalVae(torch.nn.Module):
                             n_objects_max_per_patch: Optional[int] = None,
                             prob_corr_factor: Optional[float] = None,
                             overlap_threshold: Optional[float] = None,
+                            topk_only: bool = False,
                             radius_nn: int = 5,
                             batch_size: int = 32) -> Segmentation:
         """ Uses a sliding window approach to collect a co_objectiveness information
@@ -516,6 +526,7 @@ class CompositionalVae(torch.nn.Module):
                                             prob_corr_factor=prob_corr_factor,
                                             overlap_threshold=overlap_threshold,
                                             noisy_sampling=True,
+                                            topk_only=topk_only,
                                             draw_boxes=False,
                                             batch_of_index=batch_index.to(self.sigma_fg.device),
                                             max_index=max_index,
@@ -565,7 +576,7 @@ class CompositionalVae(torch.nn.Module):
                                                             index_matrix=index_matrix_padded[0, 0, pad_w:pad_w + w_img,
                                                                          pad_h:pad_h + h_img]))
 
-    # this is the generic function which has all the options unspecified
+    # this is the fully generic function which has all the options unspecified
     def process_batch_imgs(self,
                            imgs_in: torch.tensor,
                            generate_synthetic_data: bool,
@@ -616,6 +627,8 @@ class CompositionalVae(torch.nn.Module):
 
     def forward(self,
                 imgs_in: torch.tensor,
+                overlap_threshold: float,
+                noisy_sampling: bool = True,
                 draw_image: bool = False,
                 draw_bg: bool = False,
                 draw_boxes: bool = False,
@@ -628,9 +641,9 @@ class CompositionalVae(torch.nn.Module):
                                        draw_bg=draw_bg,
                                        draw_boxes=draw_boxes,
                                        verbose=verbose,
-                                       noisy_sampling=True,  # True if self.training else False,
+                                       noisy_sampling=noisy_sampling,
                                        prob_corr_factor=getattr(self, "prob_corr_factor", 0.0),
-                                       overlap_threshold=self.nms_dict.get("overlap_threshold", 0.3),
+                                       overlap_threshold=overlap_threshold,
                                        n_objects_max=self.input_img_dict["n_objects_max"])
 
     def generate(self,
@@ -649,5 +662,5 @@ class CompositionalVae(torch.nn.Module):
                                            verbose=verbose,
                                            noisy_sampling=True,
                                            prob_corr_factor=0.0,
-                                           overlap_threshold=self.nms_dict.get("overlap_threshold", 0.3),
+                                           overlap_threshold=-1.0,
                                            n_objects_max=self.input_img_dict["n_objects_max"])

@@ -104,14 +104,13 @@ class NonMaxSuppression(object):
         assert len(score.shape) == 2
         n_boxes, batch_size = score.shape
 
-        # this is O(N^2) algorithm
-        overlap_measure = NonMaxSuppression.compute_box_intersection_over_min_area(bounding_box=bounding_box)
-        binarized_overlap = (overlap_measure > overlap_threshold).float()
-
         if topk_only:
             # If nms_mask = 1 then this is equivalent to do topk only
             chosen_nms_mask = torch.ones_like(score)
         else:
+            # this is O(N^2) algorithm
+            overlap_measure = NonMaxSuppression.compute_box_intersection_over_min_area(bounding_box=bounding_box)
+            binarized_overlap = (overlap_measure > overlap_threshold).float()
             chosen_nms_mask = NonMaxSuppression.perform_nms_selection(mask_overlap=binarized_overlap,
                                                                       score=score,
                                                                       possible=torch.ones_like(score).bool(),
