@@ -29,8 +29,7 @@ params = load_json_as_dict("./ML_parameters.json")
 neptune.set_project(params["neptune_project"])
 exp: neptune.experiments.Experiment = \
     neptune.create_experiment(params=flatten_dict(params),
-                              upload_source_files=["./main_merfish.py", "./ML_parameters.json", "./MODULES/vae_parts.py",
-                                                   "./MODULES/vae_model.py", "./MODULES/encoders_decoders.py"],
+                              upload_source_files=["./main_merfish.py", "./ML_parameters.json", "./MODULES/vae_model.py"],
                               upload_stdout=True,
                               upload_stderr=True)
 
@@ -171,24 +170,28 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                                                 values=params["shortcut_prob_corr_factor"]["values"],
                                                 times=params["shortcut_prob_corr_factor"]["times"])
     exp.log_metric("prob_corr_factor", vae.prob_corr_factor)
-        
+
+    # ---------------- NEW -----------
     with torch.autograd.set_detect_anomaly(False):
         with torch.enable_grad():
             vae.train()
-            train_metrics = process_one_epoch(model=vae, 
-                                              dataloader=train_loader, 
-                                              optimizer=optimizer, 
+            # print("process one epoch train")
+            train_metrics = process_one_epoch(model=vae,
+                                              dataloader=train_loader,
+                                              optimizer=optimizer,
+                                              noisy_sampling=True,
+                                              overlap_threshold=params["nms"]["overlap_threshold_train"],
                                               verbose=(epoch == 0),
                                               weight_clipper=None,
                                               neptune_experiment=exp,
                                               neptune_prefix="train_")
+
             print("Train " + train_metrics.pretty_print(epoch))
 
             if params["optimizer"]["scheduler_is_active"]:
                 scheduler.step()
-            
-            with torch.no_grad():
 
+            with torch.no_grad():
                 history_dict = append_to_dict(source=train_metrics,
                                               destination=history_dict,
                                               prefix_exclude="wrong_examples",
@@ -197,32 +200,55 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                 if (epoch % TEST_FREQUENCY) == 0:
 
                     vae.eval()
-                    test_metrics = process_one_epoch(model=vae, 
-                                                     dataloader=test_loader, 
-                                                     optimizer=optimizer, 
+                    test_metrics = process_one_epoch(model=vae,
+                                                     dataloader=test_loader,
+                                                     optimizer=optimizer,
+                                                     noisy_sampling=True,
+                                                     overlap_threshold=params["nms"]["overlap_threshold_test"],
                                                      verbose=(epoch == 0),
                                                      weight_clipper=None,
                                                      neptune_experiment=exp,
                                                      neptune_prefix="test_")
-                    print("Test  "+test_metrics.pretty_print(epoch))
+
+                    print("Test  " + test_metrics.pretty_print(epoch))
                     history_dict = append_to_dict(source=test_metrics,
                                                   destination=history_dict,
                                                   prefix_exclude="wrong_examples",
                                                   prefix_to_add="test_")
-                    
-                    output: Output = vae.forward(reference_imgs, draw_image=True, draw_boxes=True, verbose=False)
+
+                    output: Output = vae.forward(reference_imgs,
+                                                 overlap_threshold=params["nms"]["overlap_threshold_train"],
+                                                 noisy_sampling=True,
+                                                 draw_image=True,
+                                                 draw_boxes=True,
+                                                 draw_bg=True,
+                                                 verbose=False)
                     plot_reconstruction_and_inference(output, epoch=epoch, prefix="rec_")
-                    reference_n_cells = output.inference.sample_c_map.sum().item()
-                    tmp_dict = {"reference_n_cells": reference_n_cells}
-                    log_dict_metrics(tmp_dict)
+                    reference_n_cells_inferred = output.inference.sample_c.sum().item()
+                    tmp_dict = {"reference_n_cells_inferred": reference_n_cells_inferred}
+                    log_dict_metrics(tmp_dict, prefix="test_", experiment=exp)
                     history_dict = append_to_dict(source=tmp_dict,
                                                   destination=history_dict)
 
-                    segmentation: Segmentation = vae.segment(batch_imgs=reference_imgs)
-                    plot_segmentation(segmentation, epoch=epoch, prefix="seg_")
+                    # print("segmentation test")
+                    segmentation: Segmentation = vae.segment(batch_imgs=reference_imgs,
+                                                             noisy_sampling=True,
+                                                             overlap_threshold=params["nms"]["overlap_threshold_test"])
+                    plot_segmentation(segmentation, epoch=epoch, prefix="seg_", experiment=exp)
 
-                    generated: Output = vae.generate(imgs_in=reference_imgs, draw_boxes=True)
-                    plot_generation(generated, epoch=epoch, prefix="gen_")
+                    # Here I could add a measure of agreement with the ground truth
+                    # a = segmentation.integer_mask[0, 0].long()
+                    # b = reference_seg.long()
+                    # print("CHECK", a.shape, a.dtype, b.shape, b.dtype)
+                    # concordance_vs_gt = concordance_integer_masks(a,b)
+                    # plot_concordance(concordance=concordance_vs_gt, neptune_name="concordance_vs_gt_")
+                    # log_concordance(concordance=concordance_vs_gt, prefix="concordance_vs_gt_")
+
+                    # print("generation test")
+                    generated: Output = vae.generate(imgs_in=reference_imgs,
+                                                     draw_boxes=True,
+                                                     draw_bg=True)
+                    plot_generation(generated, epoch=epoch, prefix="gen_", experiment=exp)
 
                     test_loss = test_metrics.loss
                     min_test_loss = min(min_test_loss, test_loss)
