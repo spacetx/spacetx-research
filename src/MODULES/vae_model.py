@@ -307,8 +307,8 @@ class CompositionalVae(torch.nn.Module):
 
     def segment(self, batch_imgs: torch.tensor,
                 n_objects_max: Optional[int] = None,
-                prob_corr_factor: Optional[float] = None,
-                overlap_threshold: Optional[float] = None,
+                prob_corr_factor: float = 0.0,
+                overlap_threshold: float = 0.3,
                 noisy_sampling: bool = True,
                 topk_only: bool = False,
                 draw_boxes: bool = False,
@@ -370,8 +370,8 @@ class CompositionalVae(torch.nn.Module):
                             crop_size: Optional[tuple] = None,
                             stride: Optional[tuple] = None,
                             n_objects_max_per_patch: Optional[int] = None,
-                            prob_corr_factor: Optional[float] = None,
-                            overlap_threshold: Optional[float] = None,
+                            prob_corr_factor: float = 0.0,
+                            overlap_threshold: float = 0.3,
                             topk_only: bool = False,
                             radius_nn: int = 5,
                             batch_size: int = 32) -> Segmentation:
@@ -389,8 +389,6 @@ class CompositionalVae(torch.nn.Module):
         stride = (int(crop_size[0] // 4), int(crop_size[1] // 4)) if stride is None else stride
         n_objects_max_per_patch = self.input_img_dict["n_objects_max"] if n_objects_max_per_patch is None \
             else n_objects_max_per_patch
-        prob_corr_factor = getattr(self, "prob_corr_factor", 0.0) if prob_corr_factor is None else prob_corr_factor
-        overlap_threshold = self.nms_dict["overlap_threshold"] if overlap_threshold is None else overlap_threshold
 
         assert crop_size[0] % stride[0] == 0, "crop and stride size are NOT compatible"
         assert crop_size[1] % stride[1] == 0, "crop and stride size are NOT compatible"

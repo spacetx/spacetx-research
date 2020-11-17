@@ -95,7 +95,7 @@ def log_dict_metrics(metrics: dict,
         if key in keys_exclude:
             continue
 
-        if isinstance(value, float):
+        if isinstance(value, float) or isinstance(value, int):
             _exp.log_metric(prefix + key, value)
         elif isinstance(value, numpy.ndarray):
             for i, x in enumerate(value):
