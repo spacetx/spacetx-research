@@ -188,15 +188,13 @@ class UNEToutput(NamedTuple):
 
 
 class Inference(NamedTuple):
-    area_map: torch.Tensor  # shape -> batch_size, 1, w, h
     prob_map: torch.Tensor  # shape -> batch_size, 1, w, h
-    prob_few: torch.Tensor  # shape -> boxes_few, batch_size
     big_bg: torch.Tensor
     big_img: torch.Tensor
     mixing: torch.Tensor
-    mixing_non_interacting: torch.Tensor  # Use exclusively to compute overlap penalty
     # the samples of the 3 latent variables
-    sample_c_map: torch.Tensor      # shape -> batch, 1, width, height
+    sample_c_map_before_nms: torch.Tensor  # shape -> batch, 1, width, height
+    sample_c_map_after_nms: torch.Tensor   # shape -> batch, 1, width, height
     sample_c: torch.Tensor          # boxes_few, batch_size
     sample_bb: BB                   # each bx,by,bw,bh has shape -> boxes_few, batch_size
     sample_zwhere: torch.Tensor     # boxes_few, batch_size, latent_dim
@@ -243,35 +241,40 @@ class MetricMiniBatch(NamedTuple):
     reg_overlap: float
     reg_area_obj: float
 
+    count_prediction: numpy.ndarray
+    wrong_examples: numpy.ndarray
+    accuracy: float
+
+    lambda_sparsity: float
+    lambda_cell: float
+    lambda_mse: float
+    f_sparsity: float
+    g_sparsity: float
+    f_cell: float
+    g_cell: float
+    f_mse: float
+    g_mse: float
     fg_fraction_av: float
     n_cell_av: float
 
-    geco_fgfraction: float
-    geco_ncell: float
-    geco_mse: float
-
-    delta_fgfraction: float
-    delta_ncell: float
-    delta_mse: float
-
-    similarity_l: numpy.ndarray
-    similarity_w: numpy.ndarray
+    similarity_l: float
+    similarity_w: float
     lambda_logit: float
 
     def pretty_print(self, epoch: int = 0) -> str:
         s = "[epoch {0:4d}] loss={1:.3f}, mse={2:.3f},  \
         reg={3:.3f}, kl={4:.3f}, sparsity={5:.3f}, fg_fraction_av={6:.3f}, n_cell_av={7:.3f}, \
-        geco_fg={8:.3f}, geco_ncell={9:.3f}, geco_mse={10:.3f}".format(epoch,
-                                                                       self.loss,
-                                                                       self.mse_tot,
-                                                                       self.reg_tot,
-                                                                       self.kl_tot,
-                                                                       self.sparsity_tot,
-                                                                       self.fg_fraction_av,
-                                                                       self.n_cell_av,
-                                                                       self.geco_fgfraction,
-                                                                       self.geco_ncell,
-                                                                       self.geco_mse)
+        lambda_sparsity={8:.3f}, lambda_cell={9:.3f}, lambda_mse={10:.3f}".format(epoch,
+                                                                                  self.loss,
+                                                                                  self.mse_tot,
+                                                                                  self.reg_tot,
+                                                                                  self.kl_tot,
+                                                                                  self.sparsity_tot,
+                                                                                  self.fg_fraction_av,
+                                                                                  self.n_cell_av,
+                                                                                  self.lambda_sparsity,
+                                                                                  self.lambda_cell,
+                                                                                  self.lambda_mse)
         return s
 
 

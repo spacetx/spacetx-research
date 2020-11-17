@@ -3,15 +3,14 @@ import neptune
 import numpy
 import torch.nn.functional as F
 from torch.distributions.utils import broadcast_all
-from typing import Union, Callable, Optional, Tuple
+from typing import Union, Callable, Optional, List
 from collections import OrderedDict
 from torch.distributions.distribution import Distribution
 from torch.distributions import constraints
 
-from MODULES.utilities import pass_bernoulli, compute_ranking, compute_average_in_box
 from MODULES.utilities import invert_convert_to_box_list, convert_to_box_list
-from MODULES.utilities_visualization import show_batch
-from MODULES.namedtuple import DIST, MetricMiniBatch, BB
+from MODULES.utilities_visualization import plot_img_and_seg
+from MODULES.namedtuple import DIST, MetricMiniBatch
 from MODULES.utilities_neptune import log_dict_metrics
 
 
@@ -41,72 +40,43 @@ def sample_and_kl_diagonal_normal(posterior_mu: torch.Tensor,
     return DIST(sample=sample, kl=kl)
 
 
-def sample_and_kl_prob(logit_map: torch.Tensor,
-                       similarity_kernel: torch.Tensor,
-                       images: torch.Tensor,
-                       background: torch.Tensor,
-                       bounding_box_no_noise: BB,
-                       prob_corr_factor: float,
-                       noisy_sampling: bool,
-                       sample_from_prior: bool) -> (DIST, torch.Tensor):
-    """ Return DIST(c_map, kl), prob_map """
-    assert len(logit_map.shape) == 4
+def sample_c_map(p_map: torch.Tensor,
+                 similarity_kernel: torch.Tensor,
+                 noisy_sampling: bool,
+                 sample_from_prior: bool):
 
-    # Correction factor
     if sample_from_prior:
         with torch.no_grad():
-            batch_size = torch.Size([logit_map.shape[0]])
+            batch_size = torch.Size([p_map.shape[0]])
             s = similarity_kernel.requires_grad_(False)
-            c_all = FiniteDPP(L=s).sample(sample_shape=batch_size).transpose(-1, -2).float()
-            # print("c_all.shape", c_all.shape)
-            c_map = invert_convert_to_box_list(c_all.unsqueeze(-1),
-                                               original_width=logit_map.shape[-2],
-                                               original_height=logit_map.shape[-1])
-            kl = torch.zeros(logit_map.shape[0])
-            q_map = c_map.float()
-            return DIST(sample=c_map, kl=kl), q_map
+            c_all = FiniteDPP(L=s).sample(sample_shape=batch_size)  # shape: batch_size, n_points
+            c_reshaped = c_all.transpose(-1, -2).float().unsqueeze(-1)  # shape: n_points, batch_size, 1
+            c_map = invert_convert_to_box_list(c_reshaped,
+                                               original_width=p_map.shape[-2],
+                                               original_height=p_map.shape[-1])
+            return c_map
     else:
-        # Work with posterior
-        if (prob_corr_factor > 0) and (prob_corr_factor <= 1.0):
-            with torch.no_grad():
-                av_intensity = compute_average_in_box((images - background).abs(), bounding_box_no_noise)
-                assert len(av_intensity.shape) == 2
-                n_boxes_all, batch_size = av_intensity.shape
-                ranking = compute_ranking(av_intensity)  # n_boxes_all, batch. It is in [0,n_box_all-1]
-                tmp = ((ranking + 1).float() / (n_boxes_all + 1))
-                q_approx = tmp.pow(10)
+        with torch.no_grad():
+            c_map = (torch.rand_like(p_map) < p_map) if noisy_sampling else (0.5 < p_map)
+        return c_map.float() + p_map - p_map.detach()
 
-            q_uncorrected = torch.sigmoid(convert_to_box_list(logit_map).squeeze(-1))
-            q_all = ((1 - prob_corr_factor) * q_uncorrected + prob_corr_factor * q_approx).clamp(min=1E-4, max=1 - 1E-4)
-            log_q = torch.log(q_all)
-            log_one_minus_q = torch.log1p(-q_all)
-        else:
-            logit_reshaped = convert_to_box_list(logit_map).squeeze(-1)
-            q_all = torch.sigmoid(logit_reshaped)
-            log_q = F.logsigmoid(logit_reshaped)
-            log_one_minus_q = F.logsigmoid(-logit_reshaped)
 
-        c_all = pass_bernoulli(prob=q_all, noisy_sampling=noisy_sampling)  # float variable which requires grad
+def compute_kl_DPP(c_map: torch.Tensor,
+                   similarity_kernel: torch.Tensor):
+    c_no_grad = convert_to_box_list(c_map).squeeze(-1).bool().detach()  # shape n_boxes_all, batch_size
+    log_prob_prior = FiniteDPP(L=similarity_kernel).log_prob(c_no_grad.transpose(-1, -2))  # shape: batch_shape
+    return log_prob_prior
 
-        # Here the gradients are only through log_q and similarity_kernel not c
-        c_no_grad = c_all.bool().detach()  # bool variable has requires_grad = False
-        log_prob_posterior = (c_no_grad * log_q + ~c_no_grad * log_one_minus_q).sum(dim=0)  # sum over all_boxes
-        log_prob_prior = FiniteDPP(L=similarity_kernel).log_prob(c_no_grad.transpose(-1, -2))  # shape: batch_shape
-        assert log_prob_posterior.shape == log_prob_prior.shape
-        kl = log_prob_posterior - log_prob_prior
 
-        c_map = invert_convert_to_box_list(c_all.unsqueeze(-1),
-                                           original_width=logit_map.shape[-2],
-                                           original_height=logit_map.shape[-1])
-        q_map = invert_convert_to_box_list(q_all.unsqueeze(-1),
-                                           original_width=logit_map.shape[-2],
-                                           original_height=logit_map.shape[-1])
-        return DIST(sample=c_map, kl=kl), q_map
+def compute_kl_Bernoulli(c_map: torch.Tensor,
+                         log_p_map: torch.Tensor,
+                         log_one_minus_p_map: torch.Tensor):
+    log_prob_posterior = (c_map * log_p_map + (c_map - 1) * log_one_minus_p_map).sum(dim=(-1, -2, -3))  # sum over ch=1, w, h
+    return log_prob_posterior
 
 
 class SimilarityKernel(torch.nn.Module):
     """ Similarity based on sum of gaussian kernels of different strength and length_scales """
-
     def __init__(self, n_kernels: int = 4,
                  pbc: bool = False,
                  eps: float = 1E-4,
@@ -318,38 +288,38 @@ class FiniteDPP(Distribution):
         return logdet_Ls - logdet_L_plus_I
 
 
-class Moving_Average_Calculator(object):
-    """ Compute the moving average of a dictionary.
-        Return the dictionary with the moving average up to that point
-
-        beta is the factor multiplying the moving average.
-        Approximately we average the last 1/(1-beta) points.
-        For example:
-        beta = 0.9 -> 10 points
-        beta = 0.99 -> 100 points
-        The larger beta the longer the time average.
-    """
-
-    def __init__(self, beta):
-        super().__init__()
-        self._bias = None
-        self._steps = 0
-        self._beta = beta
-        self._dict_accumulate = {}
-        self._dict_MA = {}
-
-    def accumulate(self, input_dict):
-        self._steps += 1
-        self._bias = 1 - self._beta ** self._steps
-
-        for key, value in input_dict.items():
-            try:
-                tmp = self._beta * self._dict_accumulate[key] + (1 - self._beta) * value
-                self._dict_accumulate[key] = tmp
-            except KeyError:
-                self._dict_accumulate[key] = (1 - self._beta) * value
-            self._dict_MA[key] = self._dict_accumulate[key] / self._bias
-        return self._dict_MA
+####class Moving_Average_Calculator(object):
+####    """ Compute the moving average of a dictionary.
+####        Return the dictionary with the moving average up to that point
+####
+####        beta is the factor multiplying the moving average.
+####        Approximately we average the last 1/(1-beta) points.
+####        For example:
+####        beta = 0.9 -> 10 points
+####        beta = 0.99 -> 100 points
+####        The larger beta the longer the time average.
+####    """
+####
+####    def __init__(self, beta):
+####        super().__init__()
+####        self._bias = None
+####        self._steps = 0
+####        self._beta = beta
+####        self._dict_accumulate = {}
+####        self._dict_MA = {}
+####
+####    def accumulate(self, input_dict):
+####        self._steps += 1
+####        self._bias = 1 - self._beta ** self._steps
+####
+####        for key, value in input_dict.items():
+####            try:
+####                tmp = self._beta * self._dict_accumulate[key] + (1 - self._beta) * value
+####                self._dict_accumulate[key] = tmp
+####            except KeyError:
+####                self._dict_accumulate[key] = (1 - self._beta) * value
+####            self._dict_MA[key] = self._dict_accumulate[key] / self._bias
+####        return self._dict_MA
 
 
 class Accumulator(object):
@@ -370,7 +340,12 @@ class Accumulator(object):
         else:
             print(type(value))
             raise Exception
-        self._dict_accumulate[key] = x + self._dict_accumulate.get(key, 0)
+
+        try:
+            self._dict_accumulate[key] = x + self._dict_accumulate.get(key, 0)
+        except ValueError:
+            # oftent he case if accumulating two numpy array of different sizes
+            pass
 
     def accumulate(self, source: Union[tuple, dict], counter_increment: int = 1):
         self._counter += counter_increment
@@ -486,12 +461,13 @@ class SpecialDataSet(object):
     def __init__(self,
                  img: torch.Tensor,
                  roi_mask: Optional[torch.Tensor] = None,
+                 seg_mask: Optional[torch.Tensor] = None,
                  labels: Optional[torch.Tensor] = None,
                  data_augmentation: Optional[ConditionalRandomCrop] = None,
                  store_in_cuda: bool = False,
                  drop_last=False,
                  batch_size=4,
-                 shuffle=False):
+                 shuffle=True):
         """ :param device: 'cpu' or 'cuda:0'
             Dataset returns random crops of a given size inside the Region Of Interest.
             The function getitem returns imgs, labels and indeces
@@ -514,10 +490,7 @@ class SpecialDataSet(object):
             new_batch_size = img.shape[0] * data_augmentation.n_crops_per_image
             self.data_augmentaion = data_augmentation
 
-        if store_in_cuda:
-            self.img = img.cuda().detach().expand(new_batch_size, -1, -1, -1)
-        else:
-            self.img = img.cpu().detach().expand(new_batch_size, -1, -1, -1)
+        self.img = img.to(storing_device).detach().expand(new_batch_size, -1, -1, -1)
 
         if labels is None:
             self.labels = -1*torch.ones(self.img.shape[0], device=storing_device).detach()
@@ -533,6 +506,11 @@ class SpecialDataSet(object):
             self.cum_roi_mask = roi_mask.to(storing_device).detach().cumsum(dim=-1).cumsum(
                 dim=-2).expand(new_batch_size, -1, -1, -1)
 
+        if seg_mask is None:
+            self.seg_mask = None
+        else:
+            self.seg_mask = seg_mask.to(storing_device).detach().expand(new_batch_size, -1, -1, -1)
+
     def __len__(self):
         return self.img.shape[0]
 
@@ -540,14 +518,19 @@ class SpecialDataSet(object):
         assert isinstance(index, torch.Tensor)
 
         if self.data_augmentaion is None:
-            return self.img[index], self.labels[index], index
+            img = self.img[index]
+            seg_mask = -1*torch.ones_like(img) if self.seg_mask is None else self.seg_mask[index]
+            return img, seg_mask, self.labels[index], index
         else:
             bij_list = []
             for i in index:
                 bij_list += self.data_augmentaion.get_index(img=self.img[i],
                                                             cum_sum_roi_mask=self.cum_roi_mask[i],
                                                             n_crops_per_image=1)
-            return self.data_augmentaion.collate_crops_from_list(self.img, bij_list), self.labels[index], index
+            img = self.data_augmentaion.collate_crops_from_list(self.img, bij_list)
+            seg_mask = -1*torch.ones_like(img) if self.seg_mask is None \
+                else self.data_augmentaion.collate_crops_from_list(self.seg_mask, bij_list)
+            return img, seg_mask, self.labels[index], index
 
     def __iter__(self, batch_size=None, drop_last=None, shuffle=None):
         # If not specified use defaults
@@ -564,7 +547,8 @@ class SpecialDataSet(object):
     def load(self, batch_size=None, index=None):
         if (batch_size is None and index is None) or (batch_size is not None and index is not None):
             raise Exception("Only one between batch_size and index must be specified")
-        index = torch.randint(low=0, high=self.__len__(), size=(batch_size,)).long() if index is None else index
+        random_index = torch.randperm(self.__len__(), dtype=torch.long, device=self.img.device)[:batch_size]
+        index = random_index if index is None else index
         return self.__getitem__(index)
 
     def check_batch(self, batch_size: int = 8):
@@ -572,12 +556,11 @@ class SpecialDataSet(object):
         print("img.shape", self.img.shape)
         print("img.dtype", self.img.dtype)
         print("img.device", self.img.device)
-        index = torch.randperm(self.__len__(), dtype=torch.long, device=self.img.device, requires_grad=False)
-        # grab one minibatch
-        img, labels, index = self.__getitem__(index[:batch_size])
-        print("MINIBATCH: img.shapes labels.shape, index.shape ->", img.shape, labels.shape, index.shape)
+        random_index = torch.randperm(self.__len__(), dtype=torch.long, device=self.img.device)[:batch_size]
+        img, seg, labels, index = self.__getitem__(random_index)
+        print("MINIBATCH: img.shapes seg.shape labels.shape, index.shape ->", img.shape, seg.shape, labels.shape, index.shape)
         print("MINIBATCH: min and max of minibatch", torch.min(img), torch.max(img))
-        return show_batch(img, n_col=4, n_padding=4, normalize_range=(0.0, 1.0), pad_value=1, figsize=(24, 24))
+        return plot_img_and_seg(img=img, seg=seg, figsize=(6, 12))
 
 
 def process_one_epoch(model: torch.nn.Module,
@@ -585,24 +568,38 @@ def process_one_epoch(model: torch.nn.Module,
                       optimizer: Optional[torch.optim.Optimizer] = None,
                       weight_clipper: Optional[Callable[[None], None]] = None,
                       verbose: bool = False,
+                      noisy_sampling: bool = True,
+                      overlap_threshold: float = 0.3,
                       neptune_experiment: Optional[neptune.experiments.Experiment] = None,
                       neptune_prefix: Optional[str] = None) -> MetricMiniBatch:
     """ return a tuple with all the metrics averaged over a epoch """
     metric_accumulator = Accumulator()
+    n_exact_examples = 0
+    wrong_examples = []
 
-    for i, (imgs, labels, index) in enumerate(dataloader):
-        
+    for i, (imgs, seg_mask, labels, index) in enumerate(dataloader):
+
         # Put data in GPU if available
         if torch.cuda.is_available() and (imgs.device == torch.device('cpu')): 
             imgs = imgs.cuda()
 
-        metrics = model.forward(imgs_in=imgs).metrics  # the forward function returns metric and other stuff
+        metrics = model.forward(imgs_in=imgs,
+                                overlap_threshold=overlap_threshold,
+                                noisy_sampling=noisy_sampling).metrics  # the forward function returns metric and other stuff
         if verbose:
             print("i = %3d train_loss=%.5f" % (i, metrics.loss))
 
         # Accumulate metrics over an epoch
         with torch.no_grad():
             metric_accumulator.accumulate(source=metrics, counter_increment=len(index))
+
+            # special treatment for count_prediction, wrong_example, accuracy
+            metric_accumulator._dict_accumulate["count_prediction"] = -1*numpy.ones(1)
+            metric_accumulator._dict_accumulate["wrong_examples"] = -1*numpy.ones(1)
+            metric_accumulator._dict_accumulate["accuracy"] = -1
+            mask_exact = (metrics.count_prediction == labels.cpu().numpy())
+            n_exact_examples += numpy.sum(mask_exact)
+            wrong_examples += list(index[~mask_exact].cpu().numpy())
 
         # Only if training I apply backward
         if model.training:
@@ -624,9 +621,15 @@ def process_one_epoch(model: torch.nn.Module,
     # At the end of the loop compute the average of the metrics
     with torch.no_grad():
         metric_one_epoch = metric_accumulator.get_average()
+        accuracy = float(n_exact_examples) / (n_exact_examples + len(wrong_examples))
+        metric_one_epoch["accuracy"] = accuracy
+        metric_one_epoch["wrong_examples"] = numpy.array(wrong_examples)
+        metric_one_epoch["count_prediction"] = -1*numpy.ones(1)
+
         if neptune_experiment is not None:
             log_dict_metrics(metrics=metric_one_epoch,
                              prefix=neptune_prefix,
                              experiment=neptune_experiment,
+                             keys_exclude=["wrong_examples"],
                              verbose=False)
         return MetricMiniBatch._make(metric_one_epoch.values())

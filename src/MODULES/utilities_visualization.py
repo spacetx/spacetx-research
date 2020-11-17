@@ -27,7 +27,11 @@ def contours_from_labels(labels: numpy.ndarray,
     return contours
 
 
-def add_red_contours(image: numpy.ndarray, contours: numpy.ndarray) -> numpy.ndarray:
+def add_red_contours(image: numpy.ndarray, contours: numpy.ndarray):
+    return draw_contours(image, contours, 'red')
+
+
+def draw_contours(image: numpy.ndarray, contours: numpy.ndarray, contours_color: str = 'red') -> numpy.ndarray:
     assert isinstance(image, numpy.ndarray)
     assert isinstance(contours, numpy.ndarray)
     assert contours.dtype == bool
@@ -37,8 +41,17 @@ def add_red_contours(image: numpy.ndarray, contours: numpy.ndarray) -> numpy.nda
         image_with_contours = skimage.color.gray2rgb(image)
     else:
         raise Exception
-    image_with_contours[contours, 0] = numpy.max(image_with_contours)
-    image_with_contours[contours, 1:] = 0
+    if contours_color == 'red':
+        ch_index = 0
+    elif contours_color == 'green':
+        ch_index = 1
+    elif contours_color == 'blue':
+        ch_index = 2
+    else:
+        raise Exception("contours_color not recognized. Should be 'red' or 'green' or 'blue'")
+
+    image_with_contours[contours, :] = 0
+    image_with_contours[contours, ch_index] = numpy.max(image_with_contours)
     return image_with_contours
 
 
@@ -101,10 +114,11 @@ def plot_label_contours(label: Union[torch.Tensor, numpy.ndarray],
                         image: Union[torch.Tensor, numpy.ndarray],
                         window: Optional[tuple] = None,
                         contour_thickness: int = 2,
+                        contour_color: str = 'red',
                         figsize: tuple = (24, 24),
                         experiment: Optional[neptune.experiments.Experiment] = None,
                         neptune_name: Optional[str] = None):
-    
+    _exp = experiment if experiment else neptune
     assert len(label.shape) == 2
     assert len(image.shape) == 2 or len(image.shape)==3
     
@@ -121,7 +135,8 @@ def plot_label_contours(label: Union[torch.Tensor, numpy.ndarray],
         image = image[..., 0]
 
     assert image.shape[:2] == label.shape[:2]
-    
+
+    print(window)
     if window is None:
         window = [0, 0, label.shape[-2], label.shape[-1]]
     else:
@@ -129,21 +144,24 @@ def plot_label_contours(label: Union[torch.Tensor, numpy.ndarray],
                   max(0, window[1]),
                   min(label.shape[-2], window[2]),
                   min(label.shape[-1], window[3]))
-        
 
     contours = contours_from_labels(label[window[0]:window[2], window[1]:window[3]], contour_thickness)
+    img_with_contours = draw_contours(image=image[window[0]:window[2], window[1]:window[3]],
+                                      contours=contours,
+                                      contours_color=contour_color)
+
     fig, ax = plt.subplots(ncols=3, figsize=figsize)
-    ax[0].imshow(image[window[0]:window[2],window[1]:window[3]])
-    ax[1].imshow(add_red_contours(image[window[0]:window[2],window[1]:window[3]], contours))
-    ax[2].imshow(skimage.color.label2rgb(label=label[window[0]:window[2],window[1]:window[3]],
-                                         image=image[window[0]:window[2],window[1]:window[3]],
+    ax[0].imshow(image[window[0]:window[2], window[1]:window[3]], cmap='gray')
+    ax[1].imshow(img_with_contours)
+    ax[2].imshow(skimage.color.label2rgb(label=label[window[0]:window[2], window[1]:window[3]],
+                                         image=image[window[0]:window[2], window[1]:window[3]],
                                          alpha=0.25, 
                                          bg_label=0))
 
     fig.tight_layout()
     if neptune_name is not None:
         #log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
-        log_img_only(name=neptune_name, fig=fig, experiment=experiment)
+        log_img_only(name=neptune_name, fig=fig, experiment=_exp)
     plt.close(fig)
     return fig
 
@@ -160,8 +178,8 @@ def draw_img(bounding_box: BB,
     assert len(c.shape) == 2  # boxes, batch
     assert len(mixing_k.shape) == len(big_img.shape) == 5  # boxes, batch, ch, w, h
 
-    rec_imgs_no_bb = (c[..., None, None, None] * mixing_k * big_img).sum(dim=-5)  # sum over boxes
-    fg_mask = (c[..., None, None, None] * mixing_k).sum(dim=-5)  # sum over boxes
+    rec_imgs_no_bb = (mixing_k * big_img).sum(dim=-5)  # sum over boxes
+    fg_mask = mixing_k.sum(dim=-5)  # sum over boxes
     background = (1 - fg_mask) * big_bg if draw_bg else torch.zeros_like(big_bg)
 
     width, height = rec_imgs_no_bb.shape[-2:]
@@ -216,6 +234,7 @@ def plot_grid(img,
               figsize: Optional[Tuple[float, float]] = None,
               experiment: Optional[neptune.experiments.Experiment] = None,
               neptune_name: Optional[str] = None):
+    _exp = experiment if experiment else neptune
 
     assert len(img.shape) == 3
     n_max = img.shape[-3]
@@ -235,7 +254,39 @@ def plot_grid(img,
     fig.tight_layout()
     if neptune_name is not None:
         #log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
-        log_img_only(name=neptune_name, fig=fig, experiment=experiment)
+        log_img_only(name=neptune_name, fig=fig, experiment=_exp)
+    plt.close(fig)
+    return fig
+
+
+def plot_img_and_seg(img: torch.Tensor,
+                     seg: torch.Tensor,
+                     figsize: Optional[Tuple[float, float]] = None,
+                     experiment: Optional[neptune.experiments.Experiment] = None,
+                     neptune_name: Optional[str] = None):
+    _exp = experiment if experiment else neptune
+
+    assert len(img.shape) == len(seg.shape) == 4
+    n_row = img.shape[-4]
+    if n_row <= 1:
+        fig, axes = plt.subplots(ncols=2, figsize=figsize)
+        axes[0].imshow(img[0, 0], cmap='gray')
+        axes[1].imshow(seg[0, 0], cmap='seismic', vmin=-0.5, vmax=10.5)
+        axes[0].set_axis_off()
+        axes[1].set_axis_off()
+
+    else:
+        fig, axes = plt.subplots(ncols=2, nrows=n_row, figsize=figsize)
+        for n in range(n_row):
+            axes[n, 0].imshow(img[n, 0], cmap='gray')
+            axes[n, 1].imshow(seg[n, 0], cmap='seismic', vmin=-0.5, vmax=10.5)
+            axes[n, 0].set_axis_off()
+            axes[n, 1].set_axis_off()
+
+    fig.tight_layout()
+    if neptune_name is not None:
+        #log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
+        log_img_only(name=neptune_name, fig=fig, experiment=_exp)
     plt.close(fig)
     return fig
 
@@ -249,6 +300,7 @@ def show_batch(images: torch.Tensor,
                figsize: Optional[Tuple[float, float]] = None,
                experiment: Optional[neptune.experiments.Experiment] = None,
                neptune_name: Optional[str] = None):
+    _exp = experiment if experiment else neptune
 
     """Visualize a torch tensor of shape: (batch x ch x width x height) """
     assert len(images.shape) == 4  # batch, ch, width, height
@@ -261,13 +313,14 @@ def show_batch(images: torch.Tensor,
         
     fig = plt.figure(figsize=figsize)
     plt.imshow(grid.detach().permute(1, 2, 0).squeeze(-1).numpy())
+    # plt.axis("off")
     if isinstance(title, str):
         plt.title(title)
     fig.tight_layout()
 
     if neptune_name is not None:
         #log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
-        log_img_only(name=neptune_name, fig=fig, experiment=experiment)
+        log_img_only(name=neptune_name, fig=fig, experiment=_exp)
 
     plt.close(fig)
     return fig
@@ -278,7 +331,8 @@ def plot_tiling(tiling,
                 window: Optional[tuple] = None,
                 experiment: Optional[neptune.experiments.Experiment] = None,
                 neptune_name: Optional[str] = None):
-    
+    _exp = experiment if experiment else neptune
+
     if window is None:
         window = [0, 0, tiling.integer_mask.shape[-2], tiling.integer_mask.shape[-1]]
     else:
@@ -313,7 +367,7 @@ def plot_tiling(tiling,
     fig.tight_layout()
     if neptune_name is not None:
         #log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
-        log_img_only(name=neptune_name, fig=fig, experiment=experiment)
+        log_img_only(name=neptune_name, fig=fig, experiment=_exp)
     plt.close(fig)
     return fig
 
@@ -322,6 +376,7 @@ def plot_loss(history_dict: dict,
               test_frequency: int = 5,
               experiment: Optional[neptune.experiments.Experiment] = None,
               neptune_name: Optional[str] = None):
+    _exp = experiment if experiment else neptune
 
     x = numpy.arange(0, len(history_dict["test_loss"])*test_frequency, test_frequency)
     train_loss = history_dict["train_loss"]
@@ -338,7 +393,7 @@ def plot_loss(history_dict: dict,
     ax.legend()
     fig.tight_layout()
     if neptune_name is not None:
-        log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
+        log_img_and_chart(name=neptune_name, fig=fig, experiment=_exp)
     plt.close()
     return fig
 
@@ -347,6 +402,7 @@ def plot_kl(history_dict: dict,
             train_or_test: str = "test",
             experiment: Optional[neptune.experiments.Experiment] = None,
             neptune_name: Optional[str] = None):
+    _exp = experiment if experiment else neptune
 
     if train_or_test == "test":
         kl_instance = history_dict["test_kl_instance"]
@@ -369,7 +425,7 @@ def plot_kl(history_dict: dict,
     ax.legend()
     fig.tight_layout()
     if neptune_name is not None:
-        log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
+        log_img_and_chart(name=neptune_name, fig=fig, experiment=_exp)
     plt.close()
     return fig
 
@@ -378,6 +434,7 @@ def plot_loss_term(history_dict: dict,
                    train_or_test: str = "test",
                    experiment: Optional[neptune.experiments.Experiment] = None,
                    neptune_name: Optional[str] = None):
+    _exp = experiment if experiment else neptune
 
     if train_or_test == "test":
         loss = numpy.array(history_dict["test_loss"])
@@ -385,22 +442,22 @@ def plot_loss_term(history_dict: dict,
         reg = numpy.array(history_dict["test_reg_tot"])
         kl = numpy.array(history_dict["test_kl_tot"])
         sparsity = numpy.array(history_dict["test_sparsity_tot"])
-        geco_mse = numpy.array(history_dict["test_geco_mse"])
+        lambda_mse = numpy.array(history_dict["test_lambda_mse"])
     elif train_or_test == "train":
         loss = numpy.array(history_dict["train_loss"])
         mse = numpy.array(history_dict["train_mse_tot"])
         reg = numpy.array(history_dict["train_reg_tot"])
         kl = numpy.array(history_dict["train_kl_tot"])
         sparsity = numpy.array(history_dict["train_sparsity_tot"])
-        geco_mse = numpy.array(history_dict["train_geco_mse"])
+        lambda_mse = numpy.array(history_dict["train_lambda_mse"])
     else:
         raise Exception
 
     fig, ax = plt.subplots()
     ax.plot(loss, '-', label="loss")
-    ax.plot(geco_mse * mse, '.-', label="scaled mse")
-    ax.plot(geco_mse * reg, '.--', label="scaled reg")
-    ax.plot((1-geco_mse) * kl, '.--', label="scaled kl")
+    ax.plot(lambda_mse * mse, '.-', label="scaled mse")
+    ax.plot(lambda_mse * reg, '.--', label="scaled reg")
+    ax.plot((1-lambda_mse) * kl, '.--', label="scaled kl")
     ax.plot(sparsity, '.--', label="scaled sparsity")
 
     ax.set_xlabel('epoch')
@@ -409,7 +466,7 @@ def plot_loss_term(history_dict: dict,
     ax.legend()
     fig.tight_layout()
     if neptune_name is not None:
-        log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
+        log_img_and_chart(name=neptune_name, fig=fig, experiment=_exp)
     plt.close()
     return fig
 
@@ -418,6 +475,7 @@ def plot_trajectory(history_dict: dict,
                     train_or_test: str = "test",
                     experiment: Optional[neptune.experiments.Experiment] = None,
                     neptune_name: Optional[str] = None):
+    _exp = experiment if experiment else neptune
 
     if train_or_test == "test":
         mse = history_dict["test_mse_tot"]
@@ -469,7 +527,7 @@ def plot_trajectory(history_dict: dict,
 
     fig.tight_layout()  # otherwise the right y-label is slightly clipped
     if neptune_name is not None:
-        log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
+        log_img_and_chart(name=neptune_name, fig=fig, experiment=_exp)
     plt.close()
     return fig
 
@@ -562,15 +620,17 @@ def plot_all_from_dictionary(history_dict: dict,
                              train_or_test: str = "test",
                              experiment: Optional[neptune.experiments.Experiment] = None,
                              verbose: bool = False):
+    _exp = experiment if experiment else neptune
+
     if verbose:
         print("in plot_all_from_dictionary ->"+train_or_test)
 
-    plot_loss(history_dict, test_frequency=test_frequency, experiment=experiment, neptune_name="loss_history_"+train_or_test)
-    plot_kl(history_dict, train_or_test=train_or_test, experiment=experiment, neptune_name="kl_history_"+train_or_test)
-    plot_loss_term(history_dict, train_or_test=train_or_test, experiment=experiment, neptune_name="loss_terms_"+train_or_test)
-    plot_trajectory(history_dict, train_or_test=train_or_test, experiment=experiment, neptune_name="trajectory_"+train_or_test)
-    plot_geco_parameters(history_dict, params, train_or_test=train_or_test, experiment=experiment, 
-            neptune_name="geco_params_trajectory_"+train_or_test)
+    plot_loss(history_dict, test_frequency=test_frequency, experiment=_exp, neptune_name="loss_history_"+train_or_test)
+    plot_kl(history_dict, train_or_test=train_or_test, experiment=_exp, neptune_name="kl_history_"+train_or_test)
+    plot_loss_term(history_dict, train_or_test=train_or_test, experiment=_exp, neptune_name="loss_terms_"+train_or_test)
+    plot_trajectory(history_dict, train_or_test=train_or_test, experiment=_exp, neptune_name="trajectory_"+train_or_test)
+    # plot_geco_parameters(history_dict, params, train_or_test=train_or_test, experiment=_exp,
+    #                     neptune_name="geco_params_trajectory_"+train_or_test)
 
     if verbose:
         print("leaving plot_all_from_dictionary ->"+train_or_test)
@@ -580,28 +640,42 @@ def plot_generation(output: Output,
                     epoch: int,
                     prefix: str = "",
                     postfix: str = "",
+                    experiment: Optional[neptune.experiments.Experiment] = None,
                     verbose: bool = False):
+
     if verbose:
         print("in plot_reconstruction_and_inference")
 
-    _ = show_batch(output.imgs[:8],
+    _exp = experiment if experiment else neptune
+
+    _ = show_batch(output.imgs,
                    n_col=4,
                    n_padding=4,
                    normalize_range=(0.0, 1.0),
                    title='imgs, epoch= {0:6d}'.format(epoch),
-                   neptune_name=prefix+"imgs"+postfix)
-    _ = show_batch(output.inference.sample_c_map[:8].float(),
+                   experiment=_exp,
+                   neptune_name=prefix + "imgs" + postfix)
+    _ = show_batch(output.inference.sample_c_map_before_nms.float(),
                    n_col=4,
                    n_padding=4,
                    normalize_range=(0.0, 1.0),
-                   title='c_map, epoch= {0:6d}'.format(epoch),
-                   neptune_name=prefix+"c_map"+postfix)
-    _ = show_batch(output.inference.big_bg[:8],
+                   title='c_map_before_nms, epoch= {0:6d}'.format(epoch),
+                   experiment=_exp,
+                   neptune_name=prefix + "c_map_before_nms" + postfix)
+    _ = show_batch(output.inference.sample_c_map_after_nms.float(),
+                   n_col=4,
+                   n_padding=4,
+                   normalize_range=(0.0, 1.0),
+                   title='c_map_after_nms, epoch= {0:6d}'.format(epoch),
+                   experiment=_exp,
+                   neptune_name=prefix + "c_map_after_nms" + postfix)
+    _ = show_batch(output.inference.big_bg,
                    n_col=4,
                    n_padding=4,
                    normalize_range=(0.0, 1.0),
                    title='background, epoch= {0:6d}'.format(epoch),
-                   neptune_name=prefix+"bg"+postfix)
+                   experiment=_exp,
+                   neptune_name=prefix + "bg" + postfix)
 
     if verbose:
         print("leaving plot_generation")
@@ -611,41 +685,48 @@ def plot_reconstruction_and_inference(output: Output,
                                       epoch: int,
                                       prefix: str = "",
                                       postfix: str = "",
+                                      experiment: Optional[neptune.experiments.Experiment] = None,
                                       verbose: bool = False):
     if verbose:
         print("in plot_reconstruction_and_inference")
 
-    _ = show_batch(output.imgs[:8],
+    _exp = experiment if experiment else neptune
+
+    _ = show_batch(output.imgs,
                    n_col=4,
                    n_padding=4,
                    normalize_range=(0.0, 1.0),
                    title='imgs, epoch= {0:6d}'.format(epoch),
+                   experiment=_exp,
                    neptune_name=prefix+"imgs"+postfix)
-    _ = show_batch(output.inference.sample_c_map[:8].float(),
+    _ = show_batch(output.inference.sample_c_map_before_nms.float(),
                    n_col=4,
                    n_padding=4,
                    normalize_range=(0.0, 1.0),
-                   title='c_map, epoch= {0:6d}'.format(epoch),
-                   neptune_name=prefix+"c_map"+postfix)
-    _ = show_batch(output.inference.prob_map[:8],
+                   title='c_map_before_nms, epoch= {0:6d}'.format(epoch),
+                   experiment=_exp,
+                   neptune_name=prefix+"c_map_before_nms"+postfix)
+    _ = show_batch(output.inference.sample_c_map_after_nms.float(),
+                   n_col=4,
+                   n_padding=4,
+                   normalize_range=(0.0, 1.0),
+                   title='c_map_after_nms, epoch= {0:6d}'.format(epoch),
+                   experiment=_exp,
+                   neptune_name=prefix+"c_map_after_nms"+postfix)
+    _ = show_batch(output.inference.prob_map,
                    n_col=4,
                    n_padding=4,
                    normalize_range=(0.0, 1.0),
                    title='p_map, epoch= {0:6d}'.format(epoch),
+                   experiment=_exp,
                    neptune_name=prefix+"p_map"+postfix)
-    _ = show_batch(output.inference.big_bg[:8],
+    _ = show_batch(output.inference.big_bg,
                    n_col=4,
                    n_padding=4,
                    normalize_range=(0.0, 1.0),
                    title='background, epoch= {0:6d}'.format(epoch),
+                   experiment=_exp,
                    neptune_name=prefix+"bg"+postfix)
-    _ = show_batch(output.inference.area_map[:8],
-                   n_col=4,
-                   n_padding=4,
-                   normalize_range=None,  # use min_max of tensor
-                   title='area_map, epoch= {0:6d}'.format(epoch),
-                   neptune_name=prefix + "area_map" + postfix)
-
     if verbose:
         print("leaving plot_reconstruction_and_inference")
 
@@ -654,9 +735,12 @@ def plot_segmentation(segmentation: Segmentation,
                       epoch: Union[int, str] = "",
                       prefix: str = "",
                       postfix: str = "",
+                      experiment: Optional[neptune.experiments.Experiment] = None,
                       verbose: bool = False):
     if verbose:
         print("in plot_segmentation")
+
+    _exp = experiment if experiment else neptune
 
     if isinstance(epoch, int):
         title_postfix = 'epoch= {0:6d}'.format(epoch)
@@ -670,12 +754,14 @@ def plot_segmentation(segmentation: Segmentation,
                    normalize_range=None,  # use min_max of tensor
                    figsize=(12, 12),
                    title='integer_mask, '+title_postfix,
+                   experiment=_exp,
                    neptune_name=prefix+"integer_mask"+postfix)
     _ = show_batch(segmentation.fg_prob,
                    n_padding=4,
                    normalize_range=(0.0, 1.0),
                    figsize=(12, 12),
                    title='fg_prob, '+title_postfix,
+                   experiment=_exp,
                    neptune_name=prefix+"fg_prob"+postfix)
 
     if verbose:
@@ -686,13 +772,14 @@ def plot_concordance(concordance,
                      figsize: tuple = (12, 12),
                      experiment: Optional[neptune.experiments.Experiment] = None,
                      neptune_name: Optional[str] = None):
+    _exp = experiment if experiment else neptune
     fig, axes = plt.subplots(figsize=figsize)
     axes.imshow(concordance.intersection_mask.cpu(), cmap='gray')
     axes.set_title("intersection mask, iou=" + str(concordance.iou))
 
     fig.tight_layout()
     if neptune_name is not None:
-        log_img_only(name=neptune_name, fig=fig, experiment=experiment)
+        log_img_only(name=neptune_name, fig=fig, experiment=_exp)
     plt.close(fig)
     return fig
 
