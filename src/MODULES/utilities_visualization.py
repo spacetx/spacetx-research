@@ -439,14 +439,14 @@ def plot_loss_term(history_dict: dict,
     if train_or_test == "test":
         loss = numpy.array(history_dict["test_loss"])
         mse = numpy.array(history_dict["test_mse_tot"])
-        reg = numpy.array(history_dict["test_reg_tot"])
+        # reg = numpy.array(history_dict["test_reg_tot"])
         kl = numpy.array(history_dict["test_kl_tot"])
         sparsity = numpy.array(history_dict["test_sparsity_tot"])
         lambda_mse = numpy.array(history_dict["test_lambda_mse"])
     elif train_or_test == "train":
         loss = numpy.array(history_dict["train_loss"])
         mse = numpy.array(history_dict["train_mse_tot"])
-        reg = numpy.array(history_dict["train_reg_tot"])
+        # reg = numpy.array(history_dict["train_reg_tot"])
         kl = numpy.array(history_dict["train_kl_tot"])
         sparsity = numpy.array(history_dict["train_sparsity_tot"])
         lambda_mse = numpy.array(history_dict["train_lambda_mse"])
@@ -456,8 +456,8 @@ def plot_loss_term(history_dict: dict,
     fig, ax = plt.subplots()
     ax.plot(loss, '-', label="loss")
     ax.plot(lambda_mse * mse, '.-', label="scaled mse")
-    ax.plot(lambda_mse * reg, '.--', label="scaled reg")
-    ax.plot((1-lambda_mse) * kl, '.--', label="scaled kl")
+    # ax.plot(lambda_mse * reg, '.--', label="scaled reg")
+    ax.plot(kl, '.--', label="scaled kl")
     ax.plot(sparsity, '.--', label="scaled sparsity")
 
     ax.set_xlabel('epoch')
