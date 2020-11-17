@@ -9,8 +9,8 @@
    "TEST_FREQUENCY" : 100,
    "CHECKPOINT_FREQUENCY" : 100,
    "batch_size" : 128,
-   "N_test" : 128,
-   "N_train" : 512
+   "N_test" : 8,
+   "N_train" : 8
  },
 
  "architecture" : {
@@ -46,7 +46,8 @@
 
  "nms" : {
    "__comment" : "parameters for the non-max-suppression",
-   "overlap_threshold" : 0.3
+   "overlap_threshold_train" : 0.3,
+   "overlap_threshold_test" : 0.5
  },
 
 
@@ -54,12 +55,12 @@
    "__comment" : "if active=false use ELBO, else use GECO with Log-Likelihood threshold = n_pixels * n_channel * threshold",
    "is_active" : true,
 
-   "geco_mse_range" : [0.1, 0.8, 0.9],
-   "geco_fgfraction_range" : [0.1, 1.0, 3.0],
-   "geco_ncell_range" : [0.1, 1.0, 3.0],
+   "geco_mse_range" : [0.1, 8.0, 10],
+   "geco_fgfraction_range" : [0.1, 1.0, 10.0],
+   "geco_ncell_range" : [0.1, 1.0, 10.0],
 
    "target_fgfraction" : [0.15, 0.25],
-   "target_mse" : [0.75, 0.75],
+   "target_mse" : [0.0, 0.75],
    "target_ncell" : [7.0, 15.0],
 
    "bg_std" : 0.05,
