@@ -210,26 +210,10 @@ class Inference(NamedTuple):
     similarity_w: torch.Tensor
 
 
-class RegMiniBatch(NamedTuple):
-    # All entries should be scalars obtained by averaging over minibatch
-    reg_overlap: torch.Tensor
-    reg_area_obj: torch.Tensor
-
-    def total(self):
-        tot = None
-        for x in self:
-            if tot is None:
-                tot = x
-            else:
-                tot += x
-        return tot
-
-
 class MetricMiniBatch(NamedTuple):
     # All entries should be scalars obtained by averaging over minibatch
     loss: torch.Tensor  # this is the only tensor b/c I need to take gradients
     mse_tot: float
-    reg_tot: float
     kl_tot: float
     sparsity_tot: float
 
@@ -237,9 +221,6 @@ class MetricMiniBatch(NamedTuple):
     kl_instance: float
     kl_where: float
     kl_logit: float
-
-    reg_overlap: float
-    reg_area_obj: float
 
     count_prediction: numpy.ndarray
     wrong_examples: numpy.ndarray
@@ -263,18 +244,17 @@ class MetricMiniBatch(NamedTuple):
 
     def pretty_print(self, epoch: int = 0) -> str:
         s = "[epoch {0:4d}] loss={1:.3f}, mse={2:.3f},  \
-        reg={3:.3f}, kl={4:.3f}, sparsity={5:.3f}, fg_fraction_av={6:.3f}, n_cell_av={7:.3f}, \
-        lambda_sparsity={8:.3f}, lambda_cell={9:.3f}, lambda_mse={10:.3f}".format(epoch,
-                                                                                  self.loss,
-                                                                                  self.mse_tot,
-                                                                                  self.reg_tot,
-                                                                                  self.kl_tot,
-                                                                                  self.sparsity_tot,
-                                                                                  self.fg_fraction_av,
-                                                                                  self.n_cell_av,
-                                                                                  self.lambda_sparsity,
-                                                                                  self.lambda_cell,
-                                                                                  self.lambda_mse)
+        kl={3:.3f}, sparsity={4:.3f}, fg_fraction_av={5:.3f}, n_cell_av={6:.3f}, \
+        lambda_sparsity={7:.3f}, lambda_cell={8:.3f}, lambda_mse={9:.3f}".format(epoch,
+                                                                                 self.loss,
+                                                                                 self.mse_tot,
+                                                                                 self.kl_tot,
+                                                                                 self.sparsity_tot,
+                                                                                 self.fg_fraction_av,
+                                                                                 self.n_cell_av,
+                                                                                 self.lambda_sparsity,
+                                                                                 self.lambda_cell,
+                                                                                 self.lambda_mse)
         return s
 
 
