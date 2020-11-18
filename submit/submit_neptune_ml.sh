@@ -28,6 +28,7 @@ display_help() {
   echo -e " Supported Flags:"
   echo -e "   -h or --help     Display this message"
   echo -e "   -m or --ml       Name of json file with all the parameters of the ML model. This file will be provided as-is to pytorch code"
+  echo -e "   -w or --wdl      Name of json file with all the parameters for the WDL." 
   echo -e "   -b or --bucket   Name of google bucket where local files will be copied (VM will then localize those files)"
   echo -e "   -t or --template Show the template for $WDL_JSON" 
   echo -e ""

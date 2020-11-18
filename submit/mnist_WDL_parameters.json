@@ -4,8 +4,8 @@
   "neptune_ml.data_test": "gs://ld-data-bucket/cell_segmenter/multiMNIST/DISCRETE_GRID_multi_mnist_test.pt",
   "neptune_ml.ckpt": "gs://ld-data-bucket/cell_segmenter/multiMNIST/dummy1.pt",
   "neptune_ml.ground_truth": "gs://ld-data-bucket/cell_segmenter/multiMNIST/dummy2.pt",
-  "neptune_ml.git_branch_or_commit": "75e27a593c9267a0ff445a81468fb2e669d7f329",
- "neptune_ml.git_repo":  "https://github.com/spacetx/spacetx-research.git",
+  "neptune_ml.git_branch_or_commit": "23803bb44e82442442691458e6e85dde32f2b8ac",
+  "neptune_ml.git_repo":  "https://github.com/spacetx/spacetx-research.git",
   "neptune_ml.main_file_name": "main_mnist.py"
 }
 

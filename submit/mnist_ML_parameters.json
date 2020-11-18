@@ -5,7 +5,7 @@
  "simulation" : {
    "__comment" : "there are 3 types of runs: scratch, resume, pretrained",
    "type" : "scratch",
-   "MAX_EPOCHS" : 501,
+   "MAX_EPOCHS" : 1501,
    "TEST_FREQUENCY" : 50,
    "CHECKPOINT_FREQUENCY" : 50,
    "batch_size" : 128
@@ -49,18 +49,17 @@
 
  "GECO_loss" : {
    "__comment" : "if active=false use ELBO, else use GECO with Log-Likelihood threshold = n_pixels * n_channel * threshold",
-   "is_active" : true,
 
-   "geco_mse_range" : [0.1, 0.8, 0.9],
+   "geco_mse_range" : [0.1, 8.0, 10.0],
    "geco_fgfraction_range" : [0.1, 1.0, 10.0],
    "geco_ncell_range" : [0.1, 1.0, 10.0],
 
    "target_fgfraction" : [0.05, 0.15],
-   "target_mse" : [0.25, 0.75],
-   "target_ncell" : [3.0, 5.0],
+   "target_mse" : [0.0, 1.0],
+   "target_ncell" : [1.5, 6.5],
 
-   "bg_std" : 0.1,
-   "fg_std" : 0.1
+   "bg_std" : 0.01,
+   "fg_std" : 0.01
  },
 
  "optimizer" : {
@@ -74,7 +73,7 @@
    "betas_geco" : [0.9, 0.999],
    "weight_decay" : 0.0,
    "eps" : 1E-8,
-   "scheduler_is_active" : true,
+   "scheduler_is_active" : false,
    "scheduler_type" : "step_LR",
    "scheduler_step_size" : 500,
    "scheduler_gamma" : 0.75

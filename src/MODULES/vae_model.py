@@ -222,7 +222,7 @@ class CompositionalVae(torch.nn.Module):
                                                                     max=max(self.geco_dict["geco_fgfraction_range"])).detach()
 
         sparsity_av = geco_fgfraction_detached * f_sparsity + geco_ncell_detached * f_cell
-        loss_vae = kl_av + sparsity_av + geco_mse_detached * mse_av
+        loss_vae = kl_av + sparsity_av + geco_mse_detached * f_mse
         loss_geco = self.geco_fgfraction * g_sparsity.detach() + \
                     self.geco_ncell * g_cell.detach() + \
                     self.geco_mse * g_mse.detach()

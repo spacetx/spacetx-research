@@ -4,8 +4,8 @@
 
  "simulation" : {
    "__comment" : "there are 3 types of runs: scratch, resume, pretrained",
-   "type" : "scratch",
-   "MAX_EPOCHS" : 5501,
+   "type" : "pretrained",
+   "MAX_EPOCHS" : 15001,
    "TEST_FREQUENCY" : 100,
    "CHECKPOINT_FREQUENCY" : 100,
    "batch_size" : 128,
@@ -74,19 +74,19 @@
    "betas" : [0.9, 0.999],
    "base_lr_similarity" : 0.01,
    "betas_similarity" : [0.9, 0.999],
-   "base_lr_geco" : 0.01,
+   "base_lr_geco" : 0.001,
    "betas_geco" : [0.9, 0.999],
    "weight_decay" : 0.0,
    "eps" : 1E-8,
-   "scheduler_is_active" : true,
+   "scheduler_is_active" : false,
    "scheduler_type" : "step_LR",
-   "scheduler_step_size" : 1000,
+   "scheduler_step_size" : 500,
    "scheduler_gamma" : 0.75
  },
 
  "shortcut_prob_corr_factor" : {
   "__comment" : "parameters for the shortcut for porb_corr_factor",
-  "values" : [0.5, 0.0],
+  "values" : [0.0, 0.0],
   "times" : [200, 500]
  },
 
