@@ -63,20 +63,24 @@ template_wdl_json() {
 #--------------------------------------
 # 1. read inputs from command line
 #--------------------------------------
-POSITIONAL=""
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 		-h|--help)
+			echo "here"
 			display_help
 			exit 0
 			;;
+		-w|--wdl)
+			WDL_JSON=$2
+			shift 2
+			;;
 		-m|--ml)
 			ML_JSON=$2
-			shift
+			shift 2
 			;;
 		-b|--bucket)
 			BUCKET=$2
-			shift
+			shift 2
 			;;
 		-t|--template)
 			template_wdl_json
@@ -85,11 +89,6 @@ while [[ $# -gt 0 ]]; do
 		-*|--*=) # unknown option
 			echo "ERROR: Unsupported flag $1"
 			exit 1
-			;;
-		*) # positional
-			if [[ $1 == *.wdl ]]; then WDL=$1; fi
-			if [[ $1 == *.json ]]; then WDL_JSON=$1; fi
-			shift 
 			;;
 	esac
 done  # end of while loop
