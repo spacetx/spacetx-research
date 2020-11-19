@@ -105,7 +105,18 @@ class DecoderBackground(nn.Module):
         super().__init__()
         self.dim_z = dim_z
         self.ch_out = ch_out
-        self.upsample = nn.Linear(self.dim_z, CH_BG_MAP * LOW_RESOLUTION_BG[0] * LOW_RESOLUTION_BG[1])
+
+        dim_z_after_upsample = CH_BG_MAP * LOW_RESOLUTION_BG[0] * LOW_RESOLUTION_BG[1]
+        ch_hidden1 = (self.dim_z + dim_z_after_upsample) // 3
+        ch_hidden2 = 2 * ch_hidden1
+        self.upsample = nn.Sequential(
+            nn.Linear(self.dim_z, ch_hidden1),
+            torch.nn.ReLU(inplace=True),
+            nn.Linear(ch_hidden1, ch_hidden2),
+            torch.nn.ReLU(inplace=True),
+            nn.Linear(ch_hidden2, dim_z_after_upsample)
+        )
+
         self.decoder = nn.Sequential(
             torch.nn.ConvTranspose2d(in_channels=CH_BG_MAP, out_channels=32, kernel_size=4, stride=2, padding=1),  # 10,10
             torch.nn.ReLU(inplace=True),
@@ -130,7 +141,18 @@ class DecoderConv(nn.Module):
         assert (self.width == 28 or self.width == 56)
         self.dim_z: int = dim_z
         self.ch_out: int = ch_out
-        self.upsample = nn.Linear(self.dim_z, 64 * 7 * 7)
+
+        dim_z_after_upsample = 64 * 7 * 7
+        ch_hidden1 = (self.dim_z + dim_z_after_upsample) // 3
+        ch_hidden2 = 2 * ch_hidden1
+        self.upsample = nn.Sequential(
+            nn.Linear(self.dim_z, ch_hidden1),
+            torch.nn.ReLU(inplace=True),
+            nn.Linear(ch_hidden1, ch_hidden2),
+            torch.nn.ReLU(inplace=True),
+            nn.Linear(ch_hidden2, dim_z_after_upsample)
+        )
+
         self.decoder = nn.Sequential(
             torch.nn.ConvTranspose2d(64, 32, 4, 2, 1),  # B,  64,  14,  14
             torch.nn.ReLU(inplace=True),
