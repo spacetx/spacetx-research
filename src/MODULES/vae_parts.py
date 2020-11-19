@@ -187,7 +187,7 @@ class Inference_and_Generation(torch.nn.Module):
         # Therefore sum_{i \ne j} x_i x_j = x1*x2 + x1*x3 + x2*x3 = 0.5 * [(sum xi)^2 - (sum xi^2)]
         sum_x = big_mask_times_c.sum(dim=-5)  # sum over boxes first
         sum_x2 = big_mask_times_c.pow(2).sum(dim=-5)  # square first and sum over boxes later
-        overlap_per_pixel = 0.5 * (sum_x.pow(2) - sum_x2).clamp(min=0)
+        overlap_summed_over_pixel = 0.5 * (sum_x.pow(2) - sum_x2).clamp(min=0).sum()/batch_size
 
         # From weight to mixing_probabilties
         mixing = big_mask_times_c / big_mask_times_c.sum(dim=-5).clamp_(min=1.0)  # softplus-like function
@@ -196,7 +196,7 @@ class Inference_and_Generation(torch.nn.Module):
         return Inference(prob_map=p_map,
                          big_bg=big_bg,
                          mixing=mixing,
-                         overlap_per_pixel=overlap_per_pixel,
+                         overlap_summed_over_pixel=overlap_summed_over_pixel,
                          big_img=big_img,
                          # the sample of the 4 latent variables
                          sample_c_map_before_nms=c_map_before_nms,

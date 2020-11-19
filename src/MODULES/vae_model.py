@@ -156,8 +156,7 @@ class CompositionalVae(torch.nn.Module):
         # 1. Masks should not overlap:
         # A = (x1+x2+x3)^2 = x1^2 + x2^2 + x3^2 + 2 x1*x2 + 2 x1*x3 + 2 x2*x3
         # Therefore sum_{i \ne j} x_i x_j = x1*x2 + x1*x3 + x2*x3 = 0.5 * [(sum xi)^2 - (sum xi^2)]
-        batch_size = inference.overlap_per_pixel.shape[-4]
-        cost_overlap_mean = self.dict_soft_constraints["overlap"]["strenght"] * inference.overlap_per_pixel.sum()/batch_size
+        cost_overlap_mean = self.dict_soft_constraints["overlap"]["strenght"] * inference.overlap_summed_over_pixel
 
 ###         # Mask should have a min and max volume
 ###         volume_mask_absolute = inference.mixing.sum(dim=(-1, -2, -3))  # sum over ch,w,h
@@ -197,8 +196,9 @@ class CompositionalVae(torch.nn.Module):
         with torch.no_grad():
             x_mse_max = max(self.geco_dict["target_mse"])
             x_mse_min = min(self.geco_dict["target_mse"])
-            g_mse = torch.min(mse_av - x_mse_min, x_mse_max - mse_av)  # positive if in range, negative otherwise
-        f_mse = mse_av * torch.sign(mse_av - x_mse_min).detach()
+            g_mse = (min(self.geco_dict["target_mse"]) - mse_av).clamp(min=0) + \
+                    (max(self.geco_dict["target_mse"]) - mse_av).clamp(max=0)
+        f_mse = mse_av
 
         # 2. Sparsity should encourage:
         # 1. few object
@@ -249,10 +249,11 @@ class CompositionalVae(torch.nn.Module):
                                                           max=max(self.geco_dict["geco_ncell_range"])).detach()
         geco_fgfraction_detached = self.geco_fgfraction.data.clamp_(min=min(self.geco_dict["geco_fgfraction_range"]),
                                                                     max=max(self.geco_dict["geco_fgfraction_range"])).detach()
+        one_minus_geco_mse_detached = torch.ones_like(geco_mse_detached) - geco_mse_detached
 
         reg_av = regularizations.total()
         sparsity_av = geco_fgfraction_detached * f_sparsity + geco_ncell_detached * f_cell
-        loss_vae = kl_av + sparsity_av + geco_mse_detached * (f_mse + reg_av)
+        loss_vae = sparsity_av + geco_mse_detached * (f_mse + reg_av) + one_minus_geco_mse_detached * kl_av
         loss_geco = self.geco_fgfraction * g_sparsity.detach() + \
                     self.geco_ncell * g_cell.detach() + \
                     self.geco_mse * g_mse.detach()
