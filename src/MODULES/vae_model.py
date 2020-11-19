@@ -143,13 +143,49 @@ class CompositionalVae(torch.nn.Module):
             self.sigma_fg = self.sigma_fg.cuda()
             self.sigma_bg = self.sigma_bg.cuda()
 
+    def compute_regularizations(self,
+                                inference: Inference,
+                                verbose: bool = False,
+                                chosen: int = None) -> RegMiniBatch:
+        """ Compute the mean regularization over each image.
+            These regularizations are written only in terms of p.detached and big_masks.
+            1. fg_pixel_fraction determines the overall foreground budget
+            2. overlap make sure that mask do not overlap
+        """
+
+        # 1. Mixing probability should become certain.
+        # I want to minimize the entropy: - sum_k pi_k log(pi_k)
+        # Equivalently I can minimize overlap: sum_k pi_k * (1 - pi_k)
+        # Both are minimized if pi_k = 0,1
+        overlap = torch.sum(inference.mixing * (torch.ones_like(inference.mixing) - inference.mixing), dim=-5)  # sum boxes
+        batch_size = overlap.shape[-4]
+        cost_overlap = sample_from_constraints_dict(dict_soft_constraints=self.dict_soft_constraints,
+                                                    var_name="overlap",
+                                                    var_value=overlap,
+                                                    verbose=verbose,
+                                                    chosen=chosen)
+        cost_overlap_mean = cost_overlap.sum()/batch_size  # sum over ch, w, h. Mean over batched
+
+###         # Mask should have a min and max volume
+###         volume_mask_absolute = inference.mixing.sum(dim=(-1, -2, -3))  # sum over ch,w,h
+###         cost_volume_absolute = sample_from_constraints_dict(dict_soft_constraints=self.dict_soft_constraints,
+###                                                             var_name="mask_volume_absolute",
+###                                                             var_value=volume_mask_absolute,
+###                                                             verbose=verbose,
+###                                                             chosen=chosen)
+###         cost_volume_minibatch = (cost_volume_absolute * inference.sample_c.detach()).sum(dim=-2)  # sum boxes
+
+        return RegMiniBatch(reg_overlap=cost_overlap_mean,            # mean over batch_size
+                            reg_area_obj=torch.zeros_like(cost_overlap_mean))  # mean over batch_size
+
     @staticmethod
     def NLL_MSE(output: torch.tensor, target: torch.tensor, sigma: torch.tensor) -> torch.Tensor:
         return ((output - target) / sigma).pow(2)
 
     def compute_metrics(self,
                         imgs_in: torch.Tensor,
-                        inference: Inference) -> MetricMiniBatch:
+                        inference: Inference,
+                        regularizations: RegMiniBatch) -> MetricMiniBatch:
 
         # Preparation
         n_box_few, batch_size = inference.sample_c.shape
@@ -221,8 +257,9 @@ class CompositionalVae(torch.nn.Module):
         geco_fgfraction_detached = self.geco_fgfraction.data.clamp_(min=min(self.geco_dict["geco_fgfraction_range"]),
                                                                     max=max(self.geco_dict["geco_fgfraction_range"])).detach()
 
+        reg_av = regularizations.total()
         sparsity_av = geco_fgfraction_detached * f_sparsity + geco_ncell_detached * f_cell
-        loss_vae = kl_av + sparsity_av + geco_mse_detached * f_mse
+        loss_vae = kl_av + geco_mse_detached * (f_mse + reg_av + sparsity_av)
         loss_geco = self.geco_fgfraction * g_sparsity.detach() + \
                     self.geco_ncell * g_cell.detach() + \
                     self.geco_mse * g_mse.detach()
@@ -231,6 +268,7 @@ class CompositionalVae(torch.nn.Module):
         # add everything you want as long as there is one loss
         return MetricMiniBatch(loss=loss,
                                mse_tot=mse_av.detach().item(),
+                               reg_tot=reg_av.detach().item(),
                                kl_tot=kl_av.detach().item(),
                                sparsity_tot=sparsity_av.detach().item(),
 
@@ -238,6 +276,9 @@ class CompositionalVae(torch.nn.Module):
                                kl_instance=kl_zinstance.detach().item(),
                                kl_where=kl_zwhere.detach().item(),
                                kl_logit=kl_logit.detach().item(),
+
+                               reg_overlap=regularizations.reg_overlap.detach().item(),
+                               reg_area_obj=regularizations.reg_area_obj.detach().item(),
 
                                lambda_sparsity=self.geco_fgfraction.data.detach().item(),
                                lambda_cell=self.geco_ncell.data.detach().item(),
@@ -562,8 +603,12 @@ class CompositionalVae(torch.nn.Module):
                                                             topk_only=topk_only,
                                                             noisy_sampling=noisy_sampling)
 
+        regularizations: RegMiniBatch = self.compute_regularizations(inference=inference,
+                                                                     verbose=verbose)
+
         metrics: MetricMiniBatch = self.compute_metrics(imgs_in=imgs_in,
-                                                        inference=inference)
+                                                        inference=inference,
+                                                        regularizations=regularizations)
 
         with torch.no_grad():
             if draw_image:
