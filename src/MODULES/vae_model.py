@@ -156,7 +156,7 @@ class CompositionalVae(torch.nn.Module):
         # 1. Masks should not overlap:
         # A = (x1+x2+x3)^2 = x1^2 + x2^2 + x3^2 + 2 x1*x2 + 2 x1*x3 + 2 x2*x3
         # Therefore sum_{i \ne j} x_i x_j = x1*x2 + x1*x3 + x2*x3 = 0.5 * [(sum xi)^2 - (sum xi^2)]
-        cost_overlap_mean = self.dict_soft_constraints["overlap"]["strenght"] * inference.overlap_summed_over_pixel
+        cost_overlap_mean = self.dict_soft_constraints["overlap"]["strength"] * inference.overlap_summed_over_pixel
 
 ###         # Mask should have a min and max volume
 ###         volume_mask_absolute = inference.mixing.sum(dim=(-1, -2, -3))  # sum over ch,w,h
