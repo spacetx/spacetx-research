@@ -4,8 +4,8 @@
   "neptune_ml.data_test": "gs://ld-data-bucket/cell_segmenter/MERFISH/dummy1.pt",
   "neptune_ml.ckpt": "gs://ld-data-bucket/cell_segmenter/MERFISH/dummy2.pt",
   "neptune_ml.ground_truth": "gs://ld-data-bucket/cell_segmenter/MERFISH/oleh_merfish_mask_small.tif",
-  "neptune_ml.git_branch_or_commit": "23803bb44e82442442691458e6e85dde32f2b8ac",
- "neptune_ml.git_repo":  "https://github.com/spacetx/spacetx-research.git",
+  "neptune_ml.git_branch_or_commit": "716118303fff453ab9b0e704d645027e7b66ebf9",
+"neptune_ml.git_repo":  "https://github.com/spacetx/spacetx-research.git",
   "neptune_ml.main_file_name": "main_merfish.py"
 }
 

@@ -5,7 +5,7 @@
  "simulation" : {
    "__comment" : "there are 3 types of runs: scratch, resume, pretrained",
    "type" : "scratch",
-   "MAX_EPOCHS" : 5501,
+   "MAX_EPOCHS" : 3501,
    "TEST_FREQUENCY" : 100,
    "CHECKPOINT_FREQUENCY" : 100,
    "batch_size" : 128,
@@ -25,7 +25,7 @@
    "level_background_output" : 4,
    "n_ch_output_features" : 32,
    "n_ch_after_first_two_conv" : 32,
-   "concatenate_raw_image_to_fmap" : false
+   "concatenate_raw_image_to_fmap" : true
  },
 
   "DPP" : {
@@ -53,18 +53,17 @@
 
  "GECO_loss" : {
    "__comment" : "if active=false use ELBO, else use GECO with Log-Likelihood threshold = n_pixels * n_channel * threshold",
-   "is_active" : true,
 
    "geco_mse_range" : [0.1, 8.0, 10],
-   "geco_fgfraction_range" : [0.1, 1.0, 10.0],
-   "geco_ncell_range" : [0.1, 1.0, 10.0],
+   "geco_fgfraction_range" : [0.1, 1.0, 100.0],
+   "geco_ncell_range" : [0.1, 1.0, 100.0],
 
-   "target_fgfraction" : [0.15, 0.25],
-   "target_mse" : [0.0, 0.75],
+   "target_fgfraction" : [0.10, 0.20],
+   "target_mse" : [0.0, 1.0],
    "target_ncell" : [5.0, 8.0],
 
-   "bg_std" : 0.05,
-   "fg_std" : 0.05
+   "bg_std" : 0.01,
+   "fg_std" : 0.01
  },
 
  "optimizer" : {
