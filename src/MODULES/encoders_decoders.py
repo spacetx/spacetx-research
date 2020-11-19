@@ -6,7 +6,7 @@ from MODULES.utilities import tmaps_to_bb
 
 EPS_STD = 1E-3  # standard_deviation = F.softplus(x) + EPS_STD >= EPS_STD
 LOW_RESOLUTION_BG = (5, 5)
-CH_BG_MAP = 32
+CH_BG_MAP = 8
 
 
 # --------- HELPER FUNCTION ---------------------

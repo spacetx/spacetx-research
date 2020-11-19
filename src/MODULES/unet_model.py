@@ -17,7 +17,6 @@ class UNet(torch.nn.Module):
         self.ch_after_first_two_conv = params["architecture"]["n_ch_after_first_two_conv"]
         self.dim_zbg = params["architecture"]["dim_zbg"]
         self.dim_zwhere = params["architecture"]["dim_zwhere"]
-        self.dim_logit = params["architecture"]["dim_logit"]
         self.ch_raw_image = params["input_image"]["ch_in"]
         self.concatenate_raw_image_to_fmap = params["architecture"]["concatenate_raw_image_to_fmap"]
 
@@ -55,14 +54,14 @@ class UNet(torch.nn.Module):
         # Predict the logit
         self.ch_in_logit = self.ch_list[-self.level_zwhere_and_logit_output - 1]
         self.predict_logit = MLP_1by1(ch_in=self.ch_in_logit,
-                                      ch_out=self.dim_logit,
-                                      ch_hidden=(self.ch_in_logit + self.dim_logit) // 2)
+                                      ch_out=1,
+                                      ch_hidden=self.ch_in_logit//2)
 
         # Encode zwhere in mu and std
         self.ch_in_zwhere = self.ch_list[-self.level_zwhere_and_logit_output - 1]
         self.encode_zwhere = EncoderWhere(ch_in=self.ch_in_zwhere,
                                           dim_z=self.dim_zwhere,
-                                          ch_hidden=(self.ch_in_zwhere + self.dim_zwhere)//2)
+                                          ch_hidden=self.ch_in_zwhere//2)
 
         # Encode zbg in mu and std
         self.ch_in_bg = self.ch_list[-self.level_background_output - 1]
