@@ -3,26 +3,13 @@ import torch.nn.functional as F
 
 from MODULES.cropper_uncropper import Uncropper, Cropper
 from MODULES.unet_model import UNet
-from MODULES.encoders_decoders import EncoderConv, DecoderConv, Decoder1by1Linear, DecoderBackground
+from MODULES.encoders_decoders import EncoderInstance, DecoderInstance, DecoderBackground, DecoderWhere
 from MODULES.utilities import tmaps_to_bb, convert_to_box_list, invert_convert_to_box_list
 from MODULES.utilities import compute_ranking, compute_average_in_box
 from MODULES.utilities_ml import sample_and_kl_diagonal_normal, sample_c_map
 from MODULES.utilities_ml import compute_kl_DPP, compute_kl_Bernoulli, SimilarityKernel
 from MODULES.namedtuple import Inference, NMSoutput, BB, UNEToutput, ZZ, DIST
 from MODULES.non_max_suppression import NonMaxSuppression
-
-
-def from_w_to_pi(weight: torch.Tensor, dim: int):
-    """ Compute the interacting and non-interacting mixing probabilities
-        Make sure that when summing over dim=dim the mask sum to zero or one
-        mask_j = fg_mask * partitioning_j
-        where fg_mask = tanh ( sum_i w_i) and partitioning_j = w_j / (sum_i w_i)
-    """
-    assert len(weight.shape) == 5
-    sum_weight = torch.sum(weight, dim=dim, keepdim=True)
-    fg_mask = torch.tanh(sum_weight)
-    partitioning = weight / torch.clamp(sum_weight, min=1E-6)
-    return fg_mask * partitioning
 
 
 class Inference_and_Generation(torch.nn.Module):
@@ -35,8 +22,6 @@ class Inference_and_Generation(torch.nn.Module):
         self.size_min: int = params["input_image"]["size_object_min"]
         self.cropped_size: int = params["architecture"]["cropped_size"]
 
-
-
         # modules
         self.similarity_kernel_dpp = SimilarityKernel(n_kernels=params["DPP"]["n_kernels"])
         self.unet: UNet = UNet(params)
@@ -45,20 +30,15 @@ class Inference_and_Generation(torch.nn.Module):
         self.decoder_zbg: DecoderBackground = DecoderBackground(dim_z=params["architecture"]["dim_zbg"],
                                                                 ch_out=params["input_image"]["ch_in"])
 
-        self.decoder_zwhere: Decoder1by1Linear = Decoder1by1Linear(dim_z=params["architecture"]["dim_zwhere"],
-                                                                   ch_out=4)
+        self.decoder_zwhere: DecoderWhere = DecoderWhere(dim_z=params["architecture"]["dim_zwhere"])
 
-        self.decoder_logit: Decoder1by1Linear = Decoder1by1Linear(dim_z=params["architecture"]["dim_logit"],
-                                                                  ch_out=1)
-
-        self.decoder_zinstance: DecoderConv = DecoderConv(size=params["architecture"]["cropped_size"],
-                                                          dim_z=params["architecture"]["dim_zinstance"],
-                                                          ch_out=params["input_image"]["ch_in"] + 1)
-
+        self.decoder_zinstance: DecoderInstance = DecoderInstance(size=params["architecture"]["cropped_size"],
+                                                                  dim_z=params["architecture"]["dim_zinstance"],
+                                                                  ch_out=params["input_image"]["ch_in"] + 1)
         # Encoders
-        self.encoder_zinstance: EncoderConv = EncoderConv(size=params["architecture"]["cropped_size"],
-                                                          ch_in=params["architecture"]["n_ch_output_features"],
-                                                          dim_z=params["architecture"]["dim_zinstance"])
+        self.encoder_zinstance: EncoderInstance = EncoderInstance(size=params["architecture"]["cropped_size"],
+                                                                  ch_in=params["architecture"]["n_ch_output_features"],
+                                                                  dim_z=params["architecture"]["dim_zinstance"])
 
     def forward(self, imgs_in: torch.Tensor,
                 generate_synthetic_data: bool,
@@ -84,8 +64,8 @@ class Inference_and_Generation(torch.nn.Module):
                                                   noisy_sampling=noisy_sampling,
                                                   sample_from_prior=generate_synthetic_data)
 
-        big_bg = torch.sigmoid(self.decoder_zbg(z=zbg.sample,
-                                                high_resolution=(imgs_in.shape[-2], imgs_in.shape[-1])))
+        big_bg = self.decoder_zbg(z=zbg.sample,
+                                  high_resolution=(imgs_in.shape[-2], imgs_in.shape[-1]))
 
         # bounbding boxes
         zwhere_map: DIST = sample_and_kl_diagonal_normal(posterior_mu=unet_output.zwhere.mu,
@@ -95,11 +75,11 @@ class Inference_and_Generation(torch.nn.Module):
                                                          noisy_sampling=noisy_sampling,
                                                          sample_from_prior=generate_synthetic_data)
 
-        bounding_box_all: BB = tmaps_to_bb(tmaps=torch.sigmoid(self.decoder_zwhere(zwhere_map.sample)),
-                                           width_raw_image=width_raw_image,
-                                           height_raw_image=height_raw_image,
-                                           min_box_size=self.size_min,
-                                           max_box_size=self.size_max)
+        bounding_box_all: BB = self.decoder_zwhere(z=zwhere_map.sample,
+                                                   width_raw_image=imgs_in.shape[-2],
+                                                   height_raw_image=imgs_in.shape[-1],
+                                                   min_box_size=self.size_min,
+                                                   max_box_size=self.size_max)
 
         with torch.no_grad():
 
@@ -152,7 +132,7 @@ class Inference_and_Generation(torch.nn.Module):
                                                   original_width=c_map_before_nms.shape[-2],
                                                   original_height=c_map_before_nms.shape[-1])  # shape: batch_size, 1, w, h
 
-        # TODO: check if I can use the c_map_after_nms in both places.....
+        # Note that I use: c_map_after_nms = c_map_before_nms * mask_map
         kl_logit_prior = compute_kl_DPP(c_map=(c_map_before_nms * mask_map).detach(),
                                         similarity_kernel=similarity_kernel)
         kl_logit_posterior = compute_kl_Bernoulli(c_map=(c_map_before_nms * mask_map).detach(),
@@ -201,12 +181,22 @@ class Inference_and_Generation(torch.nn.Module):
                                      height_big=height_raw_image)  # shape: n_box, batch, ch, w, h
         big_mask, big_img = torch.split(big_stuff, split_size_or_sections=(1, big_stuff.shape[-3]-1), dim=-3)
         big_mask_times_c = big_mask * c_few[..., None, None, None]  # this is strictly smaller than 1
+
+        # Compute the overlap
+        # A = (x1+x2+x3)^2 = x1^2 + x2^2 + x3^2 + 2 x1*x2 + 2 x1*x3 + 2 x2*x3
+        # Therefore sum_{i \ne j} x_i x_j = x1*x2 + x1*x3 + x2*x3 = 0.5 * [(sum xi)^2 - (sum xi^2)]
+        sum_x = big_mask_times_c.sum(dim=-5)  # sum over boxes first
+        sum_x2 = big_mask_times_c.pow(2).sum(dim=-5)  # square first and sum over boxes later
+        overlap_summed_over_pixel = 0.5 * (sum_x.pow(2) - sum_x2).clamp(min=0).sum()/batch_size
+
+        # From weight to mixing_probabilties
         mixing = big_mask_times_c / big_mask_times_c.sum(dim=-5).clamp_(min=1.0)  # softplus-like function
         similarity_l, similarity_w = self.similarity_kernel_dpp.get_l_w()
 
         return Inference(prob_map=p_map,
                          big_bg=big_bg,
                          mixing=mixing,
+                         overlap_summed_over_pixel=overlap_summed_over_pixel,
                          big_img=big_img,
                          # the sample of the 4 latent variables
                          sample_c_map_before_nms=c_map_before_nms,
