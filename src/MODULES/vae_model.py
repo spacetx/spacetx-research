@@ -153,18 +153,14 @@ class CompositionalVae(torch.nn.Module):
             2. overlap make sure that mask do not overlap
         """
 
-        # 1. Mixing probability should become certain.
-        # I want to minimize the entropy: - sum_k pi_k log(pi_k)
-        # Equivalently I can minimize overlap: sum_k pi_k * (1 - pi_k)
-        # Both are minimized if pi_k = 0,1
-        overlap = torch.sum(inference.mixing * (torch.ones_like(inference.mixing) - inference.mixing), dim=-5)  # sum boxes
+        # 1. Masks should not overlap:
+        # A = (x1+x2+x3)^2 = x1^2 + x2^2 + x3^2 + 2 x1*x2 + 2 x1*x3 + 2 x2*x3
+        # Therefore sum_{i \ne j} x_i x_j = x1*x2 + x1*x3 + x2*x3 = 0.5 * [(sum xi)^2 - (sum xi^2)]
+        sum_x = inference.mixing.sum(dim=-5)  # sum over boxes first
+        sum_x2 = inference.mixing.pow(2).sum(dim=-5)  # square first and sum over boxes later
+        overlap = 0.5 * (sum_x.pow(2) - sum_x2).clamp(min=0)
         batch_size = overlap.shape[-4]
-        cost_overlap = sample_from_constraints_dict(dict_soft_constraints=self.dict_soft_constraints,
-                                                    var_name="overlap",
-                                                    var_value=overlap,
-                                                    verbose=verbose,
-                                                    chosen=chosen)
-        cost_overlap_mean = cost_overlap.sum()/batch_size  # sum over ch, w, h. Mean over batched
+        cost_overlap_mean = self.dict_soft_constraints["overlap"]["strenght"] * (overlap.sum()/batch_size)
 
 ###         # Mask should have a min and max volume
 ###         volume_mask_absolute = inference.mixing.sum(dim=(-1, -2, -3))  # sum over ch,w,h
