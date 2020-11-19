@@ -181,12 +181,22 @@ class Inference_and_Generation(torch.nn.Module):
                                      height_big=height_raw_image)  # shape: n_box, batch, ch, w, h
         big_mask, big_img = torch.split(big_stuff, split_size_or_sections=(1, big_stuff.shape[-3]-1), dim=-3)
         big_mask_times_c = big_mask * c_few[..., None, None, None]  # this is strictly smaller than 1
+
+        # Compute the overlap
+        # A = (x1+x2+x3)^2 = x1^2 + x2^2 + x3^2 + 2 x1*x2 + 2 x1*x3 + 2 x2*x3
+        # Therefore sum_{i \ne j} x_i x_j = x1*x2 + x1*x3 + x2*x3 = 0.5 * [(sum xi)^2 - (sum xi^2)]
+        sum_x = big_mask_times_c.sum(dim=-5)  # sum over boxes first
+        sum_x2 = big_mask_times_c.pow(2).sum(dim=-5)  # square first and sum over boxes later
+        overlap_per_pixel = 0.5 * (sum_x.pow(2) - sum_x2).clamp(min=0)
+
+        # From weight to mixing_probabilties
         mixing = big_mask_times_c / big_mask_times_c.sum(dim=-5).clamp_(min=1.0)  # softplus-like function
         similarity_l, similarity_w = self.similarity_kernel_dpp.get_l_w()
 
         return Inference(prob_map=p_map,
                          big_bg=big_bg,
                          mixing=mixing,
+                         overlap_per_pixel=overlap_per_pixel,
                          big_img=big_img,
                          # the sample of the 4 latent variables
                          sample_c_map_before_nms=c_map_before_nms,
