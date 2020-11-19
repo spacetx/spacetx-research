@@ -5,7 +5,7 @@
  "simulation" : {
    "__comment" : "there are 3 types of runs: scratch, resume, pretrained",
    "type" : "scratch",
-   "MAX_EPOCHS" : 3501,
+   "MAX_EPOCHS" : 1501,
    "TEST_FREQUENCY" : 50,
    "CHECKPOINT_FREQUENCY" : 50,
    "batch_size" : 128
@@ -16,7 +16,6 @@
    "dim_zinstance" : 20,
    "dim_zwhere" : 4,
    "dim_zbg" : 20,
-   "dim_logit" : 1,
    "cropped_size" : 28,
    "n_max_pool" : 4,
    "level_zwhere_and_logit_output" : 2,
@@ -91,7 +90,7 @@
 
   "overlap": {
     "__comment": "cost which discourages masks from overlapping",
-    "strength": 0.01,
+    "strength": 1E-1,
     "exponent": 1
   },
 
