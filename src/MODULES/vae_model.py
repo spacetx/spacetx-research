@@ -196,8 +196,7 @@ class CompositionalVae(torch.nn.Module):
         with torch.no_grad():
             x_mse_max = max(self.geco_dict["target_mse"])
             x_mse_min = min(self.geco_dict["target_mse"])
-            g_mse = (min(self.geco_dict["target_mse"]) - mse_av).clamp(min=0) + \
-                    (max(self.geco_dict["target_mse"]) - mse_av).clamp(max=0)
+            g_mse = (x_mse_min - mse_av).clamp(min=0) + (x_mse_max - mse_av).clamp(max=0)
         f_mse = mse_av
 
         # 2. Sparsity should encourage:
@@ -214,19 +213,17 @@ class CompositionalVae(torch.nn.Module):
             x_sparsity_av = torch.mean(mixing_fg)
             x_sparsity_max = max(self.geco_dict["target_fgfraction"])
             x_sparsity_min = min(self.geco_dict["target_fgfraction"])
-            g_sparsity = torch.min(x_sparsity_av - x_sparsity_min, x_sparsity_max - x_sparsity_av)
+            g_sparsity = (x_sparsity_min - x_sparsity_av).clamp(min=0) + (x_sparsity_max - x_sparsity_av).clamp(max=0)
         c_times_area_few = inference.sample_c * inference.sample_bb.bw * inference.sample_bb.bh
-        x_sparsity = 0.5 * (torch.sum(mixing_fg) + torch.sum(c_times_area_few)) / torch.numel(mixing_fg)
-        f_sparsity = x_sparsity * torch.sign(x_sparsity_av - x_sparsity_min).detach()
+        f_sparsity = 0.5 * (torch.sum(mixing_fg) + torch.sum(c_times_area_few)) / torch.numel(mixing_fg)
 
         with torch.no_grad():
             x_cell_av = torch.sum(inference.sample_c_map_after_nms) / batch_size
             x_cell_max = max(self.geco_dict["target_ncell"])
             x_cell_min = min(self.geco_dict["target_ncell"])
-            g_cell = torch.min(x_cell_av - x_cell_min,
-                               x_cell_max - x_cell_av) / n_box_few  # positive if in range, negative otherwise
-        x_cell = torch.sum(inference.sample_c_map_before_nms) / (batch_size * n_box_few)
-        f_cell = x_cell * torch.sign(x_cell_av - x_cell_min).detach()
+            g_cell = (x_cell_min - x_cell_av).clamp(min=0) + (x_cell_max - x_cell_av).clamp(max=0)
+            g_cell /= n_box_few  # positive if in range, negative otherwise
+        f_cell = torch.sum(inference.sample_c_map_before_nms) / (batch_size * n_box_few)
 
 
         # 3. compute KL
