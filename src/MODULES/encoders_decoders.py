@@ -81,7 +81,7 @@ class EncoderBackground(nn.Module):
 
 
 class EncoderInstance(nn.Module):
-    def __init__(self, size: int, ch_in: int, dim_z: int):
+    def __init__(self, size: int, ch_in: int, dim_z: int, leaky: bool = True):
         super().__init__()
         self.ch_in: int = ch_in
         self.width: int = size
@@ -89,11 +89,16 @@ class EncoderInstance(nn.Module):
         # assert (self.width == 28 or self.width == 56)
         self.dim_z = dim_z
 
+        if leaky:
+            activation = nn.LeakyReLU(inplace=True)
+        else:
+            activation = nn.ReLU(inplace=True)
+
         self.conv = nn.Sequential(
             nn.Conv2d(in_channels=self.ch_in, out_channels=32, kernel_size=4, stride=1, padding=2),  # 28,28
-            nn.ReLU(inplace=True),
+            activation,
             nn.Conv2d(in_channels=32, out_channels=32, kernel_size=4, stride=2, padding=1),  # 14,14
-            nn.ReLU(inplace=True),
+            activation,
             nn.Conv2d(in_channels=32, out_channels=64, kernel_size=4, stride=2, padding=1),  # 7,7
         )
 
@@ -178,29 +183,34 @@ class DecoderBackground(nn.Module):
 
 
 class DecoderInstance(nn.Module):
-    def __init__(self, size: int, dim_z: int, ch_out: int):
+    def __init__(self, size: int, dim_z: int, ch_out: int, leaky: bool = True):
         super().__init__()
         self.width = size
-        assert (self.width == 28 or self.width == 56)
+        assert self.width == 28
         self.dim_z = dim_z
         self.dim_z_after_upsample = 64 * 7 * 7
         n_ch = (self.dim_z_after_upsample + self.dim_z) // 3
         z_hidden1, z_hidden2 = self.dim_z + n_ch, self.dim_z + 2 * n_ch
         self.ch_out = ch_out
 
+        if leaky:
+            activation = nn.LeakyReLU(inplace=True)
+        else:
+            activation = nn.ReLU(inplace=True)
+
         self.upsample = nn.Sequential(
             nn.Linear(in_features=self.dim_z, out_features=z_hidden1),
-            nn.ReLU(inplace=True),
+            activation,
             nn.Linear(in_features=z_hidden1, out_features=z_hidden2),
-            nn.ReLU(inplace=True),
+            activation,
             nn.Linear(in_features=z_hidden2, out_features=self.dim_z_after_upsample)
         )
 
         self.decoder = nn.Sequential(
             nn.ConvTranspose2d(64, 32, 4, 2, 1),  # B,  64,  14,  14
-            nn.ReLU(inplace=True),
+            activation,
             nn.ConvTranspose2d(32, 32, 4, 2, 1, 1),  # B,  32, 28, 28
-            nn.ReLU(inplace=True),
+            activation,
             nn.ConvTranspose2d(32, self.ch_out, 4, 1, 2)  # B, ch, 28, 28
         )
 
