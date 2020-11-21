@@ -160,7 +160,7 @@ class DecoderBackground(nn.Module):
         Observation ConvTranspose2D with:
         1. k=4, s=2, p=1 -> double the spatial dimension
     """
-    def __init__(self, dim_z: int, ch_out: int, leaky: bool = True):
+    def __init__(self, dim_z: int, ch_out: int, leaky: bool = False):
         super().__init__()
         self.dim_z = dim_z
         self.ch_out = ch_out
@@ -173,22 +173,21 @@ class DecoderBackground(nn.Module):
         self.upsample = nn.Sequential(
             nn.Linear(in_features=self.dim_z, out_features=28),
             activation,
-            nn.Linear(in_features=28, out_features=28),
-            activation,
-            nn.Linear(in_features=28, out_features=28),
-            activation,
             nn.Linear(in_features=28, out_features=56),
             activation,
-            nn.Linear(in_features=56, out_features=32 * 4 * 4),
-            activation
+            nn.Linear(in_features=56, out_features=128),
+            activation,
+            nn.Linear(in_features=128, out_features=256),
+            activation,
+            nn.Linear(in_features=256, out_features=32 * 4 * 4)
         )
 
         self.decoder = nn.Sequential(
-            nn.ConvTranspose2d(in_channels=32, out_channels=16, kernel_size=4, stride=2, padding=1),  # 8,8
+            nn.ConvTranspose2d(in_channels=32, out_channels=32, kernel_size=4, stride=2, padding=1),  # 8,8
             activation,
-            nn.ConvTranspose2d(in_channels=16, out_channels=8, kernel_size=4, stride=2, padding=1),  # 16,16
+            nn.ConvTranspose2d(in_channels=32, out_channels=32, kernel_size=4, stride=2, padding=1),  # 16,16
             activation,
-            nn.ConvTranspose2d(in_channels=8, out_channels=ch_out, kernel_size=4, stride=2, padding=1)  # 32,32
+            nn.ConvTranspose2d(in_channels=32, out_channels=ch_out, kernel_size=4, stride=2, padding=1)  # 32,32
         )
 
     def forward(self, z: torch.Tensor, high_resolution: tuple) -> torch.Tensor:
@@ -199,7 +198,7 @@ class DecoderBackground(nn.Module):
 
 
 class DecoderInstance(nn.Module):
-    def __init__(self, size: int, dim_z: int, ch_out: int, leaky: bool = True):
+    def __init__(self, size: int, dim_z: int, ch_out: int, leaky: bool = False):
         super().__init__()
         self.width = size
         assert self.width == 28
@@ -214,22 +213,21 @@ class DecoderInstance(nn.Module):
         self.upsample = nn.Sequential(
             nn.Linear(in_features=self.dim_z, out_features=28),
             activation,
-            nn.Linear(in_features=28, out_features=28),
-            activation,
-            nn.Linear(in_features=28, out_features=28),
-            activation,
             nn.Linear(in_features=28, out_features=56),
             activation,
-            nn.Linear(in_features=56, out_features=32 * 4 * 4),
-            activation
+            nn.Linear(in_features=56, out_features=128),
+            activation,
+            nn.Linear(in_features=128, out_features=256),
+            activation,
+            nn.Linear(in_features=256, out_features=32 * 4 * 4)
         )
 
         self.decoder = nn.Sequential(
-                nn.ConvTranspose2d(in_channels=32, out_channels=16, kernel_size=4, stride=2, padding=1),  # 8,8
+                nn.ConvTranspose2d(in_channels=32, out_channels=32, kernel_size=4, stride=2, padding=1),  # 8,8
                 activation,
-                nn.ConvTranspose2d(in_channels=16, out_channels=8, kernel_size=4, stride=2, padding=2),  # 14,14
+                nn.ConvTranspose2d(in_channels=32, out_channels=32, kernel_size=4, stride=2, padding=2),  # 14,14
                 activation,
-                nn.ConvTranspose2d(in_channels=8, out_channels=ch_out, kernel_size=4, stride=2, padding=1)  # 28,28
+                nn.ConvTranspose2d(in_channels=32, out_channels=ch_out, kernel_size=4, stride=2, padding=1)  # 28,28
             )
 
     def forward(self, z: torch.Tensor) -> torch.Tensor:
