@@ -6,7 +6,7 @@ from MODULES.utilities import tmaps_to_bb
 
 EPS_STD = 1E-3  # standard_deviation = F.softplus(x) + EPS_STD >= EPS_STD
 LOW_RESOLUTION_BG = (5, 5)
-CH_BG_MAP = 8
+CH_BG_MAP = 16
 
 
 # --------- HELPER FUNCTION ---------------------
@@ -120,10 +120,23 @@ class EncoderInstance(nn.Module):
 # ------ DECODER --------------------
 
 class DecoderWhere(nn.Module):
-    def __init__(self, dim_z: int):
+    def __init__(self, dim_z: int, leaky: bool = True):
         super().__init__()
         self.dim_z = dim_z
-        self.mlp = MLP_1by1(ch_in=self.dim_z, ch_hidden=8, ch_out=4)
+
+        if leaky:
+            activation = nn.LeakyReLU(inplace=True)
+        else:
+            activation = nn.ReLU(inplace=True)
+
+        self.transform = nn.Sequential(
+            nn.Conv2d(in_channels=self.dim_z, out_channels=4, kernel_size=1, stride=1, padding=0),
+            activation,
+            nn.Conv2d(in_channels=4, out_channels=4, kernel_size=1, stride=1, padding=0),
+            activation,
+            nn.Conv2d(in_channels=4, out_channels=4, kernel_size=1, stride=1, padding=0),
+            nn.Sigmoid()
+        )
 
     def forward(self, z: torch.Tensor,
                 width_raw_image: int,
@@ -131,9 +144,7 @@ class DecoderWhere(nn.Module):
                 min_box_size: int,
                 max_box_size: int) -> BB:
 
-        y = torch.sigmoid(self.mlp(z))
-
-        return tmaps_to_bb(tmaps=y,
+        return tmaps_to_bb(tmaps=self.transform(z),
                            width_raw_image=width_raw_image,
                            height_raw_image=height_raw_image,
                            min_box_size=min_box_size,
@@ -149,48 +160,9 @@ class DecoderBackground(nn.Module):
         Observation ConvTranspose2D with:
         1. k=4, s=2, p=1 -> double the spatial dimension
     """
-    def __init__(self, dim_z: int, ch_out: int):
+    def __init__(self, dim_z: int, ch_out: int, leaky: bool = True):
         super().__init__()
         self.dim_z = dim_z
-        self.dim_z_after_upsample = CH_BG_MAP * LOW_RESOLUTION_BG[0] * LOW_RESOLUTION_BG[1]
-        n_ch = (self.dim_z_after_upsample + self.dim_z) // 3
-        z_hidden1, z_hidden2 = self.dim_z+n_ch, self.dim_z+2*n_ch
-        self.ch_out = ch_out
-
-        self.upsample = nn.Sequential(
-            nn.Linear(in_features=self.dim_z, out_features=z_hidden1),
-            nn.ReLU(inplace=True),
-            nn.Linear(in_features=z_hidden1, out_features=z_hidden2),
-            nn.ReLU(inplace=True),
-            nn.Linear(in_features=z_hidden2, out_features=self.dim_z_after_upsample)
-        )
-
-        self.decoder = nn.Sequential(
-            nn.ConvTranspose2d(in_channels=CH_BG_MAP, out_channels=32, kernel_size=4, stride=2, padding=1),  # 10,10
-            nn.ReLU(inplace=True),
-            nn.ConvTranspose2d(in_channels=32, out_channels=32, kernel_size=4, stride=2, padding=1),  # 20,20
-            nn.ReLU(inplace=True),
-            nn.ConvTranspose2d(in_channels=32, out_channels=16, kernel_size=4, stride=2, padding=1),  # 40,40
-            nn.ReLU(inplace=True),
-            nn.ConvTranspose2d(in_channels=16, out_channels=self.ch_out, kernel_size=4, stride=2, padding=1),  # 80,80
-        )
-
-    def forward(self, z: torch.Tensor, high_resolution: tuple) -> torch.Tensor:
-        # From (B, dim_z) to (B, ch_out, 28, 28) to (B, ch_out, w_raw, h_raw)
-        x0 = self.upsample(z).view(-1, CH_BG_MAP, LOW_RESOLUTION_BG[0], LOW_RESOLUTION_BG[0])
-        x1 = self.decoder(x0)  # B, ch_out, 80, 80
-        return torch.sigmoid(F.interpolate(x1, size=high_resolution, mode='bilinear', align_corners=True))
-
-
-class DecoderInstance(nn.Module):
-    def __init__(self, size: int, dim_z: int, ch_out: int, leaky: bool = True):
-        super().__init__()
-        self.width = size
-        assert self.width == 28
-        self.dim_z = dim_z
-        self.dim_z_after_upsample = 64 * 7 * 7
-        n_ch = (self.dim_z_after_upsample + self.dim_z) // 3
-        z_hidden1, z_hidden2 = self.dim_z + n_ch, self.dim_z + 2 * n_ch
         self.ch_out = ch_out
 
         if leaky:
@@ -199,24 +171,70 @@ class DecoderInstance(nn.Module):
             activation = nn.ReLU(inplace=True)
 
         self.upsample = nn.Sequential(
-            nn.Linear(in_features=self.dim_z, out_features=z_hidden1),
+            nn.Linear(in_features=self.dim_z, out_features=28),
             activation,
-            nn.Linear(in_features=z_hidden1, out_features=z_hidden2),
+            nn.Linear(in_features=28, out_features=28),
             activation,
-            nn.Linear(in_features=z_hidden2, out_features=self.dim_z_after_upsample)
+            nn.Linear(in_features=28, out_features=28),
+            activation,
+            nn.Linear(in_features=28, out_features=56),
+            activation,
+            nn.Linear(in_features=56, out_features=32 * 4 * 4),
+            activation
         )
 
         self.decoder = nn.Sequential(
-            nn.ConvTranspose2d(64, 32, 4, 2, 1),  # B,  64,  14,  14
+            nn.ConvTranspose2d(in_channels=32, out_channels=16, kernel_size=4, stride=2, padding=1),  # 8,8
             activation,
-            nn.ConvTranspose2d(32, 32, 4, 2, 1, 1),  # B,  32, 28, 28
+            nn.ConvTranspose2d(in_channels=16, out_channels=8, kernel_size=4, stride=2, padding=1),  # 16,16
             activation,
-            nn.ConvTranspose2d(32, self.ch_out, 4, 1, 2)  # B, ch, 28, 28
+            nn.ConvTranspose2d(in_channels=8, out_channels=ch_out, kernel_size=4, stride=2, padding=1)  # 32,32
         )
+
+    def forward(self, z: torch.Tensor, high_resolution: tuple) -> torch.Tensor:
+        # From (B, dim_z) to (B, ch_out, 28, 28) to (B, ch_out, w_raw, h_raw)
+        x0 = self.upsample(z).view(-1, 32, 4, 4)
+        x1 = self.decoder(x0)  # B, ch_out, 80, 80
+        return F.interpolate(x1, size=high_resolution, mode='bilinear', align_corners=True)
+
+
+class DecoderInstance(nn.Module):
+    def __init__(self, size: int, dim_z: int, ch_out: int, leaky: bool = True):
+        super().__init__()
+        self.width = size
+        assert self.width == 28
+        self.dim_z = dim_z
+        self.ch_out = ch_out
+
+        if leaky:
+            activation = nn.LeakyReLU(inplace=True)
+        else:
+            activation = nn.ReLU(inplace=True)
+
+        self.upsample = nn.Sequential(
+            nn.Linear(in_features=self.dim_z, out_features=28),
+            activation,
+            nn.Linear(in_features=28, out_features=28),
+            activation,
+            nn.Linear(in_features=28, out_features=28),
+            activation,
+            nn.Linear(in_features=28, out_features=56),
+            activation,
+            nn.Linear(in_features=56, out_features=32 * 4 * 4),
+            activation
+        )
+
+        self.decoder = nn.Sequential(
+                nn.ConvTranspose2d(in_channels=32, out_channels=16, kernel_size=4, stride=2, padding=1),  # 8,8
+                activation,
+                nn.ConvTranspose2d(in_channels=16, out_channels=8, kernel_size=4, stride=2, padding=2),  # 14,14
+                activation,
+                nn.ConvTranspose2d(in_channels=8, out_channels=ch_out, kernel_size=4, stride=2, padding=1)  # 28,28
+            )
 
     def forward(self, z: torch.Tensor) -> torch.Tensor:
         independent_dim = list(z.shape[:-1])
-        x1 = self.upsample(z.view(-1, self.dim_z)).view(-1, 64, 7, 7)
+        x1 = self.upsample(z.view(-1, self.dim_z)).view(-1, 32, 4, 4)
         return self.decoder(x1).view(independent_dim + [self.ch_out, self.width, self.width])
 
 
