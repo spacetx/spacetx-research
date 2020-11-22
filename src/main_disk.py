@@ -73,8 +73,12 @@ if torch.cuda.is_available():
     print("GPU GB after vae ->", torch.cuda.memory_allocated()/1E9)
 
 # Make reference images
-index_tmp = torch.arange(16)
-reference_imgs, reference_seg, reference_count = test_loader.load(index=index_tmp)[:3]
+index_tmp = torch.arange(test_loader.img.shape[0])[:128]
+tmp_imgs, tmp_seg, tmp_count = test_loader.load(index=index_tmp)[:3]
+mask = (tmp_count == 6)
+reference_imgs = tmp_imgs[mask][:16]
+reference_seg = tmp_seg[mask][:16]
+reference_count = tmp_count[mask][:16]
 reference_imgs_fig = show_batch(reference_imgs, normalize_range=(0.0, 1.0), neptune_name="reference_imgs", experiment=exp)
 
 if torch.cuda.is_available():
