@@ -209,6 +209,9 @@ class Inference(NamedTuple):
     # similarity DPP
     similarity_l: torch.Tensor
     similarity_w: torch.Tensor
+    # Debug
+    big_mask_times_c: torch.Tensor
+    feature_map: torch.Tensor
 
 
 class RegMiniBatch(NamedTuple):

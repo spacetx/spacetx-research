@@ -681,6 +681,54 @@ def plot_generation(output: Output,
         print("leaving plot_generation")
 
 
+def plot_overlap_and_fmaps(output: Output,
+                           epoch: int,
+                           figsize: Optional[tuple] = None,
+                           neptune_name: Optional[str] = None,
+                           experiment: Optional[neptune.experiments.Experiment] = None,
+                           verbose: bool = False):
+    if verbose:
+        print("in plot_overlap_and_fmaps")
+
+    _exp = experiment if experiment else neptune
+
+    batch_size, ch_f_map, w, h = output.inference.feature_map.shape
+    fmaps = output.inference.feature_map.detach().cpu().numpy()
+    overlap = output.inference.big_mask_times_c.sum(dim=-5).detach().cpu().numpy()
+
+    if figsize is None:
+        fig, axes = plt.subplots(ncols=4, nrows=ch_f_map + 2)
+    else:
+        fig, axes = plt.subplots(ncols=4, nrows=ch_f_map + 2, figsize=figsize)
+
+    fig.suptitle('Epoch= {0: 6d}'.format(epoch), fontsize=8)
+    # first plot reconstruction
+    for n in range(4):
+        axes[0, n].imshow(output.imgs[n, 0])
+        axes[0, n].axis('off')
+
+    # second plot the overlap
+    for n in range(4):
+        axes[1, n].imshow(overlap[n, 0], vmin=0, vmax=2, cmap='seismic')
+        axes[1, n].axis('off')
+
+    # next plot the feature map channels
+    for ch in range(ch_f_map):
+        for n in range(4):
+            axes[2+ch, n].imshow(fmaps[n, ch], cmap='gray')
+            axes[2+ch, n].axis('off')
+
+    fig.tight_layout()
+    if neptune_name is not None:
+        # log_img_and_chart(name=neptune_name, fig=fig, experiment=experiment)
+        log_img_only(name=neptune_name, fig=fig, experiment=_exp)
+    plt.close(fig)
+
+    if verbose:
+        print("leaving plot_overlap_and_fmaps")
+    return fig
+
+
 def plot_reconstruction_and_inference(output: Output,
                                       epoch: int,
                                       prefix: str = "",

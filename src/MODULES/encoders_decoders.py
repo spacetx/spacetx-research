@@ -91,13 +91,10 @@ class EncoderInstance(nn.Module):
             nn.ReLU(inplace=True),
             nn.Conv2d(in_channels=32, out_channels=32, kernel_size=4, stride=2, padding=1),  # 14,14
             nn.ReLU(inplace=True),
-            nn.Conv2d(in_channels=32, out_channels=32, kernel_size=4, stride=2, padding=1),  # 7,7
+            nn.Conv2d(in_channels=32, out_channels=64, kernel_size=4, stride=2, padding=1),  # 7,7
         )
 
-        self.linear = nn.Sequential(
-            nn.Linear(in_features=32*7*7, out_features=8*self.dim_z),
-            nn.ReLU(inplace=True),
-            nn.Linear(in_features=8*self.dim_z, out_features=2*self.dim_z))
+        self.linear = nn.Linear(in_features=64*7*7, out_features=2*self.dim_z)
 
     def forward(self, x: torch.Tensor) -> ZZ:  # this is right
 
@@ -157,6 +154,8 @@ class DecoderBackground(nn.Module):
             nn.ReLU(inplace=True),
             nn.Linear(in_features=64, out_features=64),
             nn.ReLU(inplace=True),
+            nn.Linear(in_features=64, out_features=64),
+            nn.ReLU(inplace=True),
             nn.Linear(in_features=64, out_features=5 * 5 * 32),
         )
 
@@ -185,16 +184,10 @@ class DecoderInstance(nn.Module):
         self.dim_z = dim_z
         self.ch_out = ch_out
 
-        self.upsample = nn.Sequential(
-            nn.Linear(in_features=self.dim_z, out_features=64),
-            nn.ReLU(inplace=True),
-            nn.Linear(in_features=64, out_features=64),
-            nn.ReLU(inplace=True),
-            nn.Linear(in_features=64, out_features=5 * 5 * 32),
-        )
+        self.upsample = nn.Linear(in_features=self.dim_z, out_features=5 * 5 * 64)
 
         self.decoder = nn.Sequential(
-            nn.ConvTranspose2d(in_channels=32, out_channels=32, kernel_size=4, stride=2, padding=2),  # 8,8
+            nn.ConvTranspose2d(in_channels=64, out_channels=32, kernel_size=4, stride=2, padding=2),  # 8,8
             nn.ReLU(inplace=True),
             nn.ConvTranspose2d(in_channels=32, out_channels=32, kernel_size=4, stride=2, padding=2),  # 14,14
             nn.ReLU(inplace=True),
@@ -203,7 +196,7 @@ class DecoderInstance(nn.Module):
 
     def forward(self, z: torch.Tensor) -> torch.Tensor:
         independent_dim = list(z.shape[:-1])
-        x1 = self.upsample(z.view(-1, self.dim_z)).view(-1, 32, 5, 5)
+        x1 = self.upsample(z.view(-1, self.dim_z)).view(-1, 64, 5, 5)
         return self.decoder(x1).view(independent_dim + [self.ch_out, self.width, self.width])
 
 

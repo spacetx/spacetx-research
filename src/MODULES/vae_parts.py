@@ -213,4 +213,7 @@ class Inference_and_Generation(torch.nn.Module):
                          kl_zbg=zbg.kl,
                          # similarity kernels
                          similarity_l=similarity_l,
-                         similarity_w=similarity_w)
+                         similarity_w=similarity_w,
+                         # DEBUG
+                         big_mask_times_c=big_mask_times_c,
+                         feature_map=unet_output.features)
