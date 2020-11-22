@@ -63,8 +63,6 @@ class EncoderBackground(nn.Module):
             nn.ReLU(inplace=True),
             nn.Conv2d(in_channels=8 * CH_BG_MAP, out_channels=8 * CH_BG_MAP, kernel_size=3),  # 1x1
             nn.ReLU(inplace=True),
-            nn.Conv2d(in_channels=8 * CH_BG_MAP, out_channels=8 * CH_BG_MAP, kernel_size=1),  # 1x1
-            nn.ReLU(inplace=True),
             nn.Conv2d(in_channels=8 * CH_BG_MAP, out_channels=2 * self.dim_z, kernel_size=1)  # 1x1
         )
 
@@ -151,8 +149,6 @@ class DecoderBackground(nn.Module):
 
         self.upsample = nn.Sequential(
             nn.Linear(in_features=self.dim_z, out_features=64),
-            nn.ReLU(inplace=True),
-            nn.Linear(in_features=64, out_features=64),
             nn.ReLU(inplace=True),
             nn.Linear(in_features=64, out_features=64),
             nn.ReLU(inplace=True),
