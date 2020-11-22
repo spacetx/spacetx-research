@@ -696,10 +696,10 @@ def plot_overlap_and_fmaps(output: Output,
     fmaps = output.inference.feature_map.detach().cpu().numpy()
     overlap = output.inference.big_mask_times_c.sum(dim=-5).detach().cpu().numpy()
 
-    if figsize is None:
-        fig, axes = plt.subplots(ncols=4, nrows=ch_f_map + 2)
-    else:
-        fig, axes = plt.subplots(ncols=4, nrows=ch_f_map + 2, figsize=figsize)
+    ncols = 4
+    nrows = ch_f_map + 2
+    figsize = (4*ncols, 4*nrows) if figsize is None else figsize
+    fig, axes = plt.subplots(ncols=4, nrows=nrows, figsize=figsize)
 
     fig.suptitle('Epoch= {0: 6d}'.format(epoch), fontsize=8)
     # first plot reconstruction
