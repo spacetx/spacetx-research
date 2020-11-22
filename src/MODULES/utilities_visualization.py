@@ -704,7 +704,7 @@ def plot_overlap_and_fmaps(output: Output,
     fig.suptitle('Epoch= {0: 6d}'.format(epoch), fontsize=8)
     # first plot reconstruction
     for n in range(4):
-        axes[0, n].imshow(output.imgs[n, 0])
+        axes[0, n].imshow(output.imgs[n, 0].detach().cpu().numpy())
         axes[0, n].axis('off')
 
     # second plot the overlap
