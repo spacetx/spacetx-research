@@ -64,9 +64,10 @@ class Inference_and_Generation(torch.nn.Module):
                                                   noisy_sampling=noisy_sampling,
                                                   sample_from_prior=generate_synthetic_data)
 
-        big_bg = torch.sigmoid(self.decoder_zbg(z=zbg.sample,
-                                                high_resolution=(imgs_in.shape[-2], imgs_in.shape[-1])))
-        big_bg *= 0
+
+        #big_bg = torch.sigmoid(self.decoder_zbg(z=zbg.sample,
+        #                                        high_resolution=(imgs_in.shape[-2], imgs_in.shape[-1])))
+        big_bg = torch.zeros_like(imgs_in)
 
         # bounbding boxes
         zwhere_map: DIST = sample_and_kl_diagonal_normal(posterior_mu=unet_output.zwhere.mu,
