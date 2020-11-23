@@ -696,25 +696,25 @@ def plot_overlap_and_fmaps(output: Output,
     fmaps = output.inference.feature_map.detach().cpu().numpy()
     overlap = output.inference.big_mask_times_c.sum(dim=-5).detach().cpu().numpy()
 
-    ncols = 4
+    ncols = 8
     nrows = ch_f_map + 2
     figsize = (4*ncols, 4*nrows) if figsize is None else figsize
     fig, axes = plt.subplots(ncols=4, nrows=nrows, figsize=figsize)
 
     fig.suptitle('Epoch= {0: 6d}'.format(epoch), fontsize=8)
     # first plot reconstruction
-    for n in range(4):
+    for n in range(ncols):
         axes[0, n].imshow(output.imgs[n, 0].detach().cpu().numpy())
         axes[0, n].axis('off')
 
     # second plot the overlap
-    for n in range(4):
+    for n in range(ncols):
         axes[1, n].imshow(overlap[n, 0], vmin=0, vmax=2, cmap='seismic')
         axes[1, n].axis('off')
 
     # next plot the feature map channels
     for ch in range(ch_f_map):
-        for n in range(4):
+        for n in range(ncols):
             axes[2+ch, n].imshow(fmaps[n, ch], cmap='gray')
             axes[2+ch, n].axis('off')
 
