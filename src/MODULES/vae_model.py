@@ -196,8 +196,10 @@ class CompositionalVae(torch.nn.Module):
         with torch.no_grad():
             x_mse_max = max(self.geco_dict["target_mse"])
             x_mse_min = min(self.geco_dict["target_mse"])
-            g_mse = (x_mse_min - mse_av).clamp(min=0) + (x_mse_max - mse_av).clamp(max=0)
-        f_mse = mse_av
+            # g_mse = (x_mse_min - mse_av).clamp(min=0) + (x_mse_max - mse_av).clamp(max=0)
+            g_mse = torch.min(mse_av-x_mse_min, x_mse_max-mse_av)
+        # f_mse = mse_av
+        f_mse = mse_av * torch.sign(mse_av-x_mse_min).detach()
 
         # 2. Sparsity should encourage:
         # 1. few object
@@ -213,17 +215,23 @@ class CompositionalVae(torch.nn.Module):
             x_sparsity_av = torch.mean(mixing_fg)
             x_sparsity_max = max(self.geco_dict["target_fgfraction"])
             x_sparsity_min = min(self.geco_dict["target_fgfraction"])
-            g_sparsity = (x_sparsity_min - x_sparsity_av).clamp(min=0) + (x_sparsity_max - x_sparsity_av).clamp(max=0)
+            # g_sparsity = (x_sparsity_min - x_sparsity_av).clamp(min=0) + (x_sparsity_max - x_sparsity_av).clamp(max=0)
+            g_sparsity = torch.min(x_sparsity_av - x_sparsity_min, x_sparsity_max - x_sparsity_av)
         c_times_area_few = inference.sample_c * inference.sample_bb.bw * inference.sample_bb.bh
-        f_sparsity = 0.5 * (torch.sum(mixing_fg) + torch.sum(c_times_area_few)) / torch.numel(mixing_fg)
+        # f_sparsity = 0.5 * (torch.sum(mixing_fg) + torch.sum(c_times_area_few)) / torch.numel(mixing_fg)
+        f_sparsity = torch.sign(x_sparsity_av - x_sparsity_min).detach() * \
+                     0.5 * (torch.sum(mixing_fg) + torch.sum(c_times_area_few)) / torch.numel(mixing_fg)
 
         with torch.no_grad():
             x_cell_av = torch.sum(inference.sample_c_map_after_nms) / batch_size
             x_cell_max = max(self.geco_dict["target_ncell"])
             x_cell_min = min(self.geco_dict["target_ncell"])
-            g_cell = (x_cell_min - x_cell_av).clamp(min=0) + (x_cell_max - x_cell_av).clamp(max=0)
+            #g_cell = (x_cell_min - x_cell_av).clamp(min=0) + (x_cell_max - x_cell_av).clamp(max=0)
+            g_cell = torch.min(x_cell_av - x_mse_min, x_cell_max - x_cell_av)
             g_cell /= n_box_few  # positive if in range, negative otherwise
-        f_cell = torch.sum(inference.sample_c_map_before_nms) / (batch_size * n_box_few)
+        # f_cell = torch.sum(inference.sample_c_map_before_nms) / (batch_size * n_box_few)
+        f_cell = torch.sign(x_cell_av - x_cell_min).detach() * \
+                 torch.sum(inference.sample_c_map_before_nms) / (batch_size * n_box_few)
 
 
         # 3. compute KL
@@ -268,7 +276,7 @@ class CompositionalVae(torch.nn.Module):
                                kl_where=kl_zwhere.detach().item(),
                                kl_logit=kl_logit.detach().item(),
 
-                               reg_overlap=regularizations.reg_overlap.detach().item(),
+                               reg_overlap=inference.overlap_summed_over_pixel.detach().item(),
                                reg_area_obj=regularizations.reg_area_obj.detach().item(),
 
                                lambda_sparsity=self.geco_fgfraction.data.detach().item(),
