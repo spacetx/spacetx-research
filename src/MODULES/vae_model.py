@@ -196,10 +196,10 @@ class CompositionalVae(torch.nn.Module):
         with torch.no_grad():
             x_mse_max = max(self.geco_dict["target_mse"])
             x_mse_min = min(self.geco_dict["target_mse"])
-            # g_mse = (x_mse_min - mse_av).clamp(min=0) + (x_mse_max - mse_av).clamp(max=0)
-            g_mse = torch.min(mse_av-x_mse_min, x_mse_max-mse_av)
-        # f_mse = mse_av
-        f_mse = mse_av * torch.sign(mse_av-x_mse_min).detach()
+            g_mse = (x_mse_min - mse_av).clamp(min=0) + (x_mse_max - mse_av).clamp(max=0)
+            # g_mse = torch.min(mse_av-x_mse_min, x_mse_max-mse_av)
+        f_mse = mse_av
+        # f_mse = mse_av * torch.sign(mse_av-x_mse_min).detach()
 
         # 2. Sparsity should encourage:
         # 1. few object
@@ -215,22 +215,23 @@ class CompositionalVae(torch.nn.Module):
             x_sparsity_av = torch.mean(mixing_fg)
             x_sparsity_max = max(self.geco_dict["target_fgfraction"])
             x_sparsity_min = min(self.geco_dict["target_fgfraction"])
-            # g_sparsity = (x_sparsity_min - x_sparsity_av).clamp(min=0) + (x_sparsity_max - x_sparsity_av).clamp(max=0)
-            g_sparsity = torch.min(x_sparsity_av - x_sparsity_min, x_sparsity_max - x_sparsity_av)
+            g_sparsity = (x_sparsity_min - x_sparsity_av).clamp(min=0) + (x_sparsity_max - x_sparsity_av).clamp(max=0)
+            # g_sparsity = torch.min(x_sparsity_av - x_sparsity_min, x_sparsity_max - x_sparsity_av)
         c_times_area_few = inference.sample_c * inference.sample_bb.bw * inference.sample_bb.bh
-        # f_sparsity = 0.5 * (torch.sum(mixing_fg) + torch.sum(c_times_area_few)) / torch.numel(mixing_fg)
-        x_sparsity = 0.5 * (torch.sum(mixing_fg) + torch.sum(c_times_area_few)) / torch.numel(mixing_fg)
-        f_sparsity = x_sparsity * torch.sign(x_sparsity_av - x_sparsity_min).detach()
+        f_sparsity = 0.5 * (torch.sum(mixing_fg) + torch.sum(c_times_area_few)) / torch.numel(mixing_fg)
+        # x_sparsity = 0.5 * (torch.sum(mixing_fg) + torch.sum(c_times_area_few)) / torch.numel(mixing_fg)
+        # f_sparsity = x_sparsity * torch.sign(x_sparsity_av - x_sparsity_min).detach()
 
         with torch.no_grad():
             x_cell_av = torch.sum(inference.sample_c_map_after_nms) / batch_size
             x_cell_max = max(self.geco_dict["target_ncell"])
             x_cell_min = min(self.geco_dict["target_ncell"])
-            #g_cell = (x_cell_min - x_cell_av).clamp(min=0) + (x_cell_max - x_cell_av).clamp(max=0)
-            g_cell = torch.min(x_cell_av - x_mse_min, x_cell_max - x_cell_av) / n_box_few  # positive if in range, negative otherwise
-        # f_cell = torch.sum(inference.sample_c_map_before_nms) / (batch_size * n_box_few)
-        x_cell = torch.sum(inference.sample_c_map_before_nms) / (batch_size * n_box_few)
-        f_cell = x_cell * torch.sign(x_cell_av - x_cell_min).detach()
+            g_cell = (x_cell_min - x_cell_av).clamp(min=0) + (x_cell_max - x_cell_av).clamp(max=0)
+            g_cell /= n_box_few
+            # g_cell = torch.min(x_cell_av - x_mse_min, x_cell_max - x_cell_av) / n_box_few  # positive if in range, negative otherwise
+        f_cell = torch.sum(inference.sample_c_map_before_nms) / (batch_size * n_box_few)
+        # x_cell = torch.sum(inference.sample_c_map_before_nms) / (batch_size * n_box_few)
+        # f_cell = x_cell * torch.sign(x_cell_av - x_cell_min).detach()
 
         # 3. compute KL
         # Note that I compute the mean over batch, latent_dimensions and n_object.
@@ -252,10 +253,11 @@ class CompositionalVae(torch.nn.Module):
                                                           max=max(self.geco_dict["geco_ncell_range"])).detach()
         geco_fgfraction_detached = self.geco_fgfraction.data.clamp_(min=min(self.geco_dict["geco_fgfraction_range"]),
                                                                     max=max(self.geco_dict["geco_fgfraction_range"])).detach()
+        one_minus_geco_mse_detached = torch.ones_like(geco_mse_detached) - geco_mse_detached
 
         reg_av = regularizations.total()
         sparsity_av = geco_fgfraction_detached * f_sparsity + geco_ncell_detached * f_cell
-        loss_vae = sparsity_av + geco_mse_detached * (f_mse + reg_av) + kl_av
+        loss_vae = sparsity_av + geco_mse_detached * (f_mse + reg_av) + one_minus_geco_mse_detached * kl_av
         loss_geco = self.geco_fgfraction * g_sparsity.detach() + \
                     self.geco_ncell * g_cell.detach() + \
                     self.geco_mse * g_mse.detach()

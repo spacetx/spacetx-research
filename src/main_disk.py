@@ -254,7 +254,7 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                                            epoch=epoch,
                                            hyperparams_dict=params,
                                            history_dict=history_dict)
-                        log_object_as_artifact(name="last_ckpt", obj=ckpt)  # log file into neptune
+                        log_object_as_artifact(name="ckpt_"+str(epoch), obj=ckpt)  # log file into neptune
                         plot_all_from_dictionary(history_dict,
                                                  params,
                                                  test_frequency=TEST_FREQUENCY,
