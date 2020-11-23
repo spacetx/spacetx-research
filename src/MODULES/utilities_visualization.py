@@ -699,7 +699,7 @@ def plot_overlap_and_fmaps(output: Output,
     ncols = 8
     nrows = ch_f_map + 2
     figsize = (4*ncols, 4*nrows) if figsize is None else figsize
-    fig, axes = plt.subplots(ncols=4, nrows=nrows, figsize=figsize)
+    fig, axes = plt.subplots(ncols=ncols, nrows=nrows, figsize=figsize)
 
     fig.suptitle('Epoch= {0: 6d}'.format(epoch), fontsize=8)
     # first plot reconstruction
