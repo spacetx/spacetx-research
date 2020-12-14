@@ -22,6 +22,17 @@ class NonMaxSuppression(object):
                               score: torch.Tensor,
                               possible: torch.Tensor,
                               n_objects_max: int) -> torch.Tensor:
+        """
+
+
+        :param mask_overlap:'
+        :type torch.Tensor
+        :param score:
+        :param possible:
+        :param n_objects_max:
+        :return:
+        """
+
         """ Input:
             mask_overlap: n x n x batch
             score: n x batch
@@ -38,25 +49,25 @@ class NonMaxSuppression(object):
         assert score.shape == possible.shape == (n_boxes, batch_size)
 
         # reshape
-        score: torch.Tensor = score.unsqueeze(0)                                           # 1 x n_box x batch
-        possible: torch.Tensor = possible.unsqueeze(0)                                     # 1 x n_box x batch
-        idx: torch.Tensor = torch.arange(start=0, end=n_boxes, step=1,
-                                         device=score.device).view(n_boxes, 1, 1).long()   # n_box x 1 x 1
-        selected: torch.Tensor = torch.zeros((n_boxes, 1, batch_size),
-                                             device=score.device, dtype=torch.bool)        # n_box x 1 x batch
+        score = score.unsqueeze(0)                                           # 1 , n_box , batch
+        possible = possible.unsqueeze(0)                                     # 1 , n_box , batch
+        idx = torch.arange(start=0, end=n_boxes, step=1,
+                           device=score.device).view(n_boxes, 1, 1).long()   # n_box , 1 , 1
+        selected = torch.zeros((n_boxes, 1, batch_size),
+                               device=score.device, dtype=torch.bool)        # n_box , 1 , batch
 
         # Loop
         counter = 0
-        while counter <= n_objects_max and possible.any():  # you never need more than n_objects_max proposals
-            score_mask: torch.Tensor = mask_overlap*(score*possible)         # n_box x n_box x batch
-            index = torch.max(score_mask, keepdim=True, dim=-2)[1]           # n_box x 1 x batch
-            selected += possible.permute(1, 0, 2)*(idx == index)             # n_box x 1 x batch
-            blocks = torch.sum(mask_overlap*selected, keepdim=True, dim=-3)  # 1 x n_box x batch
-            possible *= (blocks == 0)                                        # 1 x n_box x batch
+        while counter <= n_objects_max:  # and possible.any():  # you never need more than n_objects_max proposals
+            score_mask = mask_overlap*(score*possible)                       # n_box , n_box , batch
+            index = torch.max(score_mask, keepdim=True, dim=-2)[1]           # n_box , 1 , batch
+            selected += possible.permute(1, 0, 2)*(idx == index)             # n_box , 1 , batch
+            blocks = torch.sum(mask_overlap*selected, keepdim=True, dim=-3)  # 1 , n_box , batch
+            possible *= (blocks == 0)                                        # 1 , n_box , batch
             counter += 1
 
         # return
-        return selected.squeeze(-2)  # shape: n_box x batch
+        return selected.squeeze(-2)  # shape: n_box, batch
 
     @staticmethod
     def unroll_and_compare(x: torch.Tensor, label: str) -> torch.Tensor:

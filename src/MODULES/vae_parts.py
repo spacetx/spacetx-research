@@ -40,7 +40,7 @@ class Inference_and_Generation(torch.nn.Module):
                                                                   ch_in=params["architecture"]["n_ch_output_features"],
                                                                   dim_z=params["architecture"]["dim_zinstance"])
 
-    def forward(self, imgs_in: torch.Tensor,
+    def forward(self, imgs_bcwh: torch.Tensor,
                 generate_synthetic_data: bool,
                 prob_corr_factor: float,
                 overlap_threshold: float,
@@ -49,12 +49,12 @@ class Inference_and_Generation(torch.nn.Module):
                 noisy_sampling: bool) -> Inference:
 
         # 0. preparation
-        batch_size, ch_raw_image, width_raw_image, height_raw_image = imgs_in.shape
+        batch_size, ch_raw_image, width_raw_image, height_raw_image = imgs_bcwh.shape
 
         # ---------------------------#
         # 1. UNET
         # ---------------------------#
-        unet_output: UNEToutput = self.unet.forward(imgs_in, verbose=False)
+        unet_output: UNEToutput = self.unet.forward(imgs_bcwh, verbose=False)
 
         # background
         zbg: DIST = sample_and_kl_diagonal_normal(posterior_mu=unet_output.zbg.mu,
@@ -65,7 +65,7 @@ class Inference_and_Generation(torch.nn.Module):
                                                   sample_from_prior=generate_synthetic_data)
 
         big_bg = torch.sigmoid(self.decoder_zbg(z=zbg.sample,
-                                                high_resolution=(imgs_in.shape[-2], imgs_in.shape[-1])))
+                                                high_resolution=(imgs_bcwh.shape[-2], imgs_bcwh.shape[-1])))
 
         # bounbding boxes
         zwhere_map: DIST = sample_and_kl_diagonal_normal(posterior_mu=unet_output.zwhere.mu,
@@ -76,8 +76,8 @@ class Inference_and_Generation(torch.nn.Module):
                                                          sample_from_prior=generate_synthetic_data)
 
         bounding_box_all: BB = self.decoder_zwhere(z=zwhere_map.sample,
-                                                   width_raw_image=imgs_in.shape[-2],
-                                                   height_raw_image=imgs_in.shape[-1],
+                                                   width_raw_image=imgs_bcwh.shape[-2],
+                                                   height_raw_image=imgs_bcwh.shape[-1],
                                                    min_box_size=self.size_min,
                                                    max_box_size=self.size_max)
 
@@ -85,7 +85,7 @@ class Inference_and_Generation(torch.nn.Module):
 
             # Correct probability if necessary
             if (prob_corr_factor > 0) and (prob_corr_factor <= 1.0):
-                av_intensity = compute_average_in_box((imgs_in - big_bg).abs(), bounding_box_all)
+                av_intensity = compute_average_in_box((imgs_bcwh - big_bg).abs(), bounding_box_all)
                 assert len(av_intensity.shape) == 2
                 n_boxes_all, batch_size = av_intensity.shape
                 ranking = compute_ranking(av_intensity)  # n_boxes_all, batch. It is in [0,n_box_all-1]

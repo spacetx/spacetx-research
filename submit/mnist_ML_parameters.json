@@ -5,9 +5,9 @@
  "simulation" : {
    "__comment" : "there are 3 types of runs: scratch, resume, pretrained",
    "type" : "scratch",
-   "MAX_EPOCHS" : 1501,
+   "MAX_EPOCHS" : 501,
    "TEST_FREQUENCY" : 50,
-   "CHECKPOINT_FREQUENCY" : 50,
+   "CHECKPOINT_FREQUENCY" : 10,
    "batch_size" : 128
  },
 
@@ -22,7 +22,8 @@
    "level_background_output" : 4,
    "n_ch_output_features" : 16,
    "n_ch_after_first_two_conv" : 16,
-   "concatenate_raw_image_to_fmap" : true
+   "concatenate_raw_image_to_fmap" : false,
+   "crop_raw_image" : false
  },
 
   "DPP" : {
