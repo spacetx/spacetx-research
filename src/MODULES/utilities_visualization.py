@@ -274,7 +274,7 @@ def plot_img_and_seg(img: torch.Tensor,
 
 
 def show_batch(images: torch.Tensor,
-               n_col: int = 4,
+               n_col: int = 5,
                n_padding: int = 10,
                title: Optional[str] = None,
                pad_value: int = 1,
