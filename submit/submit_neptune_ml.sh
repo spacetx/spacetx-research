@@ -3,8 +3,8 @@
 # Define some defaults
 DEFAULT_BUCKET="gs://ld-tmp-storage/input_jsons"
 DEFAULT_WDL="neptune_ml.wdl"
-DEFAULT_WDL_JSON="WDL_parameters.json"
-DEFAULT_ML_JSON="ML_parameters.json"
+DEFAULT_WDL_JSON="mnist_WDL_parameters_REBUTTAL.json"
+DEFAULT_ML_JSON="mnist_ML_parameters_REBUTTAL.json"
 
 # Set variables to default
 BUCKET=$DEFAULT_BUCKET
