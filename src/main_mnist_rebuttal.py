@@ -214,15 +214,16 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                         error_index = torch.tensor(test_metrics.wrong_examples[:5], dtype=torch.long)
                     else:
                         error_index = torch.arange(5, dtype=torch.long)
-                    error_img = test_loader.load(index=error_index)[0].to(reference_imgs.device)
+                    error_test_img = test_loader.load(index=error_index)[0].to(reference_imgs.device)
                     
                     if len(test_out_metrics.wrong_examples) > 0:
                         error_index = torch.tensor(test_out_metrics.wrong_examples[:5], dtype=torch.long)
                     else:
                         error_index = torch.arange(5, dtype=torch.long)
-                    error_out_img = test_out_loader.load(index=error_index)[0].to(reference_imgs.device)
-                    
-                    error_output: Output = vae.forward(torch.cat((error_img, error_out_img), dim=0),
+                    error_test_out_img = test_out_loader.load(index=error_index)[0].to(reference_imgs.device)
+                    error_img = torch.cat((error_img, error_out_img), dim=0)
+
+                    error_output: Output = vae.forward(error_img,
                                                        overlap_threshold=params["nms"]["overlap_threshold_test"],
                                                        noisy_sampling=True,
                                                        draw_image=True,
