@@ -222,14 +222,15 @@ class CompositionalVae(torch.nn.Module):
             ideal_x3 = (ideal_x3 + buffer_size).clamp(min=0, max=n_width)
             ideal_y3 = (ideal_y3 + buffer_size).clamp(min=0, max=n_height)
 
+            # assuming that bx and bw are fixed. What should bw and bh be?
             size_obj_min = self.input_img_dict["size_object_min"]
             size_obj_max = self.input_img_dict["size_object_max"]
-
             bw_target = torch.max(ideal_x3 - inference.sample_bb.bx,
                                   inference.sample_bb.bx - ideal_x1).clamp(min=size_obj_min, max=size_obj_max)
             bh_target = torch.max(ideal_y3 - inference.sample_bb.by,
                                   inference.sample_bb.by - ideal_y1).clamp(min=size_obj_min, max=size_obj_max)
 
+            # compute the cost
             dw_cost = sample_from_constraints_dict(dict_soft_constraints=self.dict_soft_constraints,
                                                    var_name="bounding_boxes_regression",
                                                    var_value=bw_target - inference.sample_bb.bw,
@@ -248,8 +249,8 @@ class CompositionalVae(torch.nn.Module):
             # print("DEBUG", cost_bounding_box.mean())
 
         return RegMiniBatch(reg_overlap=cost_overlap.mean(),            # mean over batch_size
-                            reg_bb_regression=cost_bounding_box.mean(),  #mean over batch_size
-                            reg_box_overlap=cost_box_overlap.mean(),         # mean over batch size
+                            reg_bb_regression=cost_bounding_box.mean(),  # mean over batch_size
+                            reg_box_overlap=cost_box_overlap.mean(),  # mean over batch size
                             reg_area_obj=cost_volume_minibatch.mean())  # mean over batch_size
 
     @staticmethod
@@ -293,37 +294,26 @@ class CompositionalVae(torch.nn.Module):
             x_sparsity_av = torch.mean(mixing_fg)
             x_sparsity_max = max(self.geco_dict["target_fgfraction"])
             x_sparsity_min = min(self.geco_dict["target_fgfraction"])
-            # g_sparsity = (x_sparsity_min - x_sparsity_av).clamp(min=0) + \
-            #              (x_sparsity_max - x_sparsity_av).clamp(max=0)
             g_sparsity = torch.min(x_sparsity_av - x_sparsity_min, x_sparsity_max - x_sparsity_av)  # positive if in range
-        c_times_area_few = inference.sample_c * inference.sample_bb.bw * inference.sample_bb.bh
-        x_sparsity = 0.5 * (torch.sum(mixing_fg) + torch.sum(c_times_area_few)) / torch.numel(mixing_fg)
-        f_sparsity = x_sparsity * torch.sign(x_sparsity_av - x_sparsity_min).detach()
+        f_sparsity = torch.sum(mixing_fg) * torch.sign(x_sparsity_av - x_sparsity_min).detach()
 
         with torch.no_grad():
             x_cell_av = torch.sum(inference.sample_c_map_after_nms) / batch_size
             x_cell_max = max(self.geco_dict["target_ncell"])
             x_cell_min = min(self.geco_dict["target_ncell"])
-            # g_cell = ((x_cell_min - x_cell_av).clamp(min=0) + (x_cell_max - x_cell_av).clamp(max=0)) / n_box_few
-            g_cell = torch.min(x_cell_av - x_cell_min,
-                               x_cell_max - x_cell_av) / n_box_few  # positive if in range, negative otherwise
-        x_cell = torch.sum(inference.sample_c_map_before_nms) / (batch_size * n_box_few)
-        f_cell = x_cell * torch.sign(x_cell_av - x_cell_min).detach()
+            g_cell = torch.min(x_cell_av - x_cell_min, x_cell_max - x_cell_av) # positive if in range, negative otherwise
+        f_cell = torch.sum(inference.prob_map) * torch.sign(x_cell_av - x_cell_min).detach()
 
         # 3. compute KL
         # Note that I compute the mean over batch, latent_dimensions and n_object.
         # This means that latent_dim can effectively control the complexity of the reconstruction,
         # i.e. more latent more capacity.
         kl_zbg = torch.mean(inference.kl_zbg)              # mean over: batch, latent_dim
-        kl_zinstance = torch.mean(inference.kl_zinstance)  # mean over: n_boxes, batch, latent_dim
-        kl_zwhere = torch.mean(inference.kl_zwhere)        # mean over: n_boxes, batch, latent_dim
+        c_masked = inference.sample_c.detach().unsqueeze(-1)
+        kl_zinstance = torch.mean(inference.kl_zinstance * c_masked)  # mean over: n_boxes, batch, latent_dim
+        kl_zwhere = torch.mean(inference.kl_zwhere * c_masked)        # mean over: n_boxes, batch, latent_dim
         kl_logit = torch.mean(inference.kl_logit)          # mean over: batch
-
-        # set kl_zwehre to zero
-        # kl_av = kl_zbg + kl_zinstance + \
-        kl_av = kl_zbg + kl_zinstance + kl_zwhere + \
-                torch.exp(-self.running_avarage_kl_logit) * kl_logit + \
-                self.running_avarage_kl_logit - self.running_avarage_kl_logit.detach()
+        kl_av = kl_zbg + kl_zinstance + kl_zwhere + kl_logit
 
         # 6. Note that I clamp in_place
         geco_mse_detached = self.geco_mse.data.clamp_(min=min(self.geco_dict["geco_mse_range"]),
