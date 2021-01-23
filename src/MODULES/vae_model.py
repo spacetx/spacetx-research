@@ -198,7 +198,57 @@ class CompositionalVae(torch.nn.Module):
                                                         verbose=verbose,
                                                         chosen=chosen).mean()
 
+        # Compute the ideal Bounding boxes
+        with torch.no_grad():
+            n_width, n_height = inference.mixing.shape[-2:]
+            ix_grid = torch.arange(start=0,
+                                   end=n_width,
+                                   dtype=torch.long,
+                                   device=inference.mixing.device).unsqueeze(-1)  # n_width, 1
+            iy_grid = torch.arange(start=0,
+                                   end=n_height,
+                                   dtype=torch.long,
+                                   device=inference.mixing.device).unsqueeze(-2)  # 1, n_height
+
+            mask = (inference.mixing > 0.5).long()  # shape: n_box_few, batch_size, 1, width, height
+            # compute ideal x1,x3,y1,y3 of shape: n_box_few, batch_size
+            buffer_size = 2
+            ideal_x3 = torch.max(torch.flatten(mask * ix_grid, start_dim=-3), dim=-1)[0]
+            ideal_y3 = torch.max(torch.flatten(mask * iy_grid, start_dim=-3), dim=-1)[0]
+            ideal_x1 = n_width - torch.max(torch.flatten(mask * (n_width - ix_grid), start_dim=-3), dim=-1)[0]
+            ideal_y1 = n_height - torch.max(torch.flatten(mask * (n_height - iy_grid), start_dim=-3), dim=-1)[0]
+            ideal_x1 = (ideal_x1 - buffer_size).clamp(min=0, max=n_width)
+            ideal_y1 = (ideal_y1 - buffer_size).clamp(min=0, max=n_height)
+            ideal_x3 = (ideal_x3 + buffer_size).clamp(min=0, max=n_width)
+            ideal_y3 = (ideal_y3 + buffer_size).clamp(min=0, max=n_height)
+
+            size_obj_min = self.input_img_dict["size_object_min"]
+            size_obj_max = self.input_img_dict["size_object_max"]
+
+            bw_target = torch.max(ideal_x3 - inference.sample_bb.bx,
+                                  inference.sample_bb.bx - ideal_x1).clamp(min=size_obj_min, max=size_obj_max)
+            bh_target = torch.max(ideal_y3 - inference.sample_bb.by,
+                                  inference.sample_bb.by - ideal_y1).clamp(min=size_obj_min, max=size_obj_max)
+
+            dw_cost = sample_from_constraints_dict(dict_soft_constraints=self.dict_soft_constraints,
+                                                   var_name="bounding_boxes_regression",
+                                                   var_value=bw_target - inference.sample_bb.bw,
+                                                   verbose=verbose,
+                                                   chosen=chosen)
+            dh_cost = sample_from_constraints_dict(dict_soft_constraints=self.dict_soft_constraints,
+                                                   var_name="bounding_boxes_regression",
+                                                   var_value=bh_target - inference.sample_bb.bh,
+                                                   verbose=verbose,
+                                                   chosen=chosen)
+            cost_bounding_box = (inference.sample_c.detach() * (dw_cost + dh_cost)).sum(dim=-2)  #sum over boxes
+
+            # print("bw ->", bw_target[:, 0], inference.sample_bb.bw[:, 0])
+            # print("bh ->", bh_target[:, 0], inference.sample_bb.bh[:, 0])
+            # print("c  ->", inference.sample_c[:, 0])
+            # print("DEBUG", cost_bounding_box.mean())
+
         return RegMiniBatch(reg_overlap=cost_overlap.mean(),            # mean over batch_size
+                            reg_bb_regression=cost_bounding_box.mean(),  #mean over batch_size
                             reg_box_overlap=cost_box_overlap.mean(),         # mean over batch size
                             reg_area_obj=cost_volume_minibatch.mean())  # mean over batch_size
 

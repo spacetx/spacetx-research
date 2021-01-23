@@ -215,6 +215,7 @@ class RegMiniBatch(NamedTuple):
     reg_overlap: torch.Tensor
     reg_area_obj: torch.Tensor
     reg_box_overlap: torch.Tensor
+    reg_bb_regression: torch.Tensor
 
     def total(self):
         tot = None
