@@ -188,9 +188,9 @@ class CompositionalVae(torch.nn.Module):
         c_detached = inference.sample_c.detach()  # boxes_few, batch_size
         diag = torch.eye(c_detached.shape[0],
                          dtype=c_detached.dtype,
-                         device=c_detached.device).unsqueeze(-1)  # boxes_few, boxes_few,1
-        box_overlap = torch.sum(intersection_area * c_detached.unsqueeze(0) * c_detached.unsqueeze(1) * (1-diag),
-                                dim=(1, 2))
+                         device=c_detached.device).unsqueeze(-1)  # boxes_few, boxes_few, 1
+        box_overlap = torch.sum(intersection_area * c_detached.unsqueeze(0) *
+                                c_detached.unsqueeze(1) * (1-diag), dim=(0, 1))
 
         cost_box_overlap = sample_from_constraints_dict(dict_soft_constraints=self.dict_soft_constraints,
                                                         var_name="box_overlap",
@@ -269,9 +269,9 @@ class CompositionalVae(torch.nn.Module):
         kl_zwhere = torch.mean(inference.kl_zwhere)        # mean over: n_boxes, batch, latent_dim
         kl_logit = torch.mean(inference.kl_logit)          # mean over: batch
 
-        #  kl_av = kl_zbg + kl_zinstance + kl_zwhere + \
         # set kl_zwehre to zero
-        kl_av = kl_zbg + kl_zinstance + \
+        # kl_av = kl_zbg + kl_zinstance + \
+        kl_av = kl_zbg + kl_zinstance + kl_zwhere + \
                 torch.exp(-self.running_avarage_kl_logit) * kl_logit + \
                 self.running_avarage_kl_logit - self.running_avarage_kl_logit.detach()
 
