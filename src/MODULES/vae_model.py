@@ -128,13 +128,9 @@ class CompositionalVae(torch.nn.Module):
         self.geco_dict = params["GECO_loss"]
         self.input_img_dict = params["input_image"]
 
-        self.geco_fgfraction = torch.nn.Parameter(data=torch.tensor(self.geco_dict["geco_fgfraction_range"][1],
-                                                                    dtype=torch.float), requires_grad=True)
-        self.geco_ncell = torch.nn.Parameter(data=torch.tensor(self.geco_dict["geco_ncell_range"][1],
-                                                               dtype=torch.float), requires_grad=True)
-        self.geco_mse = torch.nn.Parameter(data=torch.tensor(self.geco_dict["geco_mse_range"][1],
-                                                             dtype=torch.float), requires_grad=True)
-
+        self.geco_fgfraction = torch.nn.Parameter(data=torch.ones(1, dtype=torch.float), requires_grad=True)
+        self.geco_ncell = torch.nn.Parameter(data=torch.ones(1, dtype=torch.float), requires_grad=True)
+        self.geco_mse = torch.nn.Parameter(data=torch.ones(1, dtype=torch.float), requires_grad=True)
         self.running_avarage_kl_logit = torch.nn.Parameter(data=4*torch.ones(1, dtype=torch.float), requires_grad=True)
 
         # Put everything on the cude if cuda available
@@ -264,10 +260,11 @@ class CompositionalVae(torch.nn.Module):
 
         # Preparation
         n_box_few, batch_size = inference.sample_c.shape
+        one = torch.ones(1, dtype=imgs_in.dtype, device=imgs_in.device)
 
         # 1. Observation model
         mixing_fg = torch.sum(inference.mixing, dim=-5)  # sum over boxes
-        mixing_bg = torch.ones_like(mixing_fg) - mixing_fg
+        mixing_bg = one - mixing_fg
         mse = CompositionalVae.NLL_MSE(output=inference.big_img,
                                        target=imgs_in,
                                        sigma=self.sigma_fg)  # boxes, batch_size, ch, w, h
@@ -276,68 +273,60 @@ class CompositionalVae(torch.nn.Module):
                                           sigma=self.sigma_bg)  # batch_size, ch, w, h
         mse_av = ((inference.mixing * mse).sum(dim=-5) + mixing_bg * mse_bg).mean()  # mean over batch_size, ch, w, h
 
-        # TODO: put htis stuff inside torch.no_grad()
-        with torch.no_grad():
-            g_mse = (min(self.geco_dict["target_mse"]) - mse_av).clamp(min=0) + \
-                    (max(self.geco_dict["target_mse"]) - mse_av).clamp(max=0)
-
-        # 2. Sparsity should encourage:
-        # 1. few object
-        # 2. tight bounding boxes
-        # 3. tight masks
-        # The three terms take care of all these requirement.
-        # Note:
-        # 1) All the terms contain c=Bernoulli(p). It is actually the same b/c during back prop c=p
-        # 2) fg_fraction is based on the selected quantities
-        # 3) sparsity n_cell is based on c_map so that the entire matrix becomes sparse.
-        with torch.no_grad():
-            x_sparsity_av = torch.mean(mixing_fg)
-            x_sparsity_max = max(self.geco_dict["target_fgfraction"])
-            x_sparsity_min = min(self.geco_dict["target_fgfraction"])
-            g_sparsity = torch.min(x_sparsity_av - x_sparsity_min, x_sparsity_max - x_sparsity_av)  # positive if in range
-        f_sparsity = torch.sum(mixing_fg) * torch.sign(x_sparsity_av - x_sparsity_min).detach()
-
-        with torch.no_grad():
-            x_cell_av = torch.sum(inference.sample_c_map_after_nms) / batch_size
-            x_cell_max = max(self.geco_dict["target_ncell"])
-            x_cell_min = min(self.geco_dict["target_ncell"])
-            g_cell = torch.min(x_cell_av - x_cell_min, x_cell_max - x_cell_av) # positive if in range, negative otherwise
-        f_cell = torch.sum(inference.prob_map) * torch.sign(x_cell_av - x_cell_min).detach()
-
-        # 3. compute KL
+        # 2. compute KL
         # Note that I compute the mean over batch, latent_dimensions and n_object.
         # This means that latent_dim can effectively control the complexity of the reconstruction,
         # i.e. more latent more capacity.
         kl_zbg = torch.mean(inference.kl_zbg)              # mean over: batch, latent_dim
         c_masked = inference.sample_c.detach().unsqueeze(-1)
-        kl_zinstance = torch.mean(inference.kl_zinstance * c_masked)  # mean over: n_boxes, batch, latent_dim
-        kl_zwhere = torch.mean(inference.kl_zwhere * c_masked)        # mean over: n_boxes, batch, latent_dim
-        kl_logit = torch.mean(inference.kl_logit)          # mean over: batch
+        kl_zinstance = torch.mean(inference.kl_zinstance * c_masked) * n_box_few  # mean over: n_boxes, batch, latent_dim
+        kl_zwhere = torch.mean(inference.kl_zwhere * c_masked) * n_box_few        # mean over: n_boxes, batch, latent_dim
+        kl_logit = torch.mean(inference.kl_logit)  # mean over: batch
         kl_av = kl_zbg + kl_zinstance + kl_zwhere + kl_logit
 
-        # 6. Note that I clamp in_place
-        geco_mse_detached = self.geco_mse.data.clamp_(min=min(self.geco_dict["geco_mse_range"]),
-                                                      max=max(self.geco_dict["geco_mse_range"])).detach()
-        geco_ncell_detached = self.geco_ncell.data.clamp_(min=min(self.geco_dict["geco_ncell_range"]),
-                                                          max=max(self.geco_dict["geco_ncell_range"])).detach()
-        geco_fgfraction_detached = self.geco_fgfraction.data.clamp_(min=min(self.geco_dict["geco_fgfraction_range"]),
-                                                                    max=max(self.geco_dict["geco_fgfraction_range"])).detach()
-        one_minus_geco_mse_detached = torch.ones_like(geco_mse_detached) - geco_mse_detached
+        # GECO is to decide to increase or decrease the lambda value
+        with torch.no_grad():
+            # mse
+            mse_in_range = (mse_av > self.geco_dict["target_mse"][0]) and \
+                           (mse_av < self.geco_dict["target_mse"][1])
+            g_mse = one if mse_in_range else -one
+            lambda_mse = self.geco_ncell.clamp_(max=numpy.log(self.geco_dict["geco_ncell_maxvalue"])).exp()
+            lambda_mse *= torch.sign(mse_av - self.geco_dict["target_mse"][0])
 
+            # fg_fraction
+            fgfraction_av = torch.mean(mixing_fg)
+            fgfraction_in_range = (fgfraction_av > self.geco_dict["target_fgfraction"][0]) and \
+                                  (fgfraction_av < self.geco_dict["target_fgfraction"][1])
+            g_fgfraction = one if fgfraction_in_range else -one
+            lambda_fgfraction = self.geco_fgfraction.clamp_(max=numpy.log(self.geco_dict["geco_fgfraction_maxvalue"])).exp()
+            lambda_fgfraction *= torch.sign(fgfraction_av - self.geco_dict["target_fgfraction"][0])
+
+            # cell controls the probalbility
+            ncell_av = torch.sum(inference.sample_c_map_after_nms) / batch_size
+            ncell_in_range = (ncell_av > self.geco_dict["target_ncell"][0]) and \
+                             (ncell_av < self.geco_dict["target_ncell"][1])
+            g_ncell = one if ncell_in_range else -one
+            lambda_ncell = self.geco_ncell.clamp_(max=numpy.log(self.geco_dict["geco_ncell_maxvalue"])).exp()
+            lambda_ncell *= torch.sign(ncell_av - self.geco_dict["target_ncell"][0])
+
+        # If in range decrease absolute value of lambda
+        # If out of range increase absolute value of lambda
+        # Sign is determined by the side
         reg_av = regularizations.total()
-        sparsity_av = geco_fgfraction_detached * f_sparsity + geco_ncell_detached * f_cell
-        loss_vae = sparsity_av + geco_mse_detached * (mse_av + reg_av) + one_minus_geco_mse_detached * kl_av
-        loss_geco = self.geco_fgfraction * g_sparsity.detach() + \
-                    self.geco_ncell * g_cell.detach() + \
+        loss_vae = lambda_fgfraction.detach() * torch.sum(mixing_fg) + \
+                   lambda_ncell.detach() * torch.sum(inference.prob_map) + \
+                   lambda_mse.detach() * (mse_av + reg_av) + kl_av
+
+        loss_geco = self.geco_fgfraction * g_fgfraction.detach() + \
+                    self.geco_ncell * g_ncell.detach() + \
                     self.geco_mse * g_mse.detach()
-        loss = loss_vae + loss_geco - loss_geco.detach()
 
         # add everything you want as long as there is one loss
-        return MetricMiniBatch(loss=loss,
+        return MetricMiniBatch(loss=loss_vae + loss_geco,
                                mse_tot=mse_av.detach().item(),
                                reg_tot=reg_av.detach().item(),
                                kl_tot=kl_av.detach().item(),
-                               sparsity_tot=sparsity_av.detach().item(),
+                               sparsity_tot=fgfraction_av.detach().item(),
 
                                kl_zbg=kl_zbg.detach().item(),
                                kl_instance=kl_zinstance.detach().item(),
@@ -350,14 +339,14 @@ class CompositionalVae(torch.nn.Module):
                                lambda_sparsity=self.geco_fgfraction.data.detach().item(),
                                lambda_cell=self.geco_ncell.data.detach().item(),
                                lambda_mse=self.geco_mse.data.detach().item(),
-                               f_sparsity=f_sparsity.detach().item(),
-                               g_sparsity=g_sparsity.detach().item(),
-                               f_cell=f_cell.detach().item(),
-                               g_cell=g_cell.detach().item(),
+                               f_sparsity=lambda_fgfraction.detach().item(),
+                               g_sparsity=g_fgfraction.detach().item(),
+                               f_cell=lambda_ncell.detach().item(),
+                               g_cell=g_ncell.detach().item(),
                                f_mse=mse_av.detach().item(),
                                g_mse=g_mse.detach().item(),
-                               fg_fraction_av=x_sparsity_av.detach().item(),
-                               n_cell_av=x_cell_av.detach().item(),
+                               fg_fraction_av=fgfraction_av.detach().item(),
+                               n_cell_av=ncell_av.detach().item(),
 
                                count_prediction=torch.sum(inference.sample_c, dim=0).detach().cpu().numpy(),
                                wrong_examples=-1*numpy.ones(1),
