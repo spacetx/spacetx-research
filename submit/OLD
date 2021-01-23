@@ -6,7 +6,7 @@
    "__comment" : "there are 3 types of runs: scratch, resume, pretrained",
    "type" : "scratch",
    "MAX_EPOCHS" : 501,
-   "TEST_FREQUENCY" : 1,
+   "TEST_FREQUENCY" : 10,
    "CHECKPOINT_FREQUENCY" : 50,
    "batch_size" : 64
  },
@@ -35,7 +35,7 @@
    "__comment" : "parameters describing the input images",
    "n_objects_max" : 10,
    "size_object_min" : 15,
-   "size_object_max" : 50,
+   "size_object_max" : 40,
    "length_scale_similarity" : 10.0,
    "size_raw_image" : 80,
    "ch_in" : 1
@@ -43,8 +43,8 @@
 
  "nms" : {
    "__comment" : "parameters for the non-max-suppression",
-   "overlap_threshold_train" : 0.3,
-   "overlap_threshold_test" : 0.5
+   "overlap_threshold_train" : 0.4,
+   "overlap_threshold_test" : 0.7
  },
 
  "GECO_loss" : {
@@ -52,8 +52,8 @@
    "is_active" : true,
 
    "geco_mse_range" : [0.1, 0.8, 0.9],
-   "geco_fgfraction_range" : [0.1, 1.0, 10.0],
-   "geco_ncell_range" : [0.1, 1.0, 10.0],
+   "geco_fgfraction_range" : [0.1, 0.2, 10.0],
+   "geco_ncell_range" : [0.0, 0.1, 10.0],
 
    "target_fgfraction" : [0.02, 0.10],
    "target_mse" : [0.25, 0.75],
@@ -98,7 +98,7 @@
 
   "box_overlap": {
     "__comment": "cost which discourages box from overlapping",
-    "strength": 0.001,
+    "strength": 0.1,
     "exponent": 1
   },
 
