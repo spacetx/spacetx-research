@@ -336,8 +336,8 @@ class CompositionalVae(torch.nn.Module):
 
         # loss_vae = lambda * C
         reg_av = regularizations.total()
-        loss_vae = (lambda_fg_B - lambda_fg_A) * torch.sum(mixing_fg) + \
-                   (lambda_ncell_B - lambda_ncell_A) * torch.sum(inference.prob_map) + \
+        loss_vae = (lambda_fg_B - lambda_fg_A) * torch.mean(mixing_fg) + \
+                   (lambda_ncell_B - lambda_ncell_A) * torch.mean(inference.prob_map) + \
                    (lambda_mse_B - lambda_mse_A) * (mse_av + reg_av) + kl_av
 
         # add everything you want as long as there is one loss
