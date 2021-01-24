@@ -298,12 +298,12 @@ class CompositionalVae(torch.nn.Module):
 
         # GECO
         # 1. clamp_in_place
-        self.geco_log_fgfraction_A.data.clamp_(max=self.log_fg_max, min=-10.0)
-        self.geco_log_fgfraction_B.data.clamp_(max=self.log_fg_max, min=-10.0)
-        self.geco_log_ncell_A.data.clamp_(max=self.log_ncell_max, min=-10.)
-        self.geco_log_ncell_B.data.clamp_(max=self.log_ncell_max, min=-10.)
-        self.geco_log_mse_A.data.clamp_(max=self.log_mse_max, min=-10.0)
-        self.geco_log_mse_B.data.clamp_(max=self.log_mse_max, min=-10.0)
+        self.geco_log_fgfraction_A.data.clamp_(max=self.log_fg_max, min=-20.0)
+        self.geco_log_fgfraction_B.data.clamp_(max=self.log_fg_max, min=-20.0)
+        self.geco_log_ncell_A.data.clamp_(max=self.log_ncell_max, min=-20.)
+        self.geco_log_ncell_B.data.clamp_(max=self.log_ncell_max, min=-20.)
+        self.geco_log_mse_A.data.clamp_(max=self.log_mse_max, min=-20.0)
+        self.geco_log_mse_B.data.clamp_(max=self.log_mse_max, min=-20.0)
 
         # Get both the log_lambda and lambda_detached
         log_fg_A = self.geco_log_fgfraction_A
