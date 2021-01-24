@@ -295,14 +295,21 @@ class CompositionalVae(torch.nn.Module):
 
         # GECO
         # 1. clamp_in_place
-        log_fg_A = self.geco_log_fgfraction_A.data.clamp_(max=self.log_mse_max)
-        log_fg_B = self.geco_log_fgfraction_B.data.clamp_(max=self.log_fg_max)
-        log_ncell_A = self.geco_log_ncell_A.data.clamp_(max=self.log_ncell_max)
-        log_ncell_B = self.geco_log_ncell_B.data.clamp_(max=self.log_ncell_max)
-        log_mse_A = self.geco_log_mse_A.data.clamp_(max=self.log_mse_max)
-        log_mse_B = self.geco_log_mse_B.data.clamp_(max=self.log_mse_max)
+        self.geco_log_fgfraction_A.data.clamp_(max=self.log_mse_max)
+        self.geco_log_fgfraction_B.data.clamp_(max=self.log_fg_max)
+        self.geco_log_ncell_A.data.clamp_(max=self.log_ncell_max)
+        self.geco_log_ncell_B.data.clamp_(max=self.log_ncell_max)
+        self.geco_log_mse_A.data.clamp_(max=self.log_mse_max)
+        self.geco_log_mse_B.data.clamp_(max=self.log_mse_max)
 
-        # 2. compute exponential and detach
+        # Get both the log_lambda and lambda_detached
+        log_fg_A = self.geco_log_fgfraction_A
+        log_fg_B = self.geco_log_fgfraction_B
+        log_mse_A = self.geco_log_mse_A
+        log_mse_B = self.geco_log_mse_B
+        log_ncell_A = self.geco_log_ncell_A
+        log_ncell_B = self.geco_log_ncell_B
+
         lambda_fg_A = self.geco_log_fgfraction_A.exp().detach()
         lambda_fg_B = self.geco_log_fgfraction_B.exp().detach()
         lambda_ncell_A = self.geco_log_ncell_A.exp().detach()
@@ -324,6 +331,8 @@ class CompositionalVae(torch.nn.Module):
         loss_geco = - log_fg_A * C_fg_A.detach() - log_fg_B * C_fg_B.detach() \
                     - log_mse_A * C_mse_A.detach() - log_mse_B * C_mse_B.detach() \
                     - log_ncell_A * C_ncell_A.detach() - log_ncell_B * C_ncell_B.detach()
+
+        # print("log_fg_A, log_fg_B, lambda_fg, fgfraction", log_fg_A, log_fg_B, lambda_fg_B - lambda_fg_A, fgfraction_av)
 
         # loss_vae = lambda * C
         reg_av = regularizations.total()
