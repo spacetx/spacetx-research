@@ -251,7 +251,7 @@ class CompositionalVae(torch.nn.Module):
             g_mse = (min(self.geco_dict["target_mse"]) - mse_av).clamp(min=0) + \
                     (max(self.geco_dict["target_mse"]) - mse_av).clamp(max=0)
 
-        # 2. Sparsity should encourage:
+            # 2. Sparsity should encourage:
         # 1. few object
         # 2. tight bounding boxes
         # 3. tight masks
