@@ -4,8 +4,8 @@
   "neptune_ml.data_test": "gs://ld-data-bucket/cvpr_rebttal/mnist_test_80x80_n0_3_no_grid.pt",
   "neptune_ml.ground_truth": "gs://ld-data-bucket/cvpr_rebttal/mnist_test_80x80_n4_6_no_grid.pt",
   "neptune_ml.ckpt": "gs://ld-data-bucket/cell_segmenter/multiMNIST/dummy2.pt",
-  "neptune_ml.git_branch_or_commit": "0bf61e2d078a422fc1b817fbad1561a8903e93b3",
-  "neptune_ml.git_repo":  "https://github.com/spacetx/spacetx-research.git",
+  "neptune_ml.git_branch_or_commit": "ad636f4eccf5de1c37a3947dac3ed6d9321f127f",
+"neptune_ml.git_repo":  "https://github.com/spacetx/spacetx-research.git",
   "neptune_ml.main_file_name": "main_mnist_rebuttal.py"
 }
 
