@@ -236,23 +236,23 @@ class CompositionalVae(torch.nn.Module):
             bh_target = torch.max(ideal_y3 - inference.sample_bb.by,
                                   inference.sample_bb.by - ideal_y1).clamp(min=size_obj_min, max=size_obj_max)
 
-            # compute the cost
-            dw_cost = sample_from_constraints_dict(dict_soft_constraints=self.dict_soft_constraints,
-                                                   var_name="bounding_boxes_regression",
-                                                   var_value=bw_target - inference.sample_bb.bw,
-                                                   verbose=verbose,
-                                                   chosen=chosen)
-            dh_cost = sample_from_constraints_dict(dict_soft_constraints=self.dict_soft_constraints,
-                                                   var_name="bounding_boxes_regression",
-                                                   var_value=bh_target - inference.sample_bb.bh,
-                                                   verbose=verbose,
-                                                   chosen=chosen)
-            cost_bounding_box = (inference.sample_c.detach() * (dw_cost + dh_cost)).sum(dim=-2)  #sum over boxes
+        # compute the cost
+        dw_cost = sample_from_constraints_dict(dict_soft_constraints=self.dict_soft_constraints,
+                                               var_name="bounding_boxes_regression",
+                                               var_value=bw_target - inference.sample_bb.bw,
+                                               verbose=verbose,
+                                               chosen=chosen)
+        dh_cost = sample_from_constraints_dict(dict_soft_constraints=self.dict_soft_constraints,
+                                               var_name="bounding_boxes_regression",
+                                               var_value=bh_target - inference.sample_bb.bh,
+                                               verbose=verbose,
+                                               chosen=chosen)
+        cost_bounding_box = (inference.sample_c.detach() * (dw_cost + dh_cost)).sum(dim=-2)  #sum over boxes
 
-            # print("bw ->", bw_target[:, 0], inference.sample_bb.bw[:, 0])
-            # print("bh ->", bh_target[:, 0], inference.sample_bb.bh[:, 0])
-            # print("c  ->", inference.sample_c[:, 0])
-            # print("DEBUG", cost_bounding_box.mean())
+        # print("bw ->", bw_target[:, 0], inference.sample_bb.bw[:, 0])
+        # print("bh ->", bh_target[:, 0], inference.sample_bb.bh[:, 0])
+        # print("c  ->", inference.sample_c[:, 0])
+        # print("DEBUG", cost_bounding_box.mean())
 
         return RegMiniBatch(reg_overlap=cost_overlap.mean(),            # mean over batch_size
                             reg_bb_regression=cost_bounding_box.mean(),  # mean over batch_size
