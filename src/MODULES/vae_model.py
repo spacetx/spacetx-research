@@ -218,10 +218,10 @@ class CompositionalVae(torch.nn.Module):
                                                chosen=chosen)
         cost_bounding_box = (inference.sample_c.detach() * (dw_cost + dh_cost)).sum(dim=-2)  # sum over boxes
 
-        print("bw ->", bw_target[:, 0], inference.sample_bb.bw[:, 0])
-        print("bh ->", bh_target[:, 0], inference.sample_bb.bh[:, 0])
-        print("c  ->", inference.sample_c[:, 0])
-        print("DEBUG", cost_bounding_box.mean())
+        # print("bw ->", bw_target[:, 0], inference.sample_bb.bw[:, 0])
+        # print("bh ->", bh_target[:, 0], inference.sample_bb.bh[:, 0])
+        # print("c  ->", inference.sample_c[:, 0])
+        # print("DEBUG", cost_bounding_box.mean())
 
         return RegMiniBatch(reg_overlap=cost_overlap.mean(),            # mean over batch_size
                             reg_bbox_regression=cost_bounding_box.mean(),  # mean over batch size
