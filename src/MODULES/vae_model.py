@@ -190,7 +190,7 @@ class CompositionalVae(torch.nn.Module):
 
             mask = (inference.mixing > 0.5).long()  # shape: n_box_few, batch_size, 1, width, height
             # compute ideal x1,x3,y1,y3 of shape: n_box_few, batch_size
-            buffer_size = 3
+            buffer_size = 5
             ideal_x3 = torch.max(torch.flatten(mask * ix_grid, start_dim=-3), dim=-1)[0]
             ideal_y3 = torch.max(torch.flatten(mask * iy_grid, start_dim=-3), dim=-1)[0]
             ideal_x1 = n_width - torch.max(torch.flatten(mask * (n_width - ix_grid), start_dim=-3), dim=-1)[0]

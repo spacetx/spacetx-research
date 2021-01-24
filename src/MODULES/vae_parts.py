@@ -201,7 +201,7 @@ class Inference_and_Generation(torch.nn.Module):
                                      height_big=height_raw_image)  # shape: n_box, batch, ch, w, h
         big_mask, big_img = torch.split(big_stuff, split_size_or_sections=(1, big_stuff.shape[-3]-1), dim=-3)
         big_mask_times_c = big_mask * c_few[..., None, None, None]  # this is strictly smaller than 1
-        mixing = big_mask_times_c / big_mask_times_c.sum(dim=-5).clamp_(min=1.0)  # softplus-like function
+        mixing = big_mask_times_c / big_mask_times_c.sum(dim=-5).clamp(min=1.0)  # softplus-like function
         similarity_l, similarity_w = self.similarity_kernel_dpp.get_l_w()
 
         # Compute the overlap
