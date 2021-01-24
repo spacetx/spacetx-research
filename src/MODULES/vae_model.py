@@ -153,14 +153,10 @@ class CompositionalVae(torch.nn.Module):
             2. overlap make sure that mask do not overlap
         """
 
-        # 1. Mixing probability should become certain.
-        # I want to minimize the entropy: - sum_k pi_k log(pi_k)
-        # Equivalently I can minimize overlap: sum_k pi_k * (1 - pi_k)
-        # Both are minimized if pi_k = 0,1
-        overlap = torch.sum(inference.mixing * (torch.ones_like(inference.mixing) - inference.mixing), dim=-5)  # sum boxes
+        # 1. No overlap
         cost_overlap = sample_from_constraints_dict(dict_soft_constraints=self.dict_soft_constraints,
                                                     var_name="overlap",
-                                                    var_value=overlap,
+                                                    var_value=inference.mask_overlap,
                                                     verbose=verbose,
                                                     chosen=chosen).sum(dim=(-1, -2, -3))  # sum over ch, w, h
 
@@ -187,7 +183,7 @@ class CompositionalVae(torch.nn.Module):
 
             mask = (inference.mixing > 0.5).long()  # shape: n_box_few, batch_size, 1, width, height
             # compute ideal x1,x3,y1,y3 of shape: n_box_few, batch_size
-            buffer_size = 1
+            buffer_size = 3
             ideal_x3 = torch.max(torch.flatten(mask * ix_grid, start_dim=-3), dim=-1)[0]
             ideal_y3 = torch.max(torch.flatten(mask * iy_grid, start_dim=-3), dim=-1)[0]
             ideal_x1 = n_width - torch.max(torch.flatten(mask * (n_width - ix_grid), start_dim=-3), dim=-1)[0]
@@ -271,8 +267,9 @@ class CompositionalVae(torch.nn.Module):
             # g_sparsity = (x_sparsity_min - x_sparsity_av).clamp(min=0) + \
             #              (x_sparsity_max - x_sparsity_av).clamp(max=0)
             g_sparsity = torch.min(x_sparsity_av - x_sparsity_min, x_sparsity_max - x_sparsity_av)  # positive if in range
-        c_times_area_few = inference.sample_c * inference.sample_bb.bw * inference.sample_bb.bh
-        x_sparsity = 0.5 * (torch.sum(mixing_fg) + torch.sum(c_times_area_few)) / torch.numel(mixing_fg)
+        # c_times_area_few = inference.sample_c * inference.sample_bb.bw * inference.sample_bb.bh
+        # x_sparsity = 0.5 * (torch.sum(mixing_fg) + torch.sum(c_times_area_few)) / torch.numel(mixing_fg)
+        x_sparsity = torch.mean(mixing_fg)
         f_sparsity = x_sparsity * torch.sign(x_sparsity_av - x_sparsity_min).detach()
 
         with torch.no_grad():
@@ -289,11 +286,11 @@ class CompositionalVae(torch.nn.Module):
         # Note that I compute the mean over batch, latent_dimensions and n_object.
         # This means that latent_dim can effectively control the complexity of the reconstruction,
         # i.e. more latent more capacity.
-        kl_zbg = torch.mean(inference.kl_zbg)              # mean over: batch, latent_dim
-        kl_zinstance = torch.mean(inference.kl_zinstance)  # mean over: n_boxes, batch, latent_dim
-        kl_zwhere = torch.mean(inference.kl_zwhere)        # mean over: n_boxes, batch, latent_dim
-        kl_logit = torch.mean(inference.kl_logit)          # mean over: batch
-
+        kl_zbg = torch.mean(inference.kl_zbg)  # mean over: batch, latent_dim
+        c_masked = inference.sample_c.detach().unsqueeze(-1)  # shape: n_boxes, batch, 1
+        kl_zinstance = torch.mean(inference.kl_zinstance * c_masked) * n_box_few  # mean over: n_boxes, batch, latent_dim
+        kl_zwhere = torch.mean(inference.kl_zwhere * c_masked) * n_box_few  # mean over: n_boxes, batch, latent_dim
+        kl_logit = torch.mean(inference.kl_logit)  # mean over: batch
         kl_av = kl_zbg + kl_zinstance + kl_zwhere + \
                 torch.exp(-self.running_avarage_kl_logit) * kl_logit + \
                 self.running_avarage_kl_logit - self.running_avarage_kl_logit.detach()
