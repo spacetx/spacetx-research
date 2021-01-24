@@ -230,34 +230,19 @@ class RegMiniBatch(NamedTuple):
 class MetricMiniBatch(NamedTuple):
     # All entries should be scalars obtained by averaging over minibatch
     loss: torch.Tensor  # this is the only tensor b/c I need to take gradients
-    mse_tot: float
-    reg_tot: float
-    kl_tot: float
-    sparsity_tot: float
+    mse_av: float
+    reg_av: float
+    kl_av: float
+    fgfraction_av: float
+    ncell_av: float
 
-    kl_zbg: float
-    kl_instance: float
-    kl_where: float
-    kl_logit: float
-
-    reg_overlap: float
-    reg_area_obj: float
+    lambda_mse: float
+    lambda_ncell: float
+    lambda_fgfraction: float
 
     count_prediction: numpy.ndarray
     wrong_examples: numpy.ndarray
     accuracy: float
-
-    lambda_sparsity: float
-    lambda_cell: float
-    lambda_mse: float
-    f_sparsity: float
-    g_sparsity: float
-    f_cell: float
-    g_cell: float
-    f_mse: float
-    g_mse: float
-    fg_fraction_av: float
-    n_cell_av: float
 
     similarity_l: float
     similarity_w: float
@@ -265,18 +250,17 @@ class MetricMiniBatch(NamedTuple):
 
     def pretty_print(self, epoch: int = 0) -> str:
         s = "[epoch {0:4d}] loss={1:.3f}, mse={2:.3f},  \
-        reg={3:.3f}, kl={4:.3f}, sparsity={5:.3f}, fg_fraction_av={6:.3f}, n_cell_av={7:.3f}, \
-        lambda_sparsity={8:.3f}, lambda_cell={9:.3f}, lambda_mse={10:.3f}".format(epoch,
-                                                                                  self.loss,
-                                                                                  self.mse_tot,
-                                                                                  self.reg_tot,
-                                                                                  self.kl_tot,
-                                                                                  self.sparsity_tot,
-                                                                                  self.fg_fraction_av,
-                                                                                  self.n_cell_av,
-                                                                                  self.lambda_sparsity,
-                                                                                  self.lambda_cell,
-                                                                                  self.lambda_mse)
+        reg={3:.3f}, kl={4:.3f}, fg_fraction_av={5:.3f}, n_cell_av={6:.3f}, \
+        lambda_fgfraction={7:.3f}, lambda_cell={8:.3f}, lambda_mse={9:.3f}".format(epoch,
+                                                                                   self.loss,
+                                                                                   self.mse_av,
+                                                                                   self.reg_av,
+                                                                                   self.kl_av,
+                                                                                   self.fgfraction_av,
+                                                                                   self.ncell_av,
+                                                                                   self.lambda_fgfraction,
+                                                                                   self.lambda_ncell,
+                                                                                   self.lambda_mse)
         return s
 
 
