@@ -214,6 +214,7 @@ class RegMiniBatch(NamedTuple):
     # All entries should be scalars obtained by averaging over minibatch
     reg_overlap: torch.Tensor
     reg_area_obj: torch.Tensor
+    reg_bbox_regression: torch.Tensor
 
     def total(self):
         tot = None
