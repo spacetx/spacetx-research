@@ -301,9 +301,10 @@ class CompositionalVae(torch.nn.Module):
 
         reg_av = regularizations.total()
         loss_geco = log_fgfraction * v_fgfraqction + log_ncell * v_ncell + log_mse * v_mse
+        area_box = self.input_img_dict["size_object_min"]**2
         loss_vae = kl_av +\
                    lambda_mse * sign_mse * (mse_av + reg_av) + \
-                   lambda_ncell * sign_ncell * torch.mean(inference.prob_map) + \
+                   lambda_ncell * sign_ncell * area_box * torch.sum(inference.prob_map) + \
                    lambda_fgfraction * sign_fgfraction * fgfraction_av
 
         loss = loss_vae + loss_geco - loss_geco.detach()
