@@ -43,7 +43,7 @@
 
  "nms" : {
    "__comment" : "parameters for the non-max-suppression",
-   "overlap_threshold_train" : 0.3,
+   "overlap_threshold_train" : 0.5,
    "overlap_threshold_test" : 0.5
  },
 
@@ -51,13 +51,13 @@
    "__comment" : "if active=false use ELBO, else use GECO with Log-Likelihood threshold = n_pixels * n_channel * threshold",
    "is_active" : true,
 
-   "geco_mse_range" : [0.1, 0.8, 0.9],
-   "geco_fgfraction_range" : [0.1, 1.0, 20.0],
-   "geco_ncell_range" : [0.1, 1.0, 20.0],
+   "geco_lambda_mse_range" : [1.0, 20],
+   "geco_lambda_fgfraction_range" : [0.0, 100.0],
+   "geco_lambda_ncell_range" : [0.0, 100.0],
 
    "target_fgfraction" : [0.02, 0.10],
-   "target_mse" : [0.25, 0.75],
-   "target_ncell" : [1.0, 3.0],
+   "target_mse" : [0.0, 0.5],
+   "target_ncell" : [1.0, 2.0],
 
    "bg_std" : 0.1,
    "fg_std" : 0.1
@@ -92,13 +92,13 @@
 
   "overlap": {
     "__comment": "cost which discourages masks from overlapping",
-    "strength": 0.001,
+    "strength": 0.1,
     "exponent": 1
   },
 
   "bounding_boxes_regression": {
     "__comment": "cost which discourages masks from overlapping",
-    "strength": 0.0001,
+    "strength": 0.001,
     "exponent": 1
   },
 
