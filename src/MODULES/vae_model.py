@@ -239,12 +239,12 @@ class CompositionalVae(torch.nn.Module):
         # compute the cost
         dw_cost = sample_from_constraints_dict(dict_soft_constraints=self.dict_soft_constraints,
                                                var_name="bounding_boxes_regression",
-                                               var_value=bw_target - inference.sample_bb.bw,
+                                               var_value=torch.abs(bw_target - inference.sample_bb.bw),
                                                verbose=verbose,
                                                chosen=chosen)
         dh_cost = sample_from_constraints_dict(dict_soft_constraints=self.dict_soft_constraints,
                                                var_name="bounding_boxes_regression",
-                                               var_value=bh_target - inference.sample_bb.bh,
+                                               var_value=torch.abs(bh_target - inference.sample_bb.bh),
                                                verbose=verbose,
                                                chosen=chosen)
         cost_bounding_box = (inference.sample_c.detach() * (dw_cost + dh_cost)).sum(dim=-2)  #sum over boxes
