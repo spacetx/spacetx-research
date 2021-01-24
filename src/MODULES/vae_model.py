@@ -128,12 +128,15 @@ class CompositionalVae(torch.nn.Module):
         self.geco_dict = params["GECO_loss"]
         self.input_img_dict = params["input_image"]
 
-        self.geco_log_fgfraction_A = torch.nn.Parameter(data=torch.ones(1, dtype=torch.float), requires_grad=True)
-        self.geco_log_fgfraction_B = torch.nn.Parameter(data=torch.ones(1, dtype=torch.float), requires_grad=True)
-        self.geco_log_ncell_A = torch.nn.Parameter(data=torch.ones(1, dtype=torch.float), requires_grad=True)
-        self.geco_log_ncell_B = torch.nn.Parameter(data=torch.ones(1, dtype=torch.float), requires_grad=True)
-        self.geco_log_mse_A = torch.nn.Parameter(data=torch.ones(1, dtype=torch.float), requires_grad=True)
-        self.geco_log_mse_B = torch.nn.Parameter(data=torch.ones(1, dtype=torch.float), requires_grad=True)
+        # Initialize the lambda_eff = e^B-e^A
+        one = torch.ones(1, dtype=torch.float)
+        zero = torch.zeros(1, dtype=torch.float)
+        self.geco_log_fgfraction_A = torch.nn.Parameter(data=zero, requires_grad=True)
+        self.geco_log_fgfraction_B = torch.nn.Parameter(data=one, requires_grad=True)
+        self.geco_log_ncell_A = torch.nn.Parameter(data=zero, requires_grad=True)
+        self.geco_log_ncell_B = torch.nn.Parameter(data=one, requires_grad=True)
+        self.geco_log_mse_A = torch.nn.Parameter(data=zero, requires_grad=True)
+        self.geco_log_mse_B = torch.nn.Parameter(data=2.0*one, requires_grad=True)
         self.running_avarage_kl_logit = torch.nn.Parameter(data=4*torch.ones(1, dtype=torch.float), requires_grad=True)
 
         self.log_mse_max = numpy.log(self.geco_dict["geco_lambda_mse_max"])
@@ -295,7 +298,7 @@ class CompositionalVae(torch.nn.Module):
 
         # GECO
         # 1. clamp_in_place
-        self.geco_log_fgfraction_A.data.clamp_(max=self.log_mse_max)
+        self.geco_log_fgfraction_A.data.clamp_(max=self.log_fg_max)
         self.geco_log_fgfraction_B.data.clamp_(max=self.log_fg_max)
         self.geco_log_ncell_A.data.clamp_(max=self.log_ncell_max)
         self.geco_log_ncell_B.data.clamp_(max=self.log_ncell_max)
@@ -336,7 +339,7 @@ class CompositionalVae(torch.nn.Module):
 
         # loss_vae = lambda * C
         reg_av = regularizations.total()
-        loss_vae = (lambda_fg_B - lambda_fg_A) * torch.mean(mixing_fg) + \
+        loss_vae = (lambda_fg_B - lambda_fg_A) * fgfraction_av + \
                    (lambda_ncell_B - lambda_ncell_A) * torch.mean(inference.prob_map) + \
                    (lambda_mse_B - lambda_mse_A) * (mse_av + reg_av) + kl_av
 
