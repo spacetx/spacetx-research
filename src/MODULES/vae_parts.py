@@ -66,7 +66,9 @@ class Inference_and_Generation(torch.nn.Module):
                 overlap_threshold: float,
                 n_objects_max: int,
                 topk_only: bool,
-                noisy_sampling: bool) -> Inference:
+                noisy_sampling: bool,
+                quantize_prob: bool,
+                quantize_prob_value: float) -> Inference:
 
         # 0. preparation
         batch_size, ch_raw_image, width_raw_image, height_raw_image = imgs_in.shape
@@ -130,10 +132,18 @@ class Inference_and_Generation(torch.nn.Module):
         # Sample the probability map from prior or posterior
         similarity_kernel = self.similarity_kernel_dpp.forward(n_width=unet_output.logit.shape[-2],
                                                                n_height=unet_output.logit.shape[-1])
-        c_map_before_nms = sample_c_map(p_map=p_map,
-                                        similarity_kernel=similarity_kernel,
-                                        noisy_sampling=noisy_sampling,
-                                        sample_from_prior=generate_synthetic_data)
+        if quantize_prob:
+            # print("I am quantizing the probability")
+            # print(p_map[0,0].sum(), (p_map > quantize_prob_value).float()[0,0].sum())
+            c_map_before_nms = sample_c_map(p_map=(p_map > quantize_prob_value).float(),
+                                            similarity_kernel=similarity_kernel,
+                                            noisy_sampling=noisy_sampling,
+                                            sample_from_prior=generate_synthetic_data)
+        else:
+            c_map_before_nms = sample_c_map(p_map=p_map,
+                                            similarity_kernel=similarity_kernel,
+                                            noisy_sampling=noisy_sampling,
+                                            sample_from_prior=generate_synthetic_data)
 
         # NMS + top-K operation
         with torch.no_grad():

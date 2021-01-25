@@ -569,6 +569,8 @@ def process_one_epoch(model: torch.nn.Module,
                       weight_clipper: Optional[Callable[[None], None]] = None,
                       verbose: bool = False,
                       noisy_sampling: bool = True,
+                      quantize_prob: bool = False,
+                      quantize_prob_value: float = 0.5,
                       overlap_threshold: float = 0.3,
                       neptune_experiment: Optional[neptune.experiments.Experiment] = None,
                       neptune_prefix: Optional[str] = None) -> MetricMiniBatch:
@@ -585,7 +587,9 @@ def process_one_epoch(model: torch.nn.Module,
 
         metrics = model.forward(imgs_in=imgs,
                                 overlap_threshold=overlap_threshold,
-                                noisy_sampling=noisy_sampling).metrics  # the forward function returns metric and other stuff
+                                noisy_sampling=noisy_sampling,
+                                quantize_prob=quantize_prob,
+                                quantize_prob_value=quantize_prob_value).metrics  # the forward function returns metric and other stuff
         if verbose:
             print("i = %3d train_loss=%.5f" % (i, metrics.loss))
 

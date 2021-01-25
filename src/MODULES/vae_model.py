@@ -218,10 +218,10 @@ class CompositionalVae(torch.nn.Module):
                                                chosen=chosen)
         cost_bounding_box = (inference.sample_c.detach() * (dw_cost + dh_cost)).sum(dim=-2)  # sum over boxes
 
-        print("bw ->", bw_target[:, 0], inference.sample_bb.bw[:, 0])
-        print("bh ->", bh_target[:, 0], inference.sample_bb.bh[:, 0])
-        print("c  ->", inference.sample_c[:, 0])
-        print("DEBUG", cost_bounding_box.mean())
+        #print("bw ->", bw_target[:, 0], inference.sample_bb.bw[:, 0])
+        #print("bh ->", bh_target[:, 0], inference.sample_bb.bh[:, 0])
+        #print("c  ->", inference.sample_c[:, 0])
+        #print("DEBUG", cost_bounding_box.mean())
 
         return RegMiniBatch(reg_overlap=cost_overlap.mean(),            # mean over batch_size
                             reg_bbox_regression=cost_bounding_box.mean(),  # mean over batch size
@@ -637,6 +637,8 @@ class CompositionalVae(torch.nn.Module):
                            draw_boxes: bool,
                            verbose: bool,
                            noisy_sampling: bool,
+                           quantize_prob: bool,
+                           quantize_prob_value: float,
                            prob_corr_factor: float,
                            overlap_threshold: float,
                            n_objects_max: int) -> Output:
@@ -653,7 +655,9 @@ class CompositionalVae(torch.nn.Module):
                                                             overlap_threshold=overlap_threshold,
                                                             n_objects_max=n_objects_max,
                                                             topk_only=topk_only,
-                                                            noisy_sampling=noisy_sampling)
+                                                            noisy_sampling=noisy_sampling,
+                                                            quantize_prob=quantize_prob,
+                                                            quantize_prob_value=quantize_prob_value)
 
         regularizations: RegMiniBatch = self.compute_regularizations(inference=inference,
                                                                      verbose=verbose)
@@ -680,6 +684,8 @@ class CompositionalVae(torch.nn.Module):
                 imgs_in: torch.tensor,
                 overlap_threshold: float,
                 noisy_sampling: bool = True,
+                quantize_prob: bool = False,
+                quantize_prob_value: float = 0.5,
                 draw_image: bool = False,
                 draw_bg: bool = False,
                 draw_boxes: bool = False,
@@ -693,6 +699,8 @@ class CompositionalVae(torch.nn.Module):
                                        draw_boxes=draw_boxes,
                                        verbose=verbose,
                                        noisy_sampling=noisy_sampling,
+                                       quantize_prob=quantize_prob,
+                                       quantize_prob_value=quantize_prob_value,
                                        prob_corr_factor=getattr(self, "prob_corr_factor", 0.0),
                                        overlap_threshold=overlap_threshold,
                                        n_objects_max=self.input_img_dict["n_objects_max"])
