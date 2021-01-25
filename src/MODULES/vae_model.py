@@ -108,8 +108,8 @@ def instantiate_scheduler(optimizer: torch.optim.Optimizer,
                                                     last_epoch=-1)
     elif dict_params_scheduler["scheduler_type"] == "MultiStepLR":
         scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer,
-                                                         milestones=[100, 150, 200],
-                                                         gamma=0.5)
+                                                         milestones=[100],
+                                                         gamma=0.1)
     else:
         raise Exception
     return scheduler
