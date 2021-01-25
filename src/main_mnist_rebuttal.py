@@ -184,7 +184,7 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                                                      dataloader=test_loader,
                                                      optimizer=optimizer,
                                                      noisy_sampling=True,
-                                                     quantize_prob=True,
+                                                     quantize_prob=False,
                                                      quantize_prob_value=0.1,
                                                      overlap_threshold=params["nms"]["overlap_threshold_test"],
                                                      verbose=(epoch == 0),
