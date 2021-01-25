@@ -178,7 +178,7 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                                               prefix_to_add="train_")
 
                 if (epoch % TEST_FREQUENCY) == 0:
-                    
+
                     vae.eval()
                     test_metrics = process_one_epoch(model=vae,
                                                      dataloader=test_loader,
@@ -257,6 +257,7 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                                                   destination=history_dict)
 
                     # print("segmentation test")
+                    print("segmentation")
                     segmentation: Segmentation = vae.segment(batch_imgs=reference_imgs,
                                                              noisy_sampling=True,
                                                              overlap_threshold=params["nms"]["overlap_threshold_test"])

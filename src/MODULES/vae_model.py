@@ -420,7 +420,9 @@ class CompositionalVae(torch.nn.Module):
                                                                 overlap_threshold=overlap_threshold,
                                                                 n_objects_max=n_objects_max,
                                                                 topk_only=topk_only,
-                                                                noisy_sampling=noisy_sampling)
+                                                                noisy_sampling=noisy_sampling,
+                                                                quantize_prob=False,
+                                                                quantize_prob_value=0.0)
 
             # Now compute fg_prob, integer_segmentation_mask, similarity
             most_likely_mixing, index = torch.max(inference.mixing, dim=-5, keepdim=True)  # 1, batch_size, 1, w, h
@@ -720,6 +722,8 @@ class CompositionalVae(torch.nn.Module):
                                            draw_boxes=draw_boxes,
                                            verbose=verbose,
                                            noisy_sampling=True,
+                                           quantize_prob=False,
+                                           quantize_prob_value=0.5,
                                            prob_corr_factor=0.0,
                                            overlap_threshold=-1.0,
                                            n_objects_max=self.input_img_dict["n_objects_max"])
