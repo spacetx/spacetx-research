@@ -188,6 +188,7 @@ class UNEToutput(NamedTuple):
 
 
 class Inference(NamedTuple):
+    logit_map: torch.Tensor # shape -> batch_size, 1, w, h
     prob_map: torch.Tensor  # shape -> batch_size, 1, w, h
     big_bg: torch.Tensor
     big_img: torch.Tensor

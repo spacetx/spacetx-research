@@ -94,6 +94,13 @@ def instantiate_optimizer(model: torch.nn.Module,
                                      {'params': similarity_params, 'lr': dict_params_optimizer["base_lr_similarity"]},
                                      {'params': other_params, 'lr': dict_params_optimizer["base_lr"]}],
                                     weight_decay=dict_params_optimizer["weight_decay"])
+
+    elif dict_params_optimizer["type"] == "RMSprop":
+        optimizer = torch.optim.RMSprop([{'params': geco_params, 'lr': dict_params_optimizer["base_lr_geco"]},
+                                         {'params': similarity_params, 'lr': dict_params_optimizer["base_lr_similarity"]},
+                                         {'params': other_params, 'lr': dict_params_optimizer["base_lr"]}],
+                                        alpha=0.99, weight_decay=dict_params_optimizer["weight_decay"], momentum=0)
+
     else:
         raise Exception
     return optimizer
@@ -277,39 +284,42 @@ class CompositionalVae(torch.nn.Module):
         log_mse = self.geco_log_mse
         log_ncell = self.geco_log_ncell
 
-        lambda_fgfraction = self.geco_log_fgfraction.exp().detach()
-        lambda_ncell = self.geco_log_ncell.exp().detach()
-        lambda_mse = self.geco_log_mse.exp().detach()
-
-        # Compute the detached stuff which make log_lambda change
-        # The general rule is that:
-        # 1. if in range, v>0 and leads to decrease of log_lambda
-        # 2. if out of range, v<0 and leads to increase of log_lambda
         fgfraction_av = torch.mean(mixing_fg)
         ncell_av = torch.sum(inference.sample_c_map_after_nms) / batch_size
 
-        v_mse = torch.min(mse_av - self.geco_dict["target_mse"][0],
-                          self.geco_dict["target_mse"][1] - mse_av).detach()
-        v_fgfraqction = torch.min(fgfraction_av - self.geco_dict["target_fgfraction"][0],
-                                  self.geco_dict["target_fgfraction"][1] - fgfraction_av).detach()
-        v_ncell = torch.min(ncell_av - self.geco_dict["target_ncell"][0],
-                            self.geco_dict["target_ncell"][1] - ncell_av).detach()
+        with torch.no_grad():
+            lambda_fgfraction = self.geco_log_fgfraction.exp().detach()
+            lambda_ncell = self.geco_log_ncell.exp().detach()
+            lambda_mse = self.geco_log_mse.exp().detach()
 
-        sign_mse = torch.sign(mse_av - self.geco_dict["target_mse"][0]).detach()
-        sign_ncell = torch.sign(ncell_av - self.geco_dict["target_ncell"][0]).detach()
-        sign_fgfraction = torch.sign(fgfraction_av - self.geco_dict["target_fgfraction"][0]).detach()
+            # Compute the detached stuff which make log_lambda change
+            # The general rule is that:
+            # 1. if in range, v>0 and leads to decrease of log_lambda
+            # 2. if out of range, v<0 and leads to increase of log_lambda
+            v_mse = torch.min(mse_av - self.geco_dict["target_mse"][0],
+                              self.geco_dict["target_mse"][1] - mse_av).detach()
+            v_fgfraqction = torch.min(fgfraction_av - self.geco_dict["target_fgfraction"][0],
+                                      self.geco_dict["target_fgfraction"][1] - fgfraction_av).detach()
+            v_ncell = torch.min(ncell_av - self.geco_dict["target_ncell"][0],
+                                self.geco_dict["target_ncell"][1] - ncell_av).detach()
+
+            sign_mse = torch.sign(mse_av - self.geco_dict["target_mse"][0]).detach()
+            sign_ncell = torch.sign(ncell_av - self.geco_dict["target_ncell"][0]).detach()
+            sign_fgfraction = torch.sign(fgfraction_av - self.geco_dict["target_fgfraction"][0]).detach()
 
         reg_av = regularizations.total()
         loss_geco = log_fgfraction * v_fgfraqction + log_ncell * v_ncell + log_mse * v_mse
         area_box = self.input_img_dict["size_object_min"]**2
         loss_vae = kl_av +\
                    lambda_mse * sign_mse * (mse_av + reg_av) + \
-                   lambda_ncell * sign_ncell * area_box * torch.sum(inference.prob_map) + \
+                   lambda_ncell * sign_ncell * torch.sum(inference.logit_map) + \
                    lambda_fgfraction * sign_fgfraction * fgfraction_av
 
-        loss = loss_vae + loss_geco - loss_geco.detach()
+        #print("inference.logit_map.mean()", inference.logit_map.mean())
+        #print("torch.mean(inference.logit_map), lambda, ncell_av", torch.mean(inference.logit_map).detach().item(),
+        #      lambda_ncell * sign_ncell, ncell_av.detach().item())
 
-        # print(fgfraction_av, lambda_fgfraction, ncell_av, lambda_ncell)
+        loss = loss_vae + loss_geco - loss_geco.detach()
 
         # add everything you want as long as there is one loss
         return MetricMiniBatch(loss=loss,

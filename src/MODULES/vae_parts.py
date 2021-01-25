@@ -211,7 +211,8 @@ class Inference_and_Generation(torch.nn.Module):
         sum_x2 = big_mask_times_c.pow(2).sum(dim=-5)  # square first and sum over boxes later
         mask_overlap = 0.5 * (sum_x.pow(2) - sum_x2).clamp(min=0)
 
-        return Inference(prob_map=p_map,
+        return Inference(logit_map=unet_output.logit,
+                         prob_map=p_map,
                          big_bg=big_bg,
                          mixing=mixing,
                          big_img=big_img,
