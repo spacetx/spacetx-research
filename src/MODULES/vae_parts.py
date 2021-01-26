@@ -120,7 +120,7 @@ class Inference_and_Generation(torch.nn.Module):
         # Now I have p, log(p), log(1-p)
         if (prob_corr_factor > 0) and (prob_corr_factor <= 1.0):
             p_map = ((1 - prob_corr_factor) * torch.sigmoid(unet_output.logit) +
-                     prob_corr_factor * p_map_delta).clamp(min=1E-4, max=1-1E-4)
+                     prob_corr_factor * p_map_delta).clamp(min=1E-6, max=1-1E-6)
             log_p_map = torch.log(p_map)
             log_one_minus_p_map = torch.log1p(-p_map)
         else:
