@@ -214,31 +214,31 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                                                   prefix_exclude="wrong_examples",
                                                   prefix_to_add="test_out_")
 
-                    if len(test_metrics.wrong_examples) > 0:
-                        error_index = torch.tensor(test_metrics.wrong_examples[:5], dtype=torch.long)
-                    else:
-                        error_index = torch.arange(5, dtype=torch.long)
-                    error_test_img = test_loader.load(index=error_index)[0].to(reference_imgs.device)
-                    
-                    if len(test_out_metrics.wrong_examples) > 0:
-                        error_index = torch.tensor(test_out_metrics.wrong_examples[:5], dtype=torch.long)
-                    else:
-                        error_index = torch.arange(5, dtype=torch.long)
-                    error_test_out_img = test_out_loader.load(index=error_index)[0].to(reference_imgs.device)
-                    error_img = torch.cat((error_test_img, error_test_out_img), dim=0)
-
-                    error_output: Output = vae.forward(error_img,
-                                                       overlap_threshold=params["nms"]["overlap_threshold_test"],
-                                                       noisy_sampling=True,
-                                                       draw_image=True,
-                                                       draw_boxes=True,
-                                                       draw_bg=True,
-                                                       verbose=False)
-
-                    in_out = torch.cat((error_output.imgs, error_img.expand_as(error_output.imgs)), dim=0)
-                    _ = show_batch(in_out, n_col=in_out.shape[0]//2, title="error epoch="+str(epoch),
-                                   experiment=exp, neptune_name="test_errors")
-
+###                    if len(test_metrics.wrong_examples) > 0:
+###                        error_index = torch.tensor(test_metrics.wrong_examples[:5], dtype=torch.long)
+###                    else:
+###                        error_index = torch.arange(5, dtype=torch.long)
+###                    error_test_img = test_loader.load(index=error_index)[0].to(reference_imgs.device)
+###
+###                    if len(test_out_metrics.wrong_examples) > 0:
+###                        error_index = torch.tensor(test_out_metrics.wrong_examples[:5], dtype=torch.long)
+###                    else:
+###                        error_index = torch.arange(5, dtype=torch.long)
+###                    error_test_out_img = test_out_loader.load(index=error_index)[0].to(reference_imgs.device)
+###                    error_img = torch.cat((error_test_img, error_test_out_img), dim=0)
+###
+###                    error_output: Output = vae.forward(error_img,
+###                                                       overlap_threshold=params["nms"]["overlap_threshold_test"],
+###                                                       noisy_sampling=True,
+###                                                       draw_image=True,
+###                                                       draw_boxes=True,
+###                                                       draw_bg=True,
+###                                                       verbose=False)
+###
+###                    in_out = torch.cat((error_output.imgs, error_img.expand_as(error_output.imgs)), dim=0)
+###                    _ = show_batch(in_out, n_col=in_out.shape[0]//2, title="error epoch="+str(epoch),
+###                                   experiment=exp, neptune_name="test_errors")
+###
                     output: Output = vae.forward(reference_imgs,
                                                  overlap_threshold=params["nms"]["overlap_threshold_train"],
                                                  noisy_sampling=True,
@@ -256,14 +256,14 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                     history_dict = append_to_dict(source=tmp_dict,
                                                   destination=history_dict)
 
-                    # print("segmentation test")
-                    print("segmentation")
-                    segmentation: Segmentation = vae.segment(batch_imgs=reference_imgs,
-                                                             noisy_sampling=True,
-                                                             overlap_threshold=params["nms"]["overlap_threshold_test"])
-                    plot_segmentation(segmentation, epoch=epoch, prefix="seg_", experiment=exp)
-
-                    # Here I could add a measure of agreement with the ground truth
+###                    # print("segmentation test")
+###                    print("segmentation")
+###                    segmentation: Segmentation = vae.segment(batch_imgs=reference_imgs,
+###                                                             noisy_sampling=True,
+###                                                             overlap_threshold=params["nms"]["overlap_threshold_test"])
+###                    plot_segmentation(segmentation, epoch=epoch, prefix="seg_", experiment=exp)
+###
+###                    # Here I could add a measure of agreement with the ground truth
                     #a = segmentation.integer_mask[0, 0].long()
                     #b = reference_seg.long()
                     #print("CHECK", a.shape, a.dtype, b.shape, b.dtype)
@@ -271,16 +271,17 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                     #plot_concordance(concordance=concordance_vs_gt, neptune_name="concordance_vs_gt_")
                     #log_concordance(concordance=concordance_vs_gt, prefix="concordance_vs_gt_")
 
-                    # print("generation test")
-                    generated: Output = vae.generate(imgs_in=reference_imgs,
-                                                     draw_boxes=True,
-                                                     draw_bg=True)
-                    plot_generation(generated, epoch=epoch, prefix="gen_", experiment=exp)
+###                    # print("generation test")
+###                    generated: Output = vae.generate(imgs_in=reference_imgs,
+###                                                     draw_boxes=True,
+###                                                     draw_bg=True)
+###                    plot_generation(generated, epoch=epoch, prefix="gen_", experiment=exp)
+###
+###                    test_loss = test_metrics.loss
+###                    min_test_loss = min(min_test_loss, test_loss)
 
-                    test_loss = test_metrics.loss
-                    min_test_loss = min(min_test_loss, test_loss)
-
-                    if (test_loss == min_test_loss) or (epoch % CHECKPOINT_FREQUENCY == 0):
+                    #if (test_loss == min_test_loss) or (epoch % CHECKPOINT_FREQUENCY == 0):
+                    if (epoch % 50 == 0) and (epoch >5):
                         ckpt = create_ckpt(model=vae,
                                            optimizer=optimizer,
                                            epoch=epoch,
