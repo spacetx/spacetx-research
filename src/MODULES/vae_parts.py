@@ -11,6 +11,13 @@ from MODULES.utilities_ml import compute_kl_DPP, compute_kl_Bernoulli, Similarit
 from MODULES.namedtuple import Inference, NMSoutput, BB, UNEToutput, ZZ, DIST
 from MODULES.non_max_suppression import NonMaxSuppression
 
+from torch.distributions.utils import broadcast_all
+
+
+def logaddexp(a: torch.Tensor, b: torch.Tensor):
+    a, b = broadcast_all(a, b)
+    return torch.stack((a, b), -1).logsumexp(-1)
+
 
 def from_w_to_pi(weight: torch.Tensor, dim: int):
     """ Compute the interacting and non-interacting mixing probabilities
@@ -119,14 +126,15 @@ class Inference_and_Generation(torch.nn.Module):
 
         # Now I have p, log(p), log(1-p)
         if (prob_corr_factor > 0) and (prob_corr_factor <= 1.0):
-            p_map = ((1 - prob_corr_factor) * torch.sigmoid(unet_output.logit) +
-                     prob_corr_factor * p_map_delta).clamp(min=1E-6, max=1-1E-6)
+            p_map = p_map_delta
             log_p_map = torch.log(p_map)
-            log_one_minus_p_map = torch.log1p(-p_map)
+            log_one_minus_p_map = torch.log(1-p_map)
+            extra_KL_zbg = (torch.sigmoid(unet_output.logit) - p_map).abs()
         else:
             p_map = torch.sigmoid(unet_output.logit)
             log_p_map = F.logsigmoid(unet_output.logit)
             log_one_minus_p_map = F.logsigmoid(-unet_output.logit)
+            extra_KL_zbg = 0
 
 
         # Sample the probability map from prior or posterior
@@ -225,7 +233,7 @@ class Inference_and_Generation(torch.nn.Module):
                          sample_bb=bounding_box_few,
                          sample_zwhere=zwhere_sample_few,
                          sample_zinstance=zinstance_few.sample,
-                         sample_zbg=zbg.sample,
+                         sample_zbg=zbg.sample + extra_KL_zbg,
                          # the kl of the 4 latent variables
                          kl_logit=kl_logit,
                          kl_zwhere=zwhere_kl_few,
