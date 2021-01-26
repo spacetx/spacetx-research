@@ -129,7 +129,7 @@ class Inference_and_Generation(torch.nn.Module):
             p_map = p_map_delta
             log_p_map = torch.log(p_map)
             log_one_minus_p_map = torch.log(1-p_map)
-            extra_KL_zbg = (torch.sigmoid(unet_output.logit) - p_map).abs()
+            extra_KL_zbg = (torch.sigmoid(unet_output.logit) - p_map).abs().sum()
         else:
             p_map = torch.sigmoid(unet_output.logit)
             log_p_map = F.logsigmoid(unet_output.logit)
