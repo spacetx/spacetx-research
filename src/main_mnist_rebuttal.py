@@ -254,30 +254,31 @@ for delta_epoch in range(1, NUM_EPOCHS+1):
                     history_dict = append_to_dict(source=tmp_dict,
                                                   destination=history_dict)
 
-                    # print("segmentation test")
-                    segmentation: Segmentation = vae.segment(batch_imgs=reference_imgs,
-                                                             noisy_sampling=True,
-                                                             overlap_threshold=params["nms"]["overlap_threshold_test"])
-                    plot_segmentation(segmentation, epoch=epoch, prefix="seg_", experiment=exp)
-
-                    # Here I could add a measure of agreement with the ground truth
-                    #a = segmentation.integer_mask[0, 0].long()
-                    #b = reference_seg.long()
-                    #print("CHECK", a.shape, a.dtype, b.shape, b.dtype)
-                    #concordance_vs_gt = concordance_integer_masks(a,b)
-                    #plot_concordance(concordance=concordance_vs_gt, neptune_name="concordance_vs_gt_")
-                    #log_concordance(concordance=concordance_vs_gt, prefix="concordance_vs_gt_")
-
-                    # print("generation test")
-                    generated: Output = vae.generate(imgs_in=reference_imgs,
-                                                     draw_boxes=True,
-                                                     draw_bg=True)
-                    plot_generation(generated, epoch=epoch, prefix="gen_", experiment=exp)
-
-                    test_loss = test_metrics.loss
-                    min_test_loss = min(min_test_loss, test_loss)
-
-                    if (test_loss == min_test_loss) or (epoch % CHECKPOINT_FREQUENCY == 0):
+####                    # print("segmentation test")
+####                    segmentation: Segmentation = vae.segment(batch_imgs=reference_imgs,
+####                                                             noisy_sampling=True,
+####                                                             overlap_threshold=params["nms"]["overlap_threshold_test"])
+####                    plot_segmentation(segmentation, epoch=epoch, prefix="seg_", experiment=exp)
+####
+####                    # Here I could add a measure of agreement with the ground truth
+####                    #a = segmentation.integer_mask[0, 0].long()
+####                    #b = reference_seg.long()
+####                    #print("CHECK", a.shape, a.dtype, b.shape, b.dtype)
+####                    #concordance_vs_gt = concordance_integer_masks(a,b)
+####                    #plot_concordance(concordance=concordance_vs_gt, neptune_name="concordance_vs_gt_")
+####                    #log_concordance(concordance=concordance_vs_gt, prefix="concordance_vs_gt_")
+####
+####                    # print("generation test")
+####                    generated: Output = vae.generate(imgs_in=reference_imgs,
+####                                                     draw_boxes=True,
+####                                                     draw_bg=True)
+####                    plot_generation(generated, epoch=epoch, prefix="gen_", experiment=exp)
+####
+####                    test_loss = test_metrics.loss
+####                    min_test_loss = min(min_test_loss, test_loss)
+####
+####                    if (test_loss == min_test_loss) or (epoch % CHECKPOINT_FREQUENCY == 0):
+                    if (epoch % 50 == 0) and (epoch > 5):
                         ckpt = create_ckpt(model=vae,
                                            optimizer=optimizer,
                                            epoch=epoch,

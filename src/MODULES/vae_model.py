@@ -101,13 +101,9 @@ def instantiate_optimizer(model: torch.nn.Module,
 
 def instantiate_scheduler(optimizer: torch.optim.Optimizer,
                           dict_params_scheduler: dict) -> torch.optim.lr_scheduler:
-    if dict_params_scheduler["scheduler_type"] == "step_LR":
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer,
-                                                    step_size=dict_params_scheduler["scheduler_step_size"],
-                                                    gamma=dict_params_scheduler["scheduler_gamma"],
-                                                    last_epoch=-1)
-    else:
-        raise Exception
+    scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer,
+                                                     milestones=[100],
+                                                     gamma=0.1)
     return scheduler
 
 
