@@ -149,10 +149,10 @@ class Inference_and_Generation(torch.nn.Module):
         with torch.no_grad():
             score = convert_to_box_list(c_map_before_nms+p_map).squeeze(-1)  # shape: n_box_all, batch_size
             combined_topk_only = topk_only or generate_synthetic_data  # if generating from DPP do not do NMS
-            nms_output: NMSoutput = NonMaxSuppression.compute_mask_and_index(score=score,
-                                                                             bounding_box=bounding_box_all,
-                                                                             overlap_threshold=overlap_threshold,
-                                                                             n_objects_max=n_objects_max,
+            nms_output: NMSoutput = NonMaxSuppression.compute_mask_and_index(score_nb=score,
+                                                                             bounding_box_nb=bounding_box_all,
+                                                                             iom_threshold=overlap_threshold,
+                                                                             k_objects_max=n_objects_max,
                                                                              topk_only=combined_topk_only)
             # Mask with all zero except 1s where the box where selected
             mask = torch.zeros_like(score).scatter(dim=0,
