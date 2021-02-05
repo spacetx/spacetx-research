@@ -27,23 +27,6 @@ def invert_convert_to_box_list(x: torch.Tensor, original_width: int, original_he
     return x.permute(1, 2, 0).view(batch_size, ch, original_width, original_height)
 
 
-def tmaps_to_bb(tmaps, width_raw_image: int, height_raw_image: int, min_box_size: float, max_box_size: float):
-    tx_map, ty_map, tw_map, th_map = torch.split(tmaps, 1, dim=-3)
-    n_width, n_height = tx_map.shape[-2:]
-    ix_array = torch.arange(start=0, end=n_width, dtype=tx_map.dtype, device=tx_map.device)
-    iy_array = torch.arange(start=0, end=n_height, dtype=tx_map.dtype, device=tx_map.device)
-    ix_grid, iy_grid = torch.meshgrid([ix_array, iy_array])
-
-    bx_map: torch.Tensor = width_raw_image * (ix_grid + tx_map) / n_width
-    by_map: torch.Tensor = height_raw_image * (iy_grid + ty_map) / n_height
-    bw_map: torch.Tensor = min_box_size + (max_box_size - min_box_size) * tw_map
-    bh_map: torch.Tensor = min_box_size + (max_box_size - min_box_size) * th_map
-    return BB(bx=convert_to_box_list(bx_map).squeeze(-1),
-              by=convert_to_box_list(by_map).squeeze(-1),
-              bw=convert_to_box_list(bw_map).squeeze(-1),
-              bh=convert_to_box_list(bh_map).squeeze(-1))
-
-
 def linear_interpolation(t: Union[numpy.array, float], values: tuple, times: tuple) -> Union[numpy.array, float]:
     """ Makes an interpolation between (t_in,v_in) and (t_fin,v_fin)
         For time t>t_fin and t<t_in the value of v is clamped to either v_in or v_fin
@@ -313,46 +296,3 @@ def compute_average_in_box(imgs: torch.Tensor, bounding_box: BB) -> torch.Tensor
                     cum_sum[b_index, x1-1, y3-1] * x1_ge_1 * y3_ge_1 - \
                     cum_sum[b_index, x3-1, y1-1] * x3_ge_1 * y1_ge_1
     return tot_intensity / area
-
-
-def sample_from_constraints_dict(dict_soft_constraints: dict,
-                                 var_name: str,
-                                 var_value: torch.Tensor,
-                                 verbose: bool = False,
-                                 chosen: Optional[int] = None) -> torch.Tensor:
-
-    cost = torch.zeros_like(var_value)
-    var_constraint_params = dict_soft_constraints[var_name]
-
-    if 'lower_bound_value' in var_constraint_params:
-        left = var_constraint_params['lower_bound_value']
-        width_low = var_constraint_params['lower_bound_width']
-        exponent_low = var_constraint_params['lower_bound_exponent']
-        strength_low = var_constraint_params['lower_bound_strength']
-        activity_low = torch.clamp(left + width_low - var_value, min=0.) / width_low
-        cost += strength_low * activity_low.pow(exponent_low)
-
-    if 'upper_bound_value' in var_constraint_params:
-        right = var_constraint_params['upper_bound_value']
-        width_up = var_constraint_params['upper_bound_width']
-        exponent_up = var_constraint_params['upper_bound_exponent']
-        strength_up = var_constraint_params['upper_bound_strength']
-        activity_up = torch.clamp(var_value - right + width_up, min=0.) / width_up
-        cost += strength_up * activity_up.pow(exponent_up)
-
-    if 'strength' in var_constraint_params:
-        strength = var_constraint_params['strength']
-        exponent = var_constraint_params['exponent']
-        cost += strength * var_value.pow(exponent)
-
-    if verbose:
-        if chosen is None:
-            print("constraint name ->", var_name)
-            print("input value ->", var_value)
-            print("cost ->", cost)
-        else:
-            print("constraint name ->", var_name)
-            print("input value ->", var_value[..., chosen])
-            print("cost ->", cost[..., chosen])
-
-    return cost
