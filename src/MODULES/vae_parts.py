@@ -123,8 +123,10 @@ class Inference_and_Generation(torch.nn.Module):
         # Raw image parameters
         self.dict_soft_constraints = params["soft_constraint"]
         self.nms_dict = params["nms"]
-        self.sigma_fg = torch.tensor(params["GECO_loss"]["fg_std"], dtype=torch.float)[..., None, None]  # singleton w,h
-        self.sigma_bg = torch.tensor(params["GECO_loss"]["bg_std"], dtype=torch.float)[..., None, None]  # singleton w,h
+        self.sigma_fg = torch.nn.Parameter(data=torch.tensor(params["GECO_loss"]["fg_std"],
+                                                             dtype=torch.float)[..., None, None], requires_grad=False)
+        self.sigma_bg = torch.nn.Parameter(data=torch.tensor(params["GECO_loss"]["bg_std"],
+                                                             dtype=torch.float)[..., None, None], requires_grad=False)
 
         self.geco_dict = params["GECO_loss"]
         self.input_img_dict = params["input_image"]
